@@ -3,6 +3,7 @@
 // Offline only: the match is paused while one plays. Any key, tap or controller button skips.
 
 import * as THREE from 'three';
+import { introLights } from './render/haze';
 import type { GameRenderer } from './render/renderer';
 import { INTRO, INTRO_LENGTH, REPLAY, ReplayRecorder, goalSideOf, snapOf, introFrame, netCamShot, stageIntro, stageReplay, type Snap, type TunnelInfo } from './render/cinematic';
 import type { ViewState } from './view';
@@ -341,6 +342,7 @@ export class CineDirector {
       if (this.mode === 'none') return null;
     }
     this.t += dt;
+    r.lightsOn = this.mode === 'intro' ? introLights(this.t) : 1;
     if (this.mode === 'intro') {
       // After the walk-out: the line-up, the handshakes and the team photos.
       if (this.ceremony && this.t >= INTRO_LENGTH) return this.ceremonyFrame(live, dt, r);
@@ -440,6 +442,7 @@ export class CineDirector {
     this.celeb = { plan, t: 0, pos: new THREE.Vector3(), look: new THREE.Vector3(), r, replay: replayAfter };
     r.cineReactions = true;
     celebrationReactions(plan, r.reactions);
+    r.handheld.reset();
     this.mode = 'celebration';
     this.t = 0;
     this.el.className = 'cine on celebration';
@@ -468,7 +471,7 @@ export class CineDirector {
     this.fadeEl.style.opacity = String(1 - Math.max(0, edge));
     const view = stageCelebration(live, c.plan, c.t);
     r.setTunnelShot(false);
-    r.cine = celebrationShot(c.plan, c.t, view, c, dt);
+    r.cine = r.handheldShot(celebrationShot(c.plan, c.t, view, c, dt), dt);
     return { view, dt };
   }
 
@@ -570,6 +573,7 @@ function instantShot(cam: number, ball: { x: number; y: number; z: number }, loo
   return { pos: { x: pos.x, y: pos.y, z: pos.z }, look: { x: look.x, y: look.y, z: look.z }, fov: cam === 2 ? 48 : 40, near: 0.1 };
 }
 
+/** Floodlights coming on bank by bank during the stadium fly-in: 0 (off) .. 1 (all on). */
 export function introCaption(home: string, away: string, ground = 'The Harbourside Ground') {
   const esc = (x: string) => x.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
   return `<b>${esc(home)}</b><span>v</span><b>${esc(away)}</b><small>${esc(ground)}</small>`;

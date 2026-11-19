@@ -34,6 +34,8 @@ export interface Settings {
   rumble: boolean;
   /** On-screen captions for throw-ins, goal kicks, corners and free kicks (off by default). */
   restartCaptions: boolean;
+  /** Bar of button hints along the bottom of the match screen ("Pass (hold = further) · Shoot ..."); on by default. */
+  controlHints: boolean;
   /** Stadium fly-in and tunnel walk-out before kick-off (offline). */
   matchIntro: boolean;
   /** Net-cam replay after each goal (offline). */
@@ -108,6 +110,7 @@ export function defaultSettings(): Settings {
     playerRing: false,
     rumble: true,
     restartCaptions: false,
+    controlHints: true,
     matchIntro: true,
     goalReplays: true,
     highlights: true,

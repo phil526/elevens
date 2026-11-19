@@ -22,3 +22,18 @@ describe('player ring setting', () => {
     expect(loadSettings().playerRing).toBe(true);
   });
 });
+
+describe('button hints setting', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('is on by default, also for settings saved before it existed', () => {
+    expect(defaultSettings().controlHints).toBe(true);
+    stubStorage({ showNextMarker: true });
+    expect(loadSettings().controlHints).toBe(true);
+  });
+
+  it('keeps the choice to hide the hints', () => {
+    stubStorage({ controlHints: false });
+    expect(loadSettings().controlHints).toBe(false);
+  });
+});

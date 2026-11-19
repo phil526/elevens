@@ -51,6 +51,13 @@ import { AutoRes } from './autores';
 import { CrowdMoments } from './crowdlife';
 import type { MatchEvent } from '../../shared/types';
 import { KitWear, PitchWear, playedShare } from './wear';
+import { LiteDof } from './dof';
+import { Handheld, HANDHELD, pitchsideShot } from './handheld';
+import { FanDisplay } from './tifo';
+import { FlareSmoke } from './smoke';
+import { PitchMarks } from './marks';
+import { WetReflection } from './wet';
+import { bankOrder, FloodHaze, litShare } from './haze';
 import { rollWeather, weatherLook, WeatherFx, type Weather, type WeatherSetting } from './weather';
 import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
 import type { MatchWeather } from '../../shared/weather';
@@ -98,8 +105,10 @@ export interface GraphicsSettings {
   tvGrade?: boolean;
   /** Big screens: live pictures and goal replays (Medium and up), or the score pages only. */
   bigScreen?: 'live' | 'scores';
-  /** Big moments: camera shake, a moment of slow motion on goals and the woodwork, and depth of field in replays and celebrations (High and Ultra) (default on). */
+  /** Big moments: camera shake, a moment of slow motion on goals and the woodwork, and depth of field in replays and celebrations (default on). */
   bigMoments?: boolean;
+  /** Celebration camera: a handheld pitchside camera for goal celebrations (default), or steady shots. */
+  handheld?: boolean;
 }
 
 export { AUTO_RES_MIN } from './autores';
@@ -280,6 +289,7 @@ export class GameRenderer {
   /** This match's mowing pattern. */
   mowPattern: MowPattern = 'stripes';
   private ballRoot = new THREE.Group();
+  private sprayAcc = 0;
   /** This match's weather and its rain or snow. */
   private weatherFx = new WeatherFx();
   private weatherFor = '';
@@ -296,15 +306,48 @@ export class GameRenderer {
   /** Turf worn and churned to mud where play goes, and kits getting muddy and sweaty. */
   readonly pitchWear = new PitchWear();
   readonly kitWear = new KitWear();
+  /** Footprints and slide tracks in snow and mud, torn turf and divots (render/marks.ts). */
+  readonly marks = new PitchMarks();
+  /** The wet pitch's mirror image (High and Ultra, in the rain). */
+  readonly wet = new WetReflection();
+  /** How strongly the wet pitch mirrors (tuning and tests). */
+  reflGain = 1.6;
   private lastView: ViewState | null = null;
   /** Lens glare from the floodlights (dusk and night). */
   private glare = new FloodGlare();
   private glareK = 0;
+  /** Beams of light through the night air from the floodlight banks (render/haze.ts). */
+  private haze = new FloodHaze();
+  /** Fan display across the home end before kick-off, and smoke from the flares. */
+  readonly tifo = new FanDisplay();
+  readonly smoke = new FlareSmoke();
+  private flarePos: THREE.Vector3[] = [];
+  private hazeK = 0;
+  /**
+   * Floodlights coming on in the match intro: 0 (all off) .. 1 (all on). The intro (client/cine.ts)
+   * sets it each frame; outside a cinematic the lights are always on.
+   */
+  lightsOn = 1;
+  private litNow = 1;
+  /** A floodlight bank has just come on (pan -1 left .. 1 right), for its clunk. */
+  onFloodlight: ((pan: number) => void) | null = null;
+  private lampU = { uLampOn: { value: 1 }, uLampOff: { value: new THREE.Color(0x5d6168) } };
   /** Camera shake: decays from 1 (a goal) to 0; random but smooth. */
   private trauma = 0;
   private shakeSeed = Math.random() * 100;
   /** Depth of field (High and Ultra): soft background in replays and goal celebrations. */
   private bokeh: BokehPass | null = null;
+  /** Depth of field on Medium (no composer there), and where it is focused this frame. */
+  readonly liteDof = new LiteDof();
+  private dofFocus = 10;
+  /** Handheld celebration camera: the operator's wobble, and the live pitchside shot after a goal. */
+  readonly handheld = new Handheld();
+  /** Set by the app where the celebration cinematic doesn't play (online): a live pitchside shot after a goal. */
+  liveHandheld = false;
+  private liveCam: CineShot | null = null;
+  private liveState = { pos: new THREE.Vector3(), look: new THREE.Vector3(), on: false };
+  private goalT = 0;
+  private goalTeam = -1;
   private dofW = 0;
   /** Flags on the roof in the home club's colours, and the spring-mounted corner flags. */
   private clubFlags: ClubFlags | null = null;
@@ -327,10 +370,16 @@ export class GameRenderer {
     this.sun.target.position.set(0, 0, 0);
     this.scene.add(this.sun, this.sun.target);
     this.scene.add(this.sky.mesh);
-    this.scene.add(this.trail.mesh, this.particles.points, this.breath.points, this.ballRoot, this.weatherFx.group, this.glare.group);
+    this.scene.add(this.trail.mesh, this.particles.points, this.breath.points, this.ballRoot, this.weatherFx.group, this.glare.group, this.marks.divots, this.haze.mesh, this.smoke.mesh);
     this.scene.add(this.debugGroup);
     this.scene.add(this.extras.group);
     this.applyGraphics(gfx);
+    WetReflection.show(this.sky.mesh);
+    // Footsteps splash in the rain and kick up powder in the snow (Medium and up).
+    this.marks.onStep = (x, z, sp) => {
+      if (sp < 4.5 || QUALITY[this.gfx.preset] < 1 || this.weather === 'clear' || Math.random() > 0.55) return;
+      this.particles.spray(x, z, 0, 0, this.weather === 'snow' ? 0.02 : 0.04 + sp * 0.006, this.weather === 'snow');
+    };
   }
 
   applyGraphics(gfx: GraphicsSettings) {
@@ -387,6 +436,8 @@ export class GameRenderer {
     this.scene.environmentIntensity = 0.22;
     this.setupPost(q);
     this.sky.setQuality(q);
+    this.marks.setQuality(q);
+    this.wet.setQuality(q);
     this.lookFor = '';
     this.applyLook();
     this.resize();
@@ -423,6 +474,12 @@ export class GameRenderer {
     if (this.bloom) { this.bloom.strength = L.bloom + (tvg ? 0.07 : 0); this.bloom.threshold = tvg ? 0.92 : 1.1; }
     // Rain on the lens spreads the glare.
     this.glareK = L.glare * (this.weather === 'rain' ? 1.3 : 1);
+    // Haze in the floodlights: a night match most, dusk a little; rain and snow catch the light.
+    this.hazeK = L.lamps > 0 ? (t === 'night' ? 0.35 : 0.12) * (this.weather === 'rain' ? 1.8 : this.weather === 'snow' ? 1.4 : 1) * (this.composer ? 1 : 1.15) : 0;
+    this.litNow = -1;
+    // Flare smoke takes the scene's light: bright grey by day, floodlit grey at dusk and night.
+    const sl = t === 'day' ? 0.86 : t === 'dusk' ? 0.62 : 0.5;
+    this.smoke.setLight(new THREE.Color(sl, sl * 0.98, sl * 1.02).multiplyScalar(this.weather === 'rain' ? 0.85 : 1));
     if (this.grade) {
       const u = this.grade.uniforms;
       u.uLift.value.set(...L.grade.lift); u.uGain.value.set(...L.grade.gain);
@@ -432,6 +489,71 @@ export class GameRenderer {
       this.grassU.uPool.value = L.pool;
       // Floodlights mirrored in a wet pitch: strongest at night, none in daylight.
       if (this.grassU.uGlint) this.grassU.uGlint.value = Math.min(1, L.lamps / 4);
+    }
+    this.litNow = -1;
+    this.applyLit(this.lightsOn);
+  }
+
+  /**
+   * Give a floodlight mesh its banks: each vertex knows when its bank comes on in the intro
+   * (render/haze.ts bankOrder), and the material shows it off (grey) until then, with a brief
+   * flare as it strikes up.
+   */
+  private bankLamps(mesh: THREE.Mesh) {
+    const g = mesh.geometry;
+    if (!g.getAttribute('aBank')) {
+      const pos = g.getAttribute('position');
+      const a = new Float32Array(pos.count), v = new THREE.Vector3();
+      for (let i = 0; i < pos.count; i++) { v.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld); a[i] = bankOrder(v.x, v.z); }
+      g.setAttribute('aBank', new THREE.BufferAttribute(a, 1));
+    }
+    const m = mesh.material as THREE.MeshBasicMaterial;
+    if (m.userData.banked) return;
+    m.userData.banked = true;
+    const u = this.lampU;
+    m.onBeforeCompile = (sh) => {
+      sh.uniforms.uLampOn = u.uLampOn;
+      sh.uniforms.uLampOff = u.uLampOff;
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float aBank;\nvarying float vBank;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvBank = aBank;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vBank;\nuniform float uLampOn;\nuniform vec3 uLampOff;')
+        .replace('#include <map_fragment>', `#include <map_fragment>
+  if (vBank > uLampOn) diffuseColor.rgb = uLampOff;
+  else if (uLampOn < 0.999) diffuseColor.rgb *= 1.0 + 0.9 * (1.0 - smoothstep(0.0, 0.05, uLampOn - vBank));`);
+    };
+    m.customProgramCacheKey = () => 'lamp-banks';
+    m.needsUpdate = true;
+  }
+
+  /**
+   * Light from the floodlights for the share of banks on (1 outside the intro): the floodlit key
+   * light, sky light, light pools, the faint shadows, halos and glare all come up bank by bank.
+   */
+  private applyLit(on: number) {
+    const t = this.matchTime();
+    const L = weatherLook(LOOKS[t], this.weather);
+    const lit = L.lamps > 0 ? litShare(on) : 1;
+    if (lit === this.litNow && on >= 1) return;
+    const was = this.litNow;
+    this.litNow = lit;
+    const night = t === 'night';
+    this.sun.intensity = L.sunI * (night ? 0.1 + 0.9 * lit : 0.6 + 0.4 * lit);
+    this.hemi.intensity = L.hemi * (night ? 0.45 + 0.55 * lit : 0.8 + 0.2 * lit);
+    this.lampU.uLampOn.value = L.lamps > 0 ? on : 1;
+    this.lampU.uLampOff.value.setHex(0x5d6168);
+    if (this.grassU) this.grassU.uPool.value = L.pool * lit;
+    for (const h of this.halos) {
+      const k = bankOrder(h.position.x, h.position.z) <= on ? 1 : 0;
+      (h.material as THREE.SpriteMaterial).opacity = L.halo * (this.composer ? 0.6 : 1) * k;
+      h.visible = L.halo > 0 && k > 0;
+    }
+    // A bank coming on: its clunk, panned towards it.
+    if (was >= 0 && lit > was && lit < 1.001 && this.onFloodlight) {
+      const a = (lit - 1 / 16) * 8;
+      const seq = [0, 4, 2, 6, 1, 5, 3, 7];
+      const sector = seq[Math.max(0, Math.min(7, Math.round(a) - 1))];
+      const ang = -Math.PI + (sector + 0.5) * (Math.PI / 4);
+      const p = new THREE.Vector3(Math.cos(ang) * 60, 40, Math.sin(ang) * 45).project(this.camera.cam);
+      this.onFloodlight(Math.max(-1, Math.min(1, p.x)));
     }
   }
 
@@ -466,6 +588,7 @@ export class GameRenderer {
   }
 
   private setupPost(q: number) {
+    if (q !== 1) this.liteDof.dispose();
     if (q < 2) {
       this.composer?.dispose();
       this.composer = null;
@@ -680,7 +803,7 @@ export class GameRenderer {
     for (const e of evs) if (e.type === 'parry' && e.player !== undefined) this.players[e.player]?.onParry(view.ball.pos.y);
     this.pitchside?.onEvents(view, evs);
     for (const e of evs) {
-      if (e.type === 'goal') this.feed?.goal();
+      if (e.type === 'goal') { this.goalTeam = e.team ?? -1; this.feed?.goal(); if (e.team === 0 || e.team === 1) this.smoke.goal(e.team); }
       else if (e.type === 'save') { this.flashT = 3.2; this.flashKind = 'save'; }
       else if (e.type === 'post' || e.type === 'bar') { this.flashT = 3.2; this.flashKind = 'close'; }
     }
@@ -713,8 +836,10 @@ export class GameRenderer {
     this.crowd.reset();
     this.pitchWear.reset();
     this.kitWear.reset();
+    this.marks.reset(this.weather === 'snow');
+    this.tifo.reset();
     const key = `${teams[0].id}:${kits[0]}|${teams[1].id}:${kits[1]}|${this.gfx.preset}|${realisticPlayers(this.gfx) && !!this.playerAssets}`;
-    if (key === this.builtFor) { this.weatherTints(); return; }
+    if (key === this.builtFor) { this.weatherTints(); this.smoke.setup(this.flarePos, QUALITY[this.gfx.preset]); return; }
     this.builtFor = key;
     for (const m of this.markers) this.scene.remove(m.ring, m.arrow, m.sprite);
     this.markers = [];
@@ -731,6 +856,10 @@ export class GameRenderer {
     this.cornerFlags = new CornerFlags(teams[0].home);
     this.stadium.add(this.cornerFlags.group);
     if (this.pitchside) this.stadium.add(this.pitchside.group);
+    if (arenaObj && QUALITY[this.gfx.preset] >= 1) { this.tifo.build(teams[0], k0, arenaObj.tiers.low, arenaObj.tiers.upr); this.stadium.add(this.tifo.group); }
+    else this.tifo.dispose();
+    this.flarePos = arenaObj?.flarePos ?? [];
+    this.smoke.setup(this.flarePos, QUALITY[this.gfx.preset]);
     this.tunnelSet.build(this.scene, tunnelOf(this.stadium), k0.shirt);
     this.scene.add(this.varLines.group);
     this.collectEffects(this.stadium);
@@ -752,6 +881,7 @@ export class GameRenderer {
     if (this.ball.parent) this.ball.parent.remove(this.ball);
     this.ballRoot.clear();
     this.ballRoot.add(this.ball);
+    WetReflection.show(this.ball);
     const sg = new THREE.CircleGeometry(BALL.radius * BALL_DRAW_SCALE * 1.1, 16);
     sg.rotateX(-Math.PI / 2);
     this.ballShadow = new THREE.Mesh(sg, new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.45, depthWrite: false }));
@@ -851,17 +981,22 @@ export class GameRenderer {
       if (lamp) {
         const mesh = o as THREE.Mesh;
         this.lamps.push({ m: mesh.material as THREE.MeshBasicMaterial, k: typeof lamp === 'number' ? lamp : 1 });
+        this.bankLamps(mesh);
+        WetReflection.show(mesh);
         if (lamp === true) {
           // A glow around each floodlight head (bloom adds to it on High and Ultra).
           const h = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, color: 0xfff1d6, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
           mesh.getWorldPosition(h.position);
           h.scale.set(26, 20, 1);
           this.halos.push(h);
+          WetReflection.show(h);
           this.scene.add(h);
         }
       }
     });
-    this.glare.setLamps(glarePoints(stadium));
+    const banks = glarePoints(stadium);
+    this.glare.setLamps(banks);
+    this.haze.setLamps(banks, QUALITY[this.gfx.preset]);
     if (!this.cross) {
       this.cross = new CrossShadows(22);
       this.scene.add(this.cross.mesh);
@@ -906,6 +1041,12 @@ export class GameRenderer {
         }
       }
       for (const n of this.nets) n.touch(pos, vel, this.prevBallV, BALL.radius);
+      // A ball skimming a wet pitch throws up spray as it goes (Medium and up).
+      if (q > 0 && this.weather === 'rain' && b.pos.y < 0.3 && speed > 3.5) {
+        this.sprayAcc += dt * speed * 1.1 * this.weatherFx.cover;
+        const d = vel.clone().setY(0).normalize();
+        for (; this.sprayAcc > 1; this.sprayAcc -= 1) this.particles.spray(b.pos.x - d.x * 0.1, b.pos.z - d.z * 0.1, d.x * 0.45, d.z * 0.45, 0.02 + speed * 0.005);
+      }
     }
     for (const n of this.nets) n.step(dt);
     this.particles.update(dt);
@@ -927,6 +1068,7 @@ export class GameRenderer {
     if (this.lastView) this.kitWear.fresh(id, this.lastView);
     this.modelDefs[id] = def;
     this.scene.add(pm.root);
+    WetReflection.show(pm.root);
   }
 
   /** One player's model, sized to their build, with their boots, name and (for captains) armband. */
@@ -972,6 +1114,7 @@ export class GameRenderer {
         this.players.push(pm);
         this.modelDefs[id] = def;
         this.scene.add(pm.root);
+        WetReflection.show(pm.root);
         const blob = new THREE.Mesh(blobGeo, blobMat);
         blob.position.y = 0.02;
         blob.visible = !shadows;
@@ -983,6 +1126,7 @@ export class GameRenderer {
     if (this.managers) this.scene.remove(this.managers.group);
     this.managers = new Managers(teams, kits, assets, shadows);
     this.scene.add(this.managers.group);
+    WetReflection.show(this.managers.group);
     if (this.touchline) this.scene.remove(this.touchline.group);
     this.touchline = new Touchline(teams, [teams[0][kits[0]], teams[1][kits[1]]], assets, shadows, QUALITY[this.gfx.preset]);
     this.scene.add(this.touchline.group);
@@ -994,14 +1138,18 @@ export class GameRenderer {
     this.renderer.info.reset();
     this.updateCrowd(view, dt);
     this.camera.update(view, dt, cam);
+    if (this.faceFollow !== null) this.viewOverride = this.faceView(this.faceFollow.id, this.faceFollow.dist);
     if (this.viewOverride) {
       // Screenshot scripts (?test) can place the camera anywhere to inspect the stadium.
       const o = this.viewOverride;
       this.camera.cam.position.set(o.pos[0], o.pos[1], o.pos[2]);
       this.camera.cam.lookAt(o.look[0], o.look[1], o.look[2]);
     }
+    this.updateLiveHandheld(view, dt);
     this.applyCine();
     this.applyShake(dt, cam);
+    if (!this.cine) this.lightsOn = 1;
+    this.applyLit(this.lightsOn);
     // Reactions wait while a cinematic (intro, goal replay) shows recorded play.
     if (!this.cine || this.cineReactions) this.reactions.update(dt);
     const b = view.ball;
@@ -1016,6 +1164,25 @@ export class GameRenderer {
     if (this.grassU?.uWearOn && this.grassU.uAge) {
       this.grassU.uWearOn.value = wearOn ? 1 : 0;
       this.grassU.uAge.value = playedShare(view);
+    }
+    // Footprints, slide tracks and divots (with pitch wear).
+    this.marks.update(view, dt, wearOn && !this.cine);
+    const mt = this.marks.texture;
+    if (this.grassU?.uMarks && this.grassU.uMarksOn && this.grassU.uMarksTexel) {
+      this.grassU.uMarksOn.value = mt && wearOn ? 1 : 0;
+      if (mt) { this.grassU.uMarks.value = mt; const tg = this.marks.target!; this.grassU.uMarksTexel.value.set(1 / tg.width, 1 / tg.height); }
+    }
+    this.marks.divots.visible = wearOn;
+    // Slide tackles throw up turf, spray or snow as they go (Medium and up).
+    if (QUALITY[this.gfx.preset] > 0 && dt > 0 && !this.cine) {
+      for (const p of view.players) {
+        if (p.off || p.action.type !== 'slide' || Math.random() > 0.3) continue;
+        const sp = Math.hypot(p.vel.x, p.vel.z);
+        if (sp < 2) continue;
+        const ux = p.vel.x / sp, uz = p.vel.z / sp;
+        if (this.weather === 'clear') this.particles.turf(p.pos.x + ux * 0.5, p.pos.z + uz * 0.5, ux * 0.6, uz * 0.6, 0.12);
+        else this.particles.spray(p.pos.x + ux * 0.5, p.pos.z + uz * 0.5, ux * 0.7, uz * 0.7, 0.18, this.weather === 'snow');
+      }
     }
     // Mascots (intro only): built when the walk-out starts, gone after the line-up.
     if (this.mascotMode && !this.mascots && this.matchArgs) this.buildMascots(view);
@@ -1075,7 +1242,7 @@ export class GameRenderer {
       this.grassU.uSnow.value = this.weather === 'snow' ? this.weatherFx.cover : 0;
     }
     // Faint floodlight shadows, one away from each mast.
-    this.cross?.update(view.players.map((p) => ({ x: p.pos.x, z: p.pos.z, visible: !p.off })), LOOKS[this.matchTime()].crossShadow);
+    this.cross?.update(view.players.map((p) => ({ x: p.pos.x, z: p.pos.z, visible: !p.off })), LOOKS[this.matchTime()].crossShadow * (this.litNow < 0 ? 1 : this.litNow));
     this.ballShadow.position.set(b.pos.x, 0.015, b.pos.z);
     const hs = 1 + b.pos.y * 0.25;
     this.ballShadow.scale.set(hs, 1, hs);
@@ -1179,14 +1346,32 @@ export class GameRenderer {
     this.blimp?.update(this.time, this.matchTime() === 'night');
     this.breath.update(view, dt, this.time, this.mouthY, wd ? { x: wd.wind * Math.cos(wd.windDir), z: wd.wind * Math.sin(wd.windDir) } : { x: 0, z: 0 }, this.managers?.mouths());
     this.blades?.update(this.camera.cam, this.time, b.pos, wd ? { x: wd.wind * Math.cos(wd.windDir), z: wd.wind * Math.sin(wd.windDir) } : { x: 0, z: 0 }, this.weather === 'snow' ? this.weatherFx.cover : 0);
-    this.glare.update(this.camera.cam, this.glareK);
+    this.glare.update(this.camera.cam, this.glareK * Math.max(0, this.litNow));
+    // The beams read best from low down; from high above (the intro fly-in) they would fog the pitch.
+    const camY = this.camera.cam.position.y;
+    this.haze.update(this.time, this.hazeK * Math.max(0.3, Math.min(1, 1.45 - camY / 55)), this.cine ? this.lightsOn : 1);
+    // Before the first kick-off: the fan display goes up and the flares are lit as the teams come out.
+    const waiting = view.half === 1 && view.clock < 0.5 && view.phase === 'kickoff' && view.score[0] + view.score[1] === 0;
+    this.tifo.update(dt, this.time, waiting);
+    this.smoke.update(dt, this.time, waiting, wd ? { x: wd.wind * Math.cos(wd.windDir), z: wd.wind * Math.sin(wd.windDir) } : { x: 0, z: 0 });
     const fw = flagWind(wd ? { x: wd.wind * Math.cos(wd.windDir), z: wd.wind * Math.sin(wd.windDir) } : undefined);
     this.clubFlags?.update(this.time, fw);
     this.cornerFlags?.update(dt, this.time, fw, { x: b.pos.x, y: b.pos.y, z: b.pos.z, vx: b.vel.x, vy: b.vel.y, vz: b.vel.z }, view.players.filter((p) => !p.off && Math.abs(Math.abs(p.pos.x) - 52.5) < 2 && Math.abs(Math.abs(p.pos.z) - 34) < 2).map((p) => ({ x: p.pos.x, z: p.pos.z, vx: p.vel.x, vz: p.vel.z })));
     this.updateDof(view, dt);
     this.updateFeed(view, dt);
+    this.marks.flush(this.renderer);
+    // The wet pitch's mirror image, drawn before the frame itself.
+    if (this.grassU?.uReflOn && this.grassU.uRefl && this.grassU.uReflMat) {
+      this.camera.cam.updateMatrixWorld();
+      const on = this.wet.render(this.renderer, this.scene, this.camera.cam, wet);
+      this.grassU.uReflOn.value = on ? this.reflGain : 0;
+      if (on) { this.grassU.uRefl.value = this.wet.target!.texture; this.grassU.uReflMat.value.copy(this.wet.matrix); }
+    }
     if (this.composer) this.composer.render();
-    else this.renderer.render(this.scene, this.camera.cam);
+    else if (this.dofW > 0.02) {
+      // Medium: blur round the focus, more for close shots (as a real lens), up to 1.4% of the screen.
+      this.liteDof.render(this.renderer, this.scene, this.camera.cam, this.dofFocus, (4 / Math.max(4, this.dofFocus)) * this.dofW, 0.014 * this.dofW);
+    } else this.renderer.render(this.scene, this.camera.cam);
   }
 
   /** A team's captain on the pitch now (the armband; the first outfielder still on if he has gone off). */
@@ -1268,17 +1453,25 @@ export class GameRenderer {
 
   /** Depth of field: focus on the ball (or the scorer) in replays, highlights and goal celebrations. */
   private updateDof(view: ViewState, dt: number) {
-    if (!this.bokeh) return;
+    const q = QUALITY[this.gfx.preset];
+    if (!this.bokeh && q !== 1) { this.dofW = 0; return; }
     const want = this.bigMomentsOn() && (!!this.cine || view.phase === 'goal') ? 1 : 0;
     this.dofW += (want - this.dofW) * Math.min(1, dt * 3);
-    this.bokeh.enabled = this.dofW > 0.02;
-    if (!this.bokeh.enabled) return;
+    if (this.bokeh) this.bokeh.enabled = this.dofW > 0.02;
+    if (this.dofW <= 0.02) return;
     const c = this.camera.cam;
     const b = view.ball.pos;
-    // Celebrations focus on the scorer's group (nearest player to the camera within 25 m of the ball); replays on the ball.
+    // Close-ups focus on what the shot looks at (the players in the tunnel, the scorer, the
+    // trophy); live celebrations on the scorer's group (nearest celebrating player to the camera
+    // within 25 m of the ball); anything else on the ball.
     let focus = c.position.distanceTo(new THREE.Vector3(b.x, b.y, b.z));
     if (this.ceremony?.active) focus = c.position.distanceTo(this.ceremony.trophy.position);
-    else if (!this.cine) {
+    else if (this.cine) {
+      const l = this.cine.look;
+      const dl = c.position.distanceTo(new THREE.Vector3(l.x, l.y, l.z));
+      // Replays look at the ball anyway; a shot looking past the action (a wide fly-in) keeps it sharp.
+      if (dl < 40) focus = dl;
+    } else {
       let best = Infinity;
       for (const p of view.players) {
         if (p.off || Math.hypot(p.pos.x - b.x, p.pos.z - b.z) > 25 || p.action.type !== 'celebrate') continue;
@@ -1287,6 +1480,8 @@ export class GameRenderer {
       }
       if (best < Infinity) focus = best;
     }
+    this.dofFocus = focus;
+    if (!this.bokeh) return;
     const u = (this.bokeh as unknown as { uniforms: Record<string, { value: number }> }).uniforms;
     u.focus.value = focus;
     // Wider apertures for close shots, as a real lens: keep the blur readable but not overpowering.
@@ -1350,9 +1545,49 @@ export class GameRenderer {
     this.tunnelSet.setActive(on, this.renderer, this.stadium);
   }
 
+  /** Screenshot tests: show one player's face in a mood ('neutral', 'joy', 'effort', 'frustration'). */
+  set faceTest(f: { id: number; mood: string } | null) {
+    const map: Record<string, 'calm' | 'joy' | 'effort' | 'anger'> = { neutral: 'calm', joy: 'joy', effort: 'effort', frustration: 'anger' };
+    this.players.forEach((p, i) => { if ('moodOverride' in p) (p as { moodOverride: string | null }).moodOverride = f && f.id === i ? map[f.mood] ?? 'calm' : null; });
+  }
+
+  /** Screenshot tests: keep the camera in front of this player's face. */
+  faceFollow: { id: number; dist: number } | null = null;
+
+  /** Screenshot tests: a camera in front of a realistic player's face. */
+  faceView(id: number, dist = 0.7) {
+    const p = this.players[id] as { faceView?: (d: number) => { pos: [number, number, number]; look: [number, number, number] } | null } | undefined;
+    return p?.faceView?.(dist) ?? null;
+  }
+
+  /** Whether the celebration camera is handheld now (tests). */
+  get handheldOn() {
+    return this.gfx.handheld !== false && (!!this.liveCam || this.handheld.amount > 0);
+  }
+
+  /** A planned celebration shot as the handheld operator holds it (unchanged with the steady camera). */
+  handheldShot(shot: CineShot, dt: number): CineShot {
+    if (this.gfx.handheld === false) { this.handheld.amount = 0; return shot; }
+    return this.handheld.shake(shot, dt, this.lastCam?.reducedMotion ? 0.35 : 1);
+  }
+
+  /** After a goal, where no celebration cinematic plays: cut to the pitchside camera on the scorers. */
+  private updateLiveHandheld(view: ViewState, dt: number) {
+    const was = !!this.liveCam;
+    this.liveCam = null;
+    if (!this.cine) this.handheld.amount = 0;
+    if (view.phase !== 'goal') { this.goalT = 0; this.liveState.on = false; return; }
+    this.goalT += dt;
+    if (!this.liveHandheld || this.cine || this.viewOverride || this.gfx.handheld === false || this.goalT < HANDHELD.delay) return;
+    const shot = pitchsideShot(view, this.goalTeam, this.liveState, dt);
+    if (!shot) return;
+    if (!was) this.handheld.reset();
+    this.liveCam = this.handheld.shake(shot, dt, this.lastCam?.reducedMotion ? 0.35 : 1);
+  }
+
   private applyCine() {
     const cam = this.camera.cam;
-    const c = this.cine;
+    const c = this.cine ?? this.liveCam;
     if (c) {
       cam.up.set(c.up?.x ?? 0, c.up?.y ?? 1, c.up?.z ?? 0);
       cam.position.set(c.pos.x, c.pos.y, c.pos.z);

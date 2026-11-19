@@ -81,7 +81,7 @@ Chip: hold A and right click. Low drive: hold S and right click. Fake shot: hold
 
 ## Controller (Standard Gamepad layout)
 
-Xbox labels shown; PlayStation equivalents in brackets. The game detects the controller family and shows matching labels in the guide and overlays.
+Xbox labels shown; PlayStation equivalents in brackets. The game detects the controller family and shows matching labels in the guide and overlays. The bar of button hints along the bottom of the match screen can be hidden with Settings > Gameplay and accessibility > Button hints (On by default).
 
 | Action | Button |
 | --- | --- |

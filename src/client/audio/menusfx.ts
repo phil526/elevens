@@ -64,6 +64,40 @@ export class MenuSfx {
     }
   }
 
+  /**
+   * A floodlight bank switching on before the match: a heavy contactor clunk echoing round the
+   * bowl and the lamps' hum swelling and dying away. `pan` -1 (left) .. 1 (right).
+   */
+  clunk(pan = 0) {
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    const out = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+    if (out) { out.pan.value = Math.max(-1, Math.min(1, pan)); out.connect(this.out); }
+    const dest = out ?? this.out;
+    const prev = this.out;
+    this.out = dest;
+    this.thump(now, 92, 0.32, 0.4);
+    this.tick(now, 1400, 0.06, 0.16);
+    this.thump(now + 0.21, 84, 0.3, 0.1);
+    this.tick(now + 0.21, 1600, 0.05, 0.035);
+    this.thump(now + 0.43, 80, 0.28, 0.035);
+    this.out = prev;
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.value = 100;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 200;
+    bp.Q.value = 4;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.03, now + 0.12);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 1.3);
+    o.connect(bp).connect(g).connect(dest);
+    o.start(now);
+    o.stop(now + 1.35);
+  }
+
   /** A short pitched blip (gliding from f0 to f1). */
   private tone(t: number, f0: number, f1: number, len: number, gain: number, type: OscillatorType, lowpass = 5000) {
     const ctx = this.ctx;

@@ -138,6 +138,14 @@ export interface GrassUniforms {
   uAge?: { value: number };
   /** Mowing pattern (index into MOW_PATTERNS). */
   uMow?: { value: number };
+  /** Footprints, slide tracks and torn turf (render/marks.ts): R pressed, G torn; texel size for relief. */
+  uMarks?: { value: THREE.Texture };
+  uMarksOn?: { value: number };
+  uMarksTexel?: { value: THREE.Vector2 };
+  /** Mirror image of the players, ball, floodlights and sky for a wet pitch (render/wet.ts; High and Ultra in rain). */
+  uRefl?: { value: THREE.Texture };
+  uReflMat?: { value: THREE.Matrix4 };
+  uReflOn?: { value: number };
 }
 
 /** Mowing patterns the groundsman can cut (Settings > Graphics > Mowing; Random picks one each match). */
@@ -196,7 +204,7 @@ blankWear.needsUpdate = true;
  */
 export function grassMaterial(map: THREE.Texture, quality: number): { material: THREE.MeshStandardMaterial; uniforms: GrassUniforms } {
   const m = new THREE.MeshStandardMaterial({ map, roughness: 0.92 });
-  const uniforms: GrassUniforms = { uPool: { value: 0 }, uStripe: { value: 1 }, uWet: { value: 0 }, uSnow: { value: 0 }, uGlint: { value: 0 }, uWearMap: { value: blankWear }, uWearOn: { value: 0 }, uAge: { value: 0 }, uMow: { value: 0 } };
+  const uniforms: GrassUniforms = { uPool: { value: 0 }, uStripe: { value: 1 }, uWet: { value: 0 }, uSnow: { value: 0 }, uGlint: { value: 0 }, uWearMap: { value: blankWear }, uWearOn: { value: 0 }, uAge: { value: 0 }, uMow: { value: 0 }, uMarks: { value: blankWear }, uMarksOn: { value: 0 }, uMarksTexel: { value: new THREE.Vector2(1 / 1024, 1 / 680) }, uRefl: { value: blankWear }, uReflMat: { value: new THREE.Matrix4() }, uReflOn: { value: 0 } };
   const detail = quality > 0;
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uPool = uniforms.uPool;
@@ -208,14 +216,23 @@ export function grassMaterial(map: THREE.Texture, quality: number): { material: 
     sh.uniforms.uWearOn = uniforms.uWearOn!;
     sh.uniforms.uAge = uniforms.uAge!;
     sh.uniforms.uMow = uniforms.uMow!;
+    sh.uniforms.uMarks = uniforms.uMarks!;
+    sh.uniforms.uMarksOn = uniforms.uMarksOn!;
+    sh.uniforms.uMarksTexel = uniforms.uMarksTexel!;
+    sh.uniforms.uRefl = uniforms.uRefl!;
+    sh.uniforms.uReflMat = uniforms.uReflMat!;
+    sh.uniforms.uReflOn = uniforms.uReflOn!;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vGrassW;')
       .replace('#include <project_vertex>', '#include <project_vertex>\nvGrassW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
 varying vec3 vGrassW;
-uniform float uPool, uStripe, uWet, uSnow, uGlint, uWearOn, uAge, uMow;
-uniform sampler2D uWearMap;
+uniform float uPool, uStripe, uWet, uSnow, uGlint, uWearOn, uAge, uMow, uMarksOn;
+uniform sampler2D uWearMap, uMarks, uRefl;
+uniform vec2 uMarksTexel;
+uniform mat4 uReflMat;
+uniform float uReflOn;
 ${MOW_GLSL}
 float gPuddle, gMud;
 float gHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -268,6 +285,21 @@ float gNoise(vec2 p) {
   diffuseColor.rgb = mix(diffuseColor.rgb, soil * dot(diffuseColor.rgb, vec3(0.6)) * 2.2, clamp(wear, 0.0, 0.72));
   // Churned mud: dark, brown and (below) glossy.
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.2, 0.15, 0.09) * (0.7 + 0.6 * gNoise(w * 5.0)), clamp(gMud * 1.2, 0.0, 0.8));
+  // Marks from this match (render/marks.ts): turf torn up by slides and divots, boot prints in mud.
+  vec4 gMk = vec4(0.0);
+  vec2 muv = (w + vec2(${(PITCH.halfLength + 4).toFixed(1)}, ${(PITCH.halfWidth + 4).toFixed(1)})) / vec2(${(2 * (PITCH.halfLength + 4)).toFixed(1)}, ${(2 * (PITCH.halfWidth + 4)).toFixed(1)});
+  if (uMarksOn > 0.0) gMk = texture2D(uMarks, muv);
+  if (gMk.g > 0.004) {
+    float tn = gNoise(w * 13.0) * 0.6 + gNoise(w * 37.0) * 0.4;
+    float torn = clamp(gMk.g * (0.7 + 0.6 * tn), 0.0, 1.0);
+    // Flattened, scraped grass round the edge of the gouge; dark soil where the turf is ripped out.
+    float rim = smoothstep(0.03, 0.22, gMk.g) * (1.0 - smoothstep(0.3, 0.65, gMk.g));
+    diffuseColor.rgb *= 1.0 + rim * 0.16;
+    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.17, 0.12, 0.07) * (0.7 + 0.55 * tn), smoothstep(0.28, 0.7, torn) * 0.92 * (1.0 - 0.6 * min(1.0, uSnow * 3.0)));
+    gMud = max(gMud, smoothstep(0.3, 0.8, torn) * uWet);
+  }
+  // Boot prints show in mud.
+  diffuseColor.rgb *= 1.0 - clamp(gMk.r, 0.0, 1.0) * gMud * 0.45;
   // Floodlight pools: a little brighter under each bank of lights.
   float pool = 0.0;
   for (int i = 0; i < 4; i++) {
@@ -288,7 +320,18 @@ float gNoise(vec2 p) {
     float drift = gNoise(w * 0.18) * 0.55 + gNoise(w * 1.1) * 0.3 + gNoise(w * 6.0) * 0.15;
     // Never a white sheet: trodden, swept patches keep showing the grass through.
     float snowK = smoothstep(0.0, 0.3, uSnow + drift - 1.05 - wear * 0.9) * min(1.0, uSnow * 3.0);
-    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.74, 0.77, 0.82) * (0.9 + 0.14 * drift), snowK * 0.88);
+    vec3 snowC = vec3(0.74, 0.77, 0.82) * (0.9 + 0.14 * drift);
+    if (gMk.r + gMk.g > 0.004) {
+      // Footprints and tracks pressed into the snow: compacted (greyer) and shaded as dents, and
+      // slides and heavy trampling scrape it down to the grass.
+      float rx = texture2D(uMarks, muv + vec2(uMarksTexel.x, 0.0)).r - texture2D(uMarks, muv - vec2(uMarksTexel.x, 0.0)).r;
+      float rz = texture2D(uMarks, muv + vec2(0.0, uMarksTexel.y)).r - texture2D(uMarks, muv - vec2(0.0, uMarksTexel.y)).r;
+      float pressed = clamp(gMk.r, 0.0, 1.0);
+      snowC *= (1.0 - pressed * 0.3) * (1.0 + clamp(rx * 0.4 - rz * 0.55, -0.3, 0.25));
+      snowC = mix(snowC, snowC * vec3(0.86, 0.9, 1.0), pressed * 0.5);
+      snowK *= 1.0 - clamp(gMk.g * 1.4, 0.0, 0.92) - smoothstep(0.85, 1.0, pressed) * 0.18;
+    }
+    diffuseColor.rgb = mix(diffuseColor.rgb, snowC, snowK * 0.88);
   }
 }`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
@@ -310,7 +353,27 @@ float gNoise(vec2 p) {
       // Stretched vertically on screen, as reflections on a rough wet surface are.
       g += exp(-(a.x * a.x + a.z * a.z) * 140.0 - a.y * a.y * 22.0);
     }
-    outgoingLight += vec3(1.0, 0.96, 0.88) * min(g, 1.5) * uGlint * (uWet * 0.7 + gPuddle * 2.6);
+    outgoingLight += vec3(1.0, 0.96, 0.88) * min(g, 1.5) * uGlint * (uWet * 0.7 + gPuddle * 2.6) * (1.0 - 0.45 * uReflOn);
+  }
+  // The pitch as a wet mirror (High and Ultra): players, ball, floodlights and sky, blurred by the
+  // wet grass and sharper in the puddles, broken up by raindrops landing.
+  if (uReflOn * uWet > 0.001) {
+    vec3 Vw = normalize(cameraPosition - vGrassW);
+    float fres = 0.05 + 0.95 * pow(1.0 - clamp(Vw.y, 0.0, 1.0), 5.0);
+    float k = clamp((uWet * 0.5 + gPuddle * 2.2) * (0.3 + fres * 1.6), 0.0, 0.8) * (1.0 - gMud * 0.4);
+    if (k > 0.002) {
+      float sharp = clamp(gPuddle / max(uWet, 0.001), 0.0, 1.0);
+      vec2 rip = vec2(gNoise(vGrassW.xz * 1.3) - 0.5, gNoise(vGrassW.xz * 1.3 + 9.0) - 0.5) * mix(0.3, 0.05, sharp);
+      // Smeared towards the camera, as reflections in a wet, uneven surface are (vertical streaks).
+      vec2 toward = normalize(Vw.xz + vec2(1e-4, 0.0)) * mix(0.55, 0.12, sharp);
+      vec3 acc = vec3(0.0);
+      for (int i = 0; i < 4; i++) {
+        vec2 o = rip + toward * (float(i) - 1.5);
+        vec4 rc = uReflMat * vec4(vGrassW.x + o.x, 0.0, vGrassW.z + o.y, 1.0);
+        acc += min(texture2D(uRefl, rc.xy / rc.w).rgb, vec3(0.9));
+      }
+      outgoingLight += acc * 0.25 * k * uReflOn;
+    }
   }
 }
 #include <opaque_fragment>`);

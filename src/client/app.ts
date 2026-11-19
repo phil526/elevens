@@ -474,6 +474,8 @@ export class App {
     this.cine.varScreens = this.settings.varChecks !== false;
     this.cine.varChecks = s instanceof OfflineSession && this.settings.varChecks !== false && !this.cineOff && !s.cfg.practice && !v.shootout && this.overlay === 'none';
     this.cine.celebrate = s instanceof OfflineSession && this.settings.celebrations !== false && !this.cineOff && !s.cfg.practice && !v.shootout && this.overlay === 'none';
+    // Online the celebration cinematic doesn't play: the live match cuts to the pitchside camera instead.
+    this.renderer!.liveHandheld = !(s instanceof OfflineSession) && this.settings.celebrations !== false && !v.shootout;
     const cv = this.cine.frame(v, dt, this.renderer!, allowReplay);
     if (cv) {
       this.renderer!.render(cv.view, cv.dt, this.settings.camera, { localTeams: s.localTeams, receiver: -1, showNext: false, playerRing: this.settings.playerRing, highContrast: false });
@@ -549,7 +551,7 @@ export class App {
     const info = this.renderer!.info();
     this.hud.update(v, {
       localTeams: s.localTeams, charge, chargeLabel, chargeTicks, powerAt, ringAt, conn: s.conn(), extraPower,
-      guide: this.settings.highContrast || !this.touchMode ? guideLine(this.actions.lastDevice === 'keyboard' && this.mouseMode ? 'mouse' : this.actions.lastDevice, this.gamepad.style, attacking, this.settings.controls) : '',
+      guide: this.settings.controlHints !== false && (this.settings.highContrast || !this.touchMode) ? guideLine(this.actions.lastDevice === 'keyboard' && this.mouseMode ? 'mouse' : this.actions.lastDevice, this.gamepad.style, attacking, this.settings.controls) : '',
       debug: this.debugOverlay ? `fps ${this.fps.toFixed(0)}  frame ${this.frameMs.toFixed(1)} ms  res ${Math.round(this.renderer!.resolutionScale * 100)}%  draw calls ${info.calls}  tris ${info.tris}\n${s.debugText()}` : null,
     });
     this.tv.update(v);
@@ -1264,6 +1266,8 @@ export class App {
     if (!this.renderer) {
       const canvas = document.getElementById('game') as HTMLCanvasElement;
       this.renderer = new GameRenderer(canvas, this.settings.graphics);
+      // The match intro's floodlights clunking on, bank by bank.
+      this.renderer.onFloodlight = (pan) => this.audio.floodlight(pan);
       // Click or tap on the pitch: switch to the teammate nearest that point.
       canvas.addEventListener('pointerdown', (e) => { if (this.overlay === 'photo') this.photoDrag = { x: e.clientX, y: e.clientY }; });
       window.addEventListener('pointermove', (e) => {
@@ -2798,13 +2802,14 @@ export class App {
         <div class="row between"><span class="lbl">Match intro</span>${this.seg('intro', [['on', 'On'], ['off', 'Off']], s.matchIntro ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Pre-match ceremony</span>${this.seg('ceremony', [['on', 'On'], ['off', 'Off']], s.ceremony !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Goal celebrations</span>${this.seg('celebs', [['on', 'On'], ['off', 'Off']], s.celebrations !== false ? 'on' : 'off')}</div>
+        <div class="row between"><span class="lbl">Celebration camera</span>${this.seg('handheld', [['on', 'Handheld'], ['off', 'Steady']], s.graphics.handheld !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Goal replays</span>${this.seg('replays', [['on', 'On'], ['off', 'Off']], s.goalReplays ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Offside checks</span>${this.seg('varchk', [['on', 'On'], ['off', 'Off']], s.varChecks !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Half-time aerials</span>${this.seg('aerials', [['on', 'On'], ['off', 'Off']], s.aerials !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Half-time highlights</span>${this.seg('hlights', [['on', 'On'], ['off', 'Off']], s.highlights ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Big moments</span>${this.seg('bigm', [['on', 'On'], ['off', 'Off']], s.graphics.bigMoments !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Reduced camera motion</span>${this.seg('reduced', [['off', 'Off'], ['on', 'On']], s.camera.reducedMotion ? 'on' : 'off')}</div>
-        <p class="note">These play in matches against the computer, and any button skips them. Pre-match ceremony: mascots walk out holding the players' hands, then the handshake line and both team photos. Goal celebrations: the scorer's knee slide, crest kiss, huddle or cheer, before the replay. Offside checks: the moment is shown again with the offside lines drawn, full screen and on the big screens. Half-time aerials: blimp and drone shots over the ground before the highlights.</p>
+        <p class="note">These play in matches against the computer, and any button skips them. Pre-match ceremony: mascots walk out holding the players' hands, then the handshake line and both team photos. Goal celebrations: the scorer's knee slide, crest kiss, huddle or cheer, before the replay. Celebration camera Handheld films them from a camera on the operator's shoulder by the touchline (online it cuts to it live after a goal); Steady keeps the shots smooth. Offside checks: the moment is shown again with the offside lines drawn, full screen and on the big screens. Half-time aerials: blimp and drone shots over the ground before the highlights.</p>
       </div>
       <h3>Gameplay and accessibility</h3>
       <div class="stack">
@@ -2823,6 +2828,7 @@ export class App {
         <p class="note">${this.gamepad.index < 0 ? 'Connect a controller to check rumble.' : this.gamepad.canRumble() ? 'This controller and browser support rumble.' : 'This browser does not offer rumble for this controller, so it stays still.'}</p>
         <div class="row between"><span class="lbl">Player ring</span>${this.seg('pring', [['on', 'On'], ['off', 'Off']], s.playerRing ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Next-switch marker</span>${this.seg('nextm', [['on', 'On'], ['off', 'Off']], s.showNextMarker ? 'on' : 'off')}</div>
+        <div class="row between"><span class="lbl">Button hints</span>${this.seg('chints', [['on', 'On'], ['off', 'Off']], s.controlHints !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Restart captions</span>${this.seg('rcap', [['on', 'On'], ['off', 'Off']], s.restartCaptions ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">High-contrast markers</span>${this.seg('hc', [['off', 'Off'], ['on', 'On']], s.highContrast ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Colour-blind kits</span>${this.seg('cvd', COLOUR_VISION, s.colourVision ?? 'off')}</div>
@@ -2839,7 +2845,7 @@ export class App {
           ? 'Home-screen app: this copy of the game runs inside the claude.ai page, which cannot be installed as an app or work offline (the page keeps that to itself). To get an ELEVENS icon on your iPad home screen that opens full screen and works without a connection, the game needs its own web address: the built game folder can be put on any free static web host, then open it in Safari and choose Share, Add to Home Screen.' + (i.canFullscreen ? '' : ' Full screen is not allowed from inside the claude.ai page either.')
           : `Home-screen app: ${i.ios ? 'in Safari choose Share, then Add to Home Screen' : 'use your browser\'s Install or Add to Home Screen option'} to get an ELEVENS icon that opens full screen. ${i.offline ? 'Offline play is ready: files you have loaded are kept, so matches against the computer work with no connection.' : 'Offline play starts once the game has been opened from its own web address over https.'}`}</p>`; })()}
       </div>
-      <p class="note">Tracking slides along the touchline with play; Wide and Panoramic sit higher and further back to show more of the pitch. Broadcast is a fixed TV camera above the halfway line that pans and zooms; movement stays relative to the screen. Match intro flies over the stadium and follows the teams out of the tunnel before kick-off; Goal replays show each goal again from inside the net. Half-time highlights shows the goals, saves, near misses and shots off the woodwork at half-time and full time (the Highlights button on those screens shows them again). Both are for matches against the computer and any button skips them. Big moments shakes the camera for goals, saves and shots off the woodwork, slows play down for a moment after a goal or the woodwork (against the computer), and on High and Ultra softens the background in replays and goal celebrations; Reduced camera motion turns the shake and slow motion off. Pass receiver Late picks the teammate when you release the button (a longer hold looks further away); Early locks the teammate when you press it, and the hold sets how firm the pass is. Pass assistance Assisted picks the teammate and weighs the pass for you; Semi aims at a teammate near where you point, but the hold alone sets how far the ball goes; Manual sends the ball exactly where you point, as far as the hold says. Right-stick switch: when defending, flick the right stick towards a teammate to take control of them, measured from your player or from the ball. Player ring shows a circle and facing arrow on the grass under your player; the pointer above the head always shows. Quality preset and player changes apply fully at the next kick-off. Low quality always uses the classic players.</p>
+      <p class="note">Tracking slides along the touchline with play; Wide and Panoramic sit higher and further back to show more of the pitch. Broadcast is a fixed TV camera above the halfway line that pans and zooms; movement stays relative to the screen. Match intro flies over the stadium and follows the teams out of the tunnel before kick-off; Goal replays show each goal again from inside the net. Half-time highlights shows the goals, saves, near misses and shots off the woodwork at half-time and full time (the Highlights button on those screens shows them again). Both are for matches against the computer and any button skips them. Big moments shakes the camera for goals, saves and shots off the woodwork, slows play down for a moment after a goal or the woodwork (against the computer), and on Medium and up softens the background in close-ups, replays and goal celebrations; Reduced camera motion turns the shake and slow motion off. Pass receiver Late picks the teammate when you release the button (a longer hold looks further away); Early locks the teammate when you press it, and the hold sets how firm the pass is. Pass assistance Assisted picks the teammate and weighs the pass for you; Semi aims at a teammate near where you point, but the hold alone sets how far the ball goes; Manual sends the ball exactly where you point, as far as the hold says. Right-stick switch: when defending, flick the right stick towards a teammate to take control of them, measured from your player or from the ball. Player ring shows a circle and facing arrow on the grass under your player; the pointer above the head always shows. Quality preset and player changes apply fully at the next kick-off. Low quality always uses the classic players.</p>
       <div class="row end"><button class="btn primary" data-a="back">Done</button></div></div>`, overlay ? 'translucent' : '');
     const save = () => {
       saveSettings(s);
@@ -2900,6 +2906,7 @@ export class App {
     this.bindSeg('intro', (v) => { s.matchIntro = v === 'on'; save(); redraw(); });
     this.bindSeg('replays', (v) => { s.goalReplays = v === 'on'; save(); redraw(); });
     this.bindSeg('ceremony', (v) => { s.ceremony = v === 'on'; save(); redraw(); });
+    this.bindSeg('handheld', (v) => { s.graphics.handheld = v === 'on'; save(); redraw(); });
     this.bindSeg('celebs', (v) => { s.celebrations = v === 'on'; save(); redraw(); });
     this.bindSeg('varchk', (v) => { s.varChecks = v === 'on'; save(); redraw(); });
     this.bindSeg('aerials', (v) => { s.aerials = v === 'on'; save(); redraw(); });
@@ -2916,6 +2923,7 @@ export class App {
     this.bindSeg('rumble', (v) => { s.rumble = v === 'on'; save(); redraw(); if (s.rumble) this.gamepad.rumble(0.6, 0.6, 180); });
     this.bindSeg('pring', (v) => { s.playerRing = v === 'on'; save(); redraw(); });
     this.bindSeg('nextm', (v) => { s.showNextMarker = v === 'on'; save(); redraw(); });
+    this.bindSeg('chints', (v) => { s.controlHints = v === 'on'; save(); redraw(); });
     this.bindSeg('rcap', (v) => { s.restartCaptions = v === 'on'; this.hud.restartCaptions = s.restartCaptions; save(); redraw(); });
     this.bindSeg('hc', (v) => { s.highContrast = v === 'on'; save(); redraw(); });
     this.bindSeg('cvd', (v) => { s.colourVision = v as ColourVision; save(); redraw(); });

@@ -249,8 +249,39 @@ export function faceDetail(mesh: THREE.SkinnedMesh, albedo: CanvasImageSource & 
     }
   }
   g.setAttribute('aFace', new THREE.BufferAttribute(a, 3));
+  // Expressions (aFace2): x = brows (raised in joy, knitted down in effort and frustration),
+  // y = mouth corners (up in a smile, down in a frown; +1 right, -1 left), z = cheeks and lower
+  // lids (pushed up in a grin or a squint).
+  const e = new Float32Array(n * 3);
+  const eyeY = noseY + 0.034, browY = noseY + 0.056;
+  for (let i = 0; i < n; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i), ax = Math.abs(x);
+    if (z < 0.0 || y < chinY - 0.02 || y > browY + 0.04) continue;
+    const front = sm01((z - 0.0) / 0.04);
+    // Brows: a band above the eyes, strongest over them, fading towards the temples and the forehead.
+    const bw = (1 - sm01(Math.abs(y - browY) / 0.022)) * (1 - sm01((ax - 0.05) / 0.02)) * sm01((ax - 0.004) / 0.01);
+    e[i * 3] = bw * front;
+    // Mouth corners: either side of the mouth line, the corner itself most.
+    const cw = (1 - sm01(Math.abs(y - (mouthY - 0.002)) / 0.016)) * sm01((ax - 0.008) / 0.016) * (1 - sm01((ax - 0.038) / 0.014));
+    e[i * 3 + 1] = cw * front * Math.sign(x || 1);
+    // Cheeks and lower lids: between the mouth and the eyes, out to the cheekbones.
+    const kw = (1 - sm01(Math.abs(y - (eyeY - 0.022)) / 0.022)) * sm01((ax - 0.012) / 0.012) * (1 - sm01((ax - 0.058) / 0.014));
+    e[i * 3 + 2] = kw * front;
+  }
+  g.setAttribute('aFace2', new THREE.BufferAttribute(e, 3));
   return face;
 }
+
+/** A face: brows (-1 knitted .. 1 raised), smile (-1 frown .. 1 grin), squint and gritted teeth (0..1). */
+export interface FaceExpr { brow: number; smile: number; squint: number; grit: number }
+
+/** What each mood looks like (render/realplayer.ts updateFace blends between them). */
+export const MOODS: Record<'calm' | 'joy' | 'effort' | 'anger', FaceExpr> = {
+  calm: { brow: 0, smile: 0, squint: 0, grit: 0 },
+  joy: { brow: 0.75, smile: 1, squint: 0.55, grit: 0 },
+  effort: { brow: -0.6, smile: -0.15, squint: 0.75, grit: 0.9 },
+  anger: { brow: -1, smile: -0.9, squint: 0.35, grit: 0.25 },
+};
 
 export interface PlayerAssets {
   bodies: Body[];
@@ -601,6 +632,8 @@ export interface PlayerLookUniforms {
   uMudFront: { value: number };
   uSweat: { value: number };
   uMouth: { value: number };
+  /** Expression: brows, smile, squint, gritted teeth (FaceExpr). */
+  uExpr: { value: THREE.Vector4 };
   /** Cloth: time, ground speed and a per-player phase (shirts and shorts ripple more the faster he runs). */
   uCloth: { value: THREE.Vector3 };
 }
@@ -617,7 +650,7 @@ function kitMaterial(body: Body, kit: Kit, keeper: boolean, boot = 0x15161a, per
   // Skin tone relative to the body's own scan, kept within a modest range so textures stay natural.
   const tone = new THREE.Color(person.skin ?? body.tone.getHex());
   const tint = new THREE.Vector3(...[tone.r / Math.max(0.05, body.tone.r), tone.g / Math.max(0.05, body.tone.g), tone.b / Math.max(0.05, body.tone.b)].map((v) => Math.max(0.78, Math.min(1.25, 1 + (v - 1) * 0.6))) as [number, number, number]);
-  const look: PlayerLookUniforms = { uMud: { value: 0 }, uMudFront: { value: 0.5 }, uSweat: { value: 0 }, uMouth: { value: 0 }, uCloth: { value: new THREE.Vector3() } };
+  const look: PlayerLookUniforms = { uMud: { value: 0 }, uMudFront: { value: 0.5 }, uSweat: { value: 0 }, uMouth: { value: 0 }, uExpr: { value: new THREE.Vector4() }, uCloth: { value: new THREE.Vector3() } };
   // The club crest on the left chest (render/badgetex.ts), when the kit's club is known.
   const club = kitClub(kit);
   const uniforms = {
@@ -649,16 +682,20 @@ function kitMaterial(body: Body, kit: Kit, keeper: boolean, boot = 0x15161a, per
   };
   const hasDetail = !!body.mesh.geometry.getAttribute('aKit');
   const hasFace = !!body.mesh.geometry.getAttribute('aFace');
+  const hasExpr = !!body.mesh.geometry.getAttribute('aFace2');
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uniforms);
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
 ${hasDetail ? 'attribute vec3 aKit;\nvarying vec3 vKit;' : ''}
 ${hasFace ? 'attribute vec3 aFace;' : ''}
+${hasExpr ? 'attribute vec3 aFace2;' : ''}
 varying vec3 vFace;
+varying vec3 vExpr;
 varying vec3 vBind;
 varying float vMirror;
 uniform float uMouth;
+uniform vec4 uExpr;
 uniform vec2 uHinge;
 uniform vec3 uCloth;
 uniform sampler2D kitMask;`)
@@ -689,7 +726,22 @@ if (aFace.y > 0.001 && uMouth > 0.001) {
   vec2 r = transformed.yz - uHinge;
   float c = cos(ang), s = sin(ang);
   transformed.yz = uHinge + vec2(r.x * c - r.y * s, r.x * s + r.y * c);
-}` : 'vFace = vec3(0.0);'}`);
+}` : 'vFace = vec3(0.0);'}
+${hasExpr ? `vExpr = aFace2;
+// Expression: brows up (joy) or knitted down and in (effort, frustration); mouth corners up in a
+// grin or down in a frown, wider for gritted teeth; cheeks and lower lids up in a grin or squint.
+if (dot(abs(uExpr), vec4(1.0)) > 0.01) {
+  float knit = max(0.0, -uExpr.x);
+  transformed.y += aFace2.x * (uExpr.x * 0.009 - knit * 0.0015);
+  transformed.x -= aFace2.x * knit * 0.006 * sign(transformed.x) * (1.0 - smoothstep(0.015, 0.045, abs(transformed.x)));
+  transformed.z += aFace2.x * knit * 0.002;
+  float cy = abs(aFace2.y);
+  transformed.y += cy * uExpr.y * 0.009;
+  transformed.x += aFace2.y * (max(0.0, uExpr.y) * 0.006 + uExpr.w * 0.006);
+  transformed.z -= cy * max(0.0, uExpr.y) * 0.0015;
+  transformed.y += aFace2.z * (uExpr.z * 0.005 + max(0.0, uExpr.y) * 0.004);
+  transformed.z += aFace2.z * (uExpr.z + max(0.0, uExpr.y)) * 0.0012;
+}` : 'vExpr = vec3(0.0);'}`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
 uniform vec3 kitShirt, kitSleeves, kitShorts, kitSocks, kitTrim, kitBoot, kitGlove, kitSecond, kitSponsorCol;
@@ -700,8 +752,10 @@ varying float vMirror;
 ${KIT_PATTERN_GLSL}
 uniform vec3 uSkinTint, uHairCol;
 uniform float uHairLum, uMud, uMudFront, uSweat, uMouth;
+uniform vec4 uExpr;
 ${hasDetail ? 'varying vec3 vKit;' : ''}
 varying vec3 vFace;
+varying vec3 vExpr;
 varying vec3 vBind;
 float kHash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
 float kNoise(vec3 p) {
@@ -763,6 +817,8 @@ float kNoise(vec3 p) {
           diffuseColor.rgb = mix(diffuseColor.rgb, hc, hairW * 0.9);
           // Open mouth: the stretched lips show the dark inside of the mouth.
           diffuseColor.rgb *= 1.0 - clamp(uMouth * vFace.z * 1.6, 0.0, 0.88);
+          // A frown or a knitted brow creases the skin; a grin or a squint deepens the lines by the eyes.
+          diffuseColor.rgb *= 1.0 - (max(0.0, -uExpr.x) * vExpr.x * 0.16 + abs(vExpr.y) * max(0.0, -uExpr.y) * 0.1 + vExpr.z * uExpr.z * 0.08) * skinW;
           // Sweat darkens the shirt down the chest, under the arms, at the collar and down the back.
           if (uSweat > 0.01) {
             float chest = exp(-(b.x * b.x / 0.005 + (b.y - 1.32) * (b.y - 1.32) / 0.009)) * step(0.0, b.z);
@@ -971,6 +1027,11 @@ export class RealPlayerModel {
   /** Mud and sweat, 0..1 (render/wear.ts KitWear); the mouth is worked out here from what the player is doing. */
   wear = { mud: 0, front: 0.5, sweat: 0 };
   private mouth = 0;
+  private expr: FaceExpr = { brow: 0, smile: 0, squint: 0, grit: 0 };
+  /** Force a mood (photo tests); null lets the match decide. */
+  moodOverride: keyof typeof MOODS | null = null;
+  /** The mood the face is showing now (tests). */
+  mood: keyof typeof MOODS = 'calm';
   private headYaw = 0;
   private headPitch = 0;
   /** Heads follow the ball (the renderer turns it off for a cinematic that has its own look). */
@@ -1552,6 +1613,23 @@ export class RealPlayerModel {
   }
 
   /** How far the head is turned to follow the ball (yaw, pitch in radians), for tests. */
+  /** A camera in front of his face, for close-up tests: where to stand and where to look. */
+  faceView(dist = 0.7): { pos: [number, number, number]; look: [number, number, number] } | null {
+    const sm = (this.meshes as THREE.SkinnedMesh[]).find((m) => m.isSkinnedMesh);
+    const head = this.model.getObjectByName('Head');
+    if (!sm || !head) return null;
+    this.model.updateWorldMatrix(true, true);
+    // Skinned like the face itself: the head bone's world matrix times its inverse bind times the bind matrix.
+    const bi = sm.skeleton.bones.indexOf(head as THREE.Bone);
+    if (bi < 0) return null;
+    const m = new THREE.Matrix4().copy(head.matrixWorld).multiply(sm.skeleton.boneInverses[bi]).multiply(sm.bindMatrix);
+    const nose = new THREE.Vector3(0, 1.66, 0.1).applyMatrix4(m);
+    const f = new THREE.Vector3(0, 0, 1).transformDirection(m);
+    const look = nose.clone().addScaledVector(f, -0.06);
+    const pos = look.clone().addScaledVector(f, dist).add(new THREE.Vector3(0, 0.02, 0));
+    return { pos: [pos.x, pos.y, pos.z], look: [look.x, look.y, look.z] };
+  }
+
   get headTurn() {
     return { yaw: this.headYaw, pitch: this.headPitch };
   }
@@ -1568,8 +1646,28 @@ export class RealPlayerModel {
     else if (reaction === 'highFive' || reaction === 'clap') target = 0.25 + 0.3 * w(5);
     else if (reaction === 'headInHands' || reaction === 'crouch') target = 0.35;
     else if (speed > 5.5) target = 0.12 + 0.25 * (1 - Math.max(0, Math.min(1, p.stamina))) + 0.08 * w(5);
-    this.mouth += (target - this.mouth) * (1 - Math.exp(-dt * 10));
+    // The rest of the face: joy when celebrating, effort when straining (a sprint on tired legs, a
+    // shot, a tackle, a header), frustration after a miss or a decision against him.
+    const a = p.action.type;
+    let mood: keyof typeof MOODS = 'calm', amt = 1;
+    if (cheering || a === 'celebrate' || reaction === 'armsUp' || reaction === 'fistPump' || reaction === 'kneeSlide' || reaction === 'huddle' || reaction === 'highFive' || reaction === 'clap' || reaction === 'badgeKiss' || reaction === 'lift') mood = 'joy';
+    else if (reaction === 'protest' || reaction === 'appeal' || reaction === 'headInHands' || reaction === 'crouch' || reaction === 'dejected' || reaction === 'handsOnHips') { mood = 'anger'; amt = reaction === 'handsOnHips' ? 0.6 : 1; }
+    else if (a === 'kick' || a === 'tackle' || a === 'slide' || a === 'header' || a === 'dive' || a === 'barge' || a === 'jump' || a === 'catch') mood = 'effort';
+    else if (speed > 5.5) { mood = 'effort'; amt = Math.min(1, 0.25 + (speed - 5.5) * 0.25 + 0.5 * (1 - Math.max(0, Math.min(1, p.stamina)))); }
+    else if (p.stamina < 0.35) { mood = 'effort'; amt = 0.35; }
+    if (this.moodOverride) { mood = this.moodOverride; amt = 1; }
+    this.mood = mood;
+    const want = MOODS[mood], ek = this.moodOverride ? 1 : 1 - Math.exp(-dt * (mood === 'effort' ? 9 : 5));
+    this.expr.brow += (want.brow * amt - this.expr.brow) * ek;
+    this.expr.smile += (want.smile * amt - this.expr.smile) * ek;
+    this.expr.squint += (want.squint * amt - this.expr.squint) * ek;
+    this.expr.grit += (want.grit * amt - this.expr.grit) * ek;
+    if (this.moodOverride) { target = mood === 'joy' ? 0.7 : mood === 'anger' ? 0.3 : 0; }
+    // Gritted teeth keep the mouth nearly shut.
+    if (mood === 'effort' && a !== 'none') target = Math.min(target, 0.12);
+    this.mouth += (target - this.mouth) * (this.moodOverride ? 1 : 1 - Math.exp(-dt * 10));
     this.look.uMouth.value = this.mouth;
+    this.look.uExpr.value.set(this.expr.brow, this.expr.smile, this.expr.squint, this.expr.grit);
     this.look.uCloth.value.set(time, this.spd, this.id * 1.37);
     this.look.uMud.value = this.wear.mud;
     this.look.uMudFront.value = this.wear.front;
