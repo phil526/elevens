@@ -82,7 +82,9 @@ The host creates a room and shares the code or the link. Rooms are private: nobo
 
 **On the same local network.** Run `npm run build && npm start` on one computer. The server listens on all interfaces (`HOST=0.0.0.0`). Find that computer's LAN address (for example `192.168.1.20`) and both players open `http://192.168.1.20:8787`. The host creates a room and the guest joins with the code or link. Allow port 8787 through the host computer's firewall if needed. Browsers treat plain `http://` LAN addresses as insecure, which is fine for this game (it uses no secure-only APIs), but some phones block it; use the deployed setup below for phones.
 
-**Over the internet (deployed).** Deploy the server somewhere reachable over HTTPS (see [docs/DEPLOY.md](docs/DEPLOY.md)). Either:
+**Over the internet (the public setup).** The game is at https://phil526.github.io/elevens/ (GitHub Pages) and online matches run on a free Render server, `wss://elevens-match-server.onrender.com/ws` (`render.yaml`; the address is `PUBLIC_SERVER` in `src/client/net/hosting.ts`). Copies of the game on any other web address use that server too; copies on this machine or local network use their own. The free server sleeps after 15 minutes with nobody playing: the game wakes it when it opens and the Online screen waits for it (up to about a minute). See [docs/DEPLOY.md](docs/DEPLOY.md).
+
+**Over the internet (your own server).** Deploy the server somewhere reachable over HTTPS (see [docs/DEPLOY.md](docs/DEPLOY.md)). Either:
 
 - Single origin (simplest): the server serves the client too. Both players open `https://your-server.example.com`, one creates a room and sends the link to the other.
 - Separate hosts: put `dist/client` on a static host and the server elsewhere. Build the client with `VITE_SERVER_URL=wss://your-server.example.com/ws`, or open the static site with `?server=wss://your-server.example.com/ws`. The room link keeps that `?server=` value, so the guest connects to the same server. Set `ALLOWED_ORIGINS` on the server to the static site's origin.

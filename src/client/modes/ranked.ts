@@ -9,7 +9,11 @@ import { clubBadge } from '../ui/badge';
 const KEY = 'elevens.ranked.v1';
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-export interface RankedLocal { id: string; key: string; club: string; rec: RankedRecord | null; board: RankedRecord[] }
+export interface RankedLocal {
+  id: string; key: string; club: string; rec: RankedRecord | null; board: RankedRecord[];
+  /** The server's signature of `rec`: lets a restarted server take the record back. */
+  sig?: string;
+}
 
 const hex32 = () => {
   const b = new Uint8Array(16);

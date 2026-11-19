@@ -1,19 +1,36 @@
-# Render Blueprint: the whole game (client, online matches and ranked) as one Docker web service.
-# New > Blueprint, pick the repository. A persistent disk (paid plans) keeps the ranked table
-# across restarts; without one, ranked records reset when the service restarts.
+# Render Blueprint: the online match server on Render's free plan (no card needed).
+# In Render: New > Blueprint, pick this repository, Apply. Render then redeploys on every push to main.
+#
+# The game itself is the static site on GitHub Pages (https://phil526.github.io/elevens/, see
+# .github/workflows/pages.yml); this service only runs online and ranked matches, and its address
+# redirects to the game. The client finds it at wss://elevens-match-server.onrender.com/ws
+# (src/client/net/hosting.ts PUBLIC_SERVER): if Render gives the service a different address,
+# change PUBLIC_SERVER to match.
+#
+# Free plan limits (November 2026): the server sleeps after 15 minutes with no players and takes
+# about a minute to wake (the game wakes it when it opens and the Online screen waits); 750 free
+# hours a month; no lasting disk, so ranked records also live on each player's device, signed with
+# RANKED_SECRET, and come back after a restart. Upgrading to a paid instance removes the sleep.
 services:
   - type: web
-    name: elevens
-    runtime: docker
-    dockerfilePath: ./Dockerfile
+    name: elevens-match-server
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm ci && npm run build:server
+    startCommand: node dist/server/index.mjs
     healthCheckPath: /health
+    autoDeploy: true
     numInstances: 1
     envVars:
-      - key: RANKED_FILE
-        value: /app/data/ranked.json
+      - key: NODE_VERSION
+        value: "22"
+      - key: SERVE_CLIENT
+        value: "0"
+      - key: PLAY_URL
+        value: https://phil526.github.io/elevens/
+      # Pages that may open match connections (the server's own address is always allowed).
       - key: ALLOWED_ORIGINS
-        sync: false
-    disk:
-      name: elevens-data
-      mountPath: /app/data
-      sizeGB: 1
+        value: https://phil526.github.io
+      - key: RANKED_SECRET
+        generateValue: true

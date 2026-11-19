@@ -2,8 +2,11 @@
 // player's device; only a hash of the key is kept), the queue, and the records. Records are kept
 // in a JSON file (RANKED_FILE, default ./data/ranked.json) so they survive a restart; if the file
 // can't be written the server still runs with them in memory.
+// Hosts with no lasting disk (Render's free plan) lose the file whenever the server sleeps, so every
+// record the server sends is also signed (HMAC with RANKED_SECRET) and the player's device keeps it:
+// a server that doesn't know a player takes the signed record back when they next play ranked.
 
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { applyResult, newRecord, pairingWindow, type RankedRecord } from '../shared/ranked';
@@ -17,7 +20,11 @@ export class RankStore {
   private dirty = false;
   private timer: NodeJS.Timeout | null = null;
 
-  constructor(private file: string | null, private log: (m: string) => void = () => {}) {
+  private secret: string;
+
+  constructor(private file: string | null, private log: (m: string) => void = () => {}, secret: string | null = null) {
+    // Without a fixed secret, signatures only last as long as this process.
+    this.secret = secret || randomBytes(32).toString('hex');
     if (file && existsSync(file)) {
       try {
         const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, Stored>;
@@ -28,9 +35,16 @@ export class RankStore {
   }
 
   /** The player's record (new players start in Division 10). Null if the key doesn't match the id. */
-  identify(id: string, key: string, name: string): RankedRecord | null {
+  identify(id: string, key: string, name: string, saved?: { rec: RankedRecord; sig: string }): RankedRecord | null {
     const h = hashKey(key);
-    const s = this.all.get(id);
+    let s = this.all.get(id);
+    if (!s && saved && saved.rec.id === id && this.check(h, saved.rec, saved.sig)) {
+      // A player this server doesn't know (it restarted) brought back their signed record.
+      s = { hash: h, rec: { ...saved.rec } };
+      this.all.set(id, s);
+      this.touch();
+      this.log(`ranked: record restored for ${id.slice(0, 6)} (${saved.rec.points} points)`);
+    }
     if (s) {
       if (s.hash !== h) return null;
       if (name && s.rec.name !== name) { s.rec.name = name; this.touch(); }
@@ -43,6 +57,21 @@ export class RankStore {
   }
 
   get(id: string): RankedRecord | null { return this.all.get(id)?.rec ?? null; }
+
+  /** The signature of a player's current record, for their device to keep. */
+  sign(id: string): string | undefined {
+    const s = this.all.get(id);
+    return s ? this.mac(s.hash, s.rec) : undefined;
+  }
+
+  private mac(hash: string, r: RankedRecord): string {
+    return createHmac('sha256', this.secret).update(JSON.stringify([hash, r.id, r.name, r.elo, r.points, r.w, r.d, r.l, r.best])).digest('hex');
+  }
+
+  private check(hash: string, rec: RankedRecord, sig: string): boolean {
+    const want = Buffer.from(this.mac(hash, rec), 'hex'), got = Buffer.from(sig, 'hex');
+    return want.length === got.length && timingSafeEqual(want, got);
+  }
 
   /** A finished ranked match: both records move. Returns the before/after for each side. */
   record(a: string, b: string, result: 'A' | 'B' | 'D'): { before: [RankedRecord, RankedRecord]; after: [RankedRecord, RankedRecord]; delta: [number, number] } | null {

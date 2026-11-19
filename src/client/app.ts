@@ -28,6 +28,7 @@ import { attachKeyboard, KeyboardState } from './input/keyboard';
 import { attachMouse, MouseSource } from './input/mouse';
 import { isTouchDevice, TouchControls, TouchModel, type TouchContext } from './input/touch';
 import { NetClient } from './net/netclient';
+import { isLocalHost, onServerState, PLAY_URL, serverState, wakeServer } from './net/hosting';
 import { OnlineSession, type StartInfo } from './net/online';
 import { AUTO_RES_MIN, GameRenderer, realisticPlayers } from './render/renderer';
 import { MOW_NAMES, MOW_PATTERNS, type MowSetting } from './render/vfx';
@@ -369,6 +370,10 @@ export class App {
     this.hud.setHighContrast(this.settings.highContrast);
     this.hud.restartCaptions = this.settings.restartCaptions;
     this.audio.setMusic(true); // menu music, from the first click or key press
+    // Wake the online match server now (a free server sleeps when unused), so it is ready by the
+    // time anyone opens Online; the Online screen shows its state.
+    onServerState(() => { const el = this.ui.querySelector('.server-state'); if (el) el.innerHTML = this.serverStateText(); });
+    setTimeout(() => void wakeServer(), 1500);
     const room = new URLSearchParams(location.search).get('room');
     if (room && ROOM_CODE_RE.test(room.toUpperCase())) this.showOnline(room.toUpperCase());
     else this.showMode();
@@ -3005,7 +3010,8 @@ export class App {
     const name = this.settings.name;
     this.set(`<div class="panel narrow">
       <h2>Online match</h2>
-      <p class="note">Play one other person. You each control one club; the computer runs your teammates. A match server must be running (see the README).</p>
+      <p class="note">Play one other person. You each control one club; the computer runs your teammates.</p>
+      <p class="note server-state">${this.serverStateText()}</p>
       <button class="btn big" data-a="ranked">Ranked match<small class="note"> · climb the divisions</small></button>
       <div class="field"><label for="nm">Your name</label><input id="nm" type="text" maxlength="16" value="${esc(name)}" placeholder="Player" autocomplete="nickname"></div>
       <h3>Create</h3>
@@ -3017,6 +3023,7 @@ export class App {
       <div class="row end"><button class="btn" data-a="back">Back</button></div></div>`);
     const nameEl = this.ui.querySelector<HTMLInputElement>('#nm')!;
     const codeEl = this.ui.querySelector<HTMLInputElement>('#code')!;
+    if (serverState() !== 'ready' && serverState() !== 'blocked') void wakeServer();
     const getName = () => { this.settings.name = nameEl.value.trim().slice(0, 16); saveSettings(this.settings); return this.settings.name || 'Player'; };
     this.on('[data-a=create]', () => this.connectAnd(getName(), () => this.net!.send({ t: 'create', name: getName() })));
     this.on('[data-a=ranked]', () => { getName(); this.showRanked(); });
@@ -3032,14 +3039,31 @@ export class App {
     }
   }
 
+  /** One line on the Online screen: is the match server awake? */
+  private serverStateText(): string {
+    const st = serverState();
+    const elsewhere = PLAY_URL && !location.href.startsWith(PLAY_URL) && !isLocalHost(location.hostname);
+    const link = elsewhere ? ` Online play works at <a href="${PLAY_URL}" target="_blank" rel="noopener">${PLAY_URL.replace(/^https:\/\//, '').replace(/\/$/, '')}</a>.` : '';
+    if (st === 'ready') return '<span class="badge ok">Match server ready</span>';
+    if (st === 'waking') return '<span class="badge warn">Waking up the match server</span> It sleeps when nobody has played for a while and takes up to a minute to wake.';
+    if (st === 'blocked') return `<span class="badge bad">Can't go online from here</span> This page blocks connections to the match server.${link}`;
+    if (st === 'unreachable') return `<span class="badge bad">Match server not answering</span> Check your connection, then try again.${link}`;
+    return '<span class="badge">Checking the match server…</span>';
+  }
+
   /** Ranked online: division, record, club, the queue and the top players. */
   private showRanked(error = '') {
     this.screenName = 'ranked';
     const connected = this.net?.status === 'connected';
-    const status = error || (this.rankQueued ? 'Searching for an opponent of about your level…' : connected ? '' : 'You need the match server (see the README) to play ranked.');
+    const status = error || (this.rankQueued ? 'Searching for an opponent of about your level…' : connected ? '' : 'Find a match to connect to the match server.');
     this.set(rankedHtml(this.ranked, status, this.rankQueued, this.rankWaiting, connected), 'scroll');
     const name = () => this.settings.name || 'Player';
-    const join = () => { this.rankRes = null; this.net!.send({ t: 'ranked', id: this.ranked.id, key: this.ranked.key, name: name(), club: this.ranked.club }); this.net!.send({ t: 'board' }); };
+    const join = () => {
+      this.rankRes = null;
+      const { id, key, club, rec, sig } = this.ranked;
+      this.net!.send(rec && sig ? { t: 'ranked', id, key, name: name(), club, saved: { rec, sig } } : { t: 'ranked', id, key, name: name(), club });
+      this.net!.send({ t: 'board' });
+    };
     this.on('[data-rclub]', (el) => { this.ranked.club = el.dataset.rclub!; saveRanked(this.ranked); if (this.rankQueued && this.net) join(); else this.showRanked(); });
     this.on('[data-a=rfind]', () => this.connectAnd(name(), join));
     this.on('[data-a=rcancel]', () => { this.net?.send({ t: 'unranked' }); this.rankQueued = false; this.showRanked(); });
@@ -3066,8 +3090,14 @@ export class App {
     this.net = net;
     let sentFirst = false;
     net.onStatus = (st) => {
-      if (st === 'connecting') this.setNetStatus(`Connecting to ${net.url}…`);
-      if (st === 'unavailable') { this.onlineError = `Could not reach the match server at ${net.url}. Is it running?`; this.net = null; if (this.screenName === 'online') this.showOnline(); if (this.screenName === 'ranked') { this.rankQueued = false; this.showRanked(this.onlineError); } }
+      if (st === 'connecting') this.setNetStatus('Connecting to the match server…');
+      if (st === 'waking') this.setNetStatus('Waking up the match server. The first match of the day can take up to a minute…');
+      if (st === 'unavailable' || st === 'blocked') {
+        this.onlineError = st === 'blocked' ? 'This copy of the game can\'t go online (the page it runs in blocks connections). Use the link below.' : 'Could not reach the match server. Check your connection and try again in a minute.';
+        this.net = null;
+        if (this.screenName === 'online') this.showOnline();
+        if (this.screenName === 'ranked') { this.rankQueued = false; this.showRanked(this.onlineError); }
+      }
       if (st === 'reconnecting') { this.setNetStatus('Connection lost. Reconnecting…'); if (this.screenName === 'lobby') this.renderLobby(); }
       if (st === 'disconnected') this.connectionLost('Connection to the server was lost.');
       if (st === 'connected' && this.screenName === 'lobby') this.renderLobby();
@@ -3106,6 +3136,7 @@ export class App {
         break;
       case 'rank':
         this.ranked.rec = m.rec;
+        if (m.sig) this.ranked.sig = m.sig;
         this.rankQueued = m.queued;
         this.rankWaiting = m.waiting;
         saveRanked(this.ranked);
@@ -3118,6 +3149,7 @@ export class App {
         break;
       case 'rankres': {
         this.ranked.rec = m.after;
+        if (m.sig) this.ranked.sig = m.sig;
         this.rankRes = m;
         saveRanked(this.ranked);
         const el = this.ui.querySelector('.rank-note');

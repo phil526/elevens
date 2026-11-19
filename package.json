@@ -32,7 +32,8 @@
     "e2e:hints": "node scripts/e2e-hints.mjs",
     "e2e:menus": "node scripts/e2e-menus.mjs",
     "e2e:modes": "node scripts/e2e-modes19.mjs",
-    "e2e:gameplay6": "node scripts/e2e-gameplay6.mjs"
+    "e2e:gameplay6": "node scripts/e2e-gameplay6.mjs",
+    "e2e:hosted": "node scripts/e2e-hosted.mjs"
   },
   "dependencies": {
     "three": "0.186.1",
