@@ -1,0 +1,19 @@
+# Render Blueprint: the whole game (client, online matches and ranked) as one Docker web service.
+# New > Blueprint, pick the repository. A persistent disk (paid plans) keeps the ranked table
+# across restarts; without one, ranked records reset when the service restarts.
+services:
+  - type: web
+    name: elevens
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    numInstances: 1
+    envVars:
+      - key: RANKED_FILE
+        value: /app/data/ranked.json
+      - key: ALLOWED_ORIGINS
+        sync: false
+    disk:
+      name: elevens-data
+      mountPath: /app/data
+      sizeGB: 1

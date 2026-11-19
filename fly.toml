@@ -1,0 +1,32 @@
+# Fly.io: the whole game (client, online matches and ranked) on one always-on machine.
+# fly launch --no-deploy (pick a name), fly volumes create elevens_data --size 1, fly deploy.
+# Then set ALLOWED_ORIGINS to the app's https:// address: fly secrets set ALLOWED_ORIGINS=https://<name>.fly.dev
+app = "elevens"
+primary_region = "lhr"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8787"
+  HOST = "0.0.0.0"
+  RANKED_FILE = "/app/data/ranked.json"
+
+[[mounts]]
+  source = "elevens_data"
+  destination = "/app/data"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  # One machine, always on: rooms live in memory and a 60 Hz match can't move between machines.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/health"
+    interval = "30s"
+    timeout = "3s"
+    grace_period = "10s"

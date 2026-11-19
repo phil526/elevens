@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en-GB">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#0b0f14" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="ELEVENS" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+    <meta name="description" content="ELEVENS: an original browser-based 3D 11-a-side football game." />
+    <title>ELEVENS</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b0f14'/%3E%3Crect x='18' y='14' width='8' height='36' fill='%233ee08f'/%3E%3Crect x='38' y='14' width='8' height='36' fill='%233ee08f'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <canvas id="game" aria-label="Match view"></canvas>
+    <div id="hud" aria-live="polite"></div>
+    <div id="ui"></div>
+    <div id="rotate" class="rotate-prompt" hidden><div><b>Rotate your device</b><span>ELEVENS plays in landscape.</span></div></div>
+    <script type="module" src="/src/client/main.ts"></script>
+  </body>
+</html>

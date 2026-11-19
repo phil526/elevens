@@ -1,0 +1,49 @@
+ELEVENS ships the following third-party code in its browser bundle.
+
+three.js 0.186.1 (https://threejs.org) — MIT licence
+
+The MIT License
+
+Copyright © 2010-2026 three.js authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+
+Sound effects in public/sfx/ (downloaded 17 Nov 2026) are from Pixabay and used under the
+Pixabay Content License (https://pixabay.com/service/license-summary/): free to use and modify,
+attribution not required, not to be sold or redistributed on a standalone basis. They are
+edited (trimmed, mixed to mono, re-encoded) and used only inside the game.
+
+crowd-a.mp3: "football game in a big arena" by freesound_community (ckater), https://pixabay.com/sound-effects/city-football-game-in-a-big-arena-31575/ (looped with a 2 s crossfade, mono, loudness-normalised)
+crowd-b.mp3: "football crowd 3" by freesound_community (OleSouWester), https://pixabay.com/sound-effects/people-football-crowd-3-69245/ (looped with a 2 s crossfade, mono, loudness-normalised)
+chant.mp3: "Stadium chant" by PWLPL, https://pixabay.com/sound-effects/people-stadium-chant-377306/ (fade-out, mono, normalised)
+chant-2.mp3: "Stadium chant" by PWLPL, https://pixabay.com/sound-effects/people-stadium-chant-377307/ (fade-out, mono, normalised)
+goal.mp3: "Crowd Cheering" by u_xg7ssi08yr, https://pixabay.com/sound-effects/people-crowd-cheering-379666/; "Crowd Cheers" by storegraphic, https://pixabay.com/sound-effects/people-crowd-cheers-314919/; "Crowd Cheering in Stadium" by vishiv, https://pixabay.com/sound-effects/people-crowd-cheering-in-stadium-435357/ (8 layered takes over a swell of the stadium recording, stadium reverb)
+ooh.mp3: "Crowd Disappointment Reaction" by Universfield, https://pixabay.com/sound-effects/people-crowd-disappointment-reaction-352718/; "football game in a big arena" by freesound_community (ckater), https://pixabay.com/sound-effects/city-football-game-in-a-big-arena-31575/ (16 layered takes with pitch, timing and stereo offsets over a swell of the arena recording, stadium reverb)
+gasp.mp3: "Crowd Shocked Reaction" by Universfield, https://pixabay.com/sound-effects/people-crowd-shocked-reaction-352766/; "football game in a big arena" by freesound_community (ckater), https://pixabay.com/sound-effects/city-football-game-in-a-big-arena-31575/ (16 layered takes, arena swell, stadium reverb)
+boo.mp3: "Crowd Booing" by DRAGON-STUDIO, https://pixabay.com/sound-effects/people-crowd-booing-494319/; "Crowd booing" by PWLPL, https://pixabay.com/sound-effects/people-crowd-booing-377303/; "boo" by freesound_community, https://pixabay.com/sound-effects/people-boo-6377/; "Crowd Noise" by SoundReality, https://pixabay.com/sound-effects/people-crowd-noise-375725/ (10 layered takes over a swell of the crowd-noise recording, stadium reverb)
+applause.mp3: "Large crowd applause" by freesound_community, https://pixabay.com/sound-effects/people-large-crowd-applause-6250/ (24 s excerpt from 0:05, mono, normalised)
+kick-1.mp3: "Soccer Ball Kick" by freesound_community (bittermelonheart), https://pixabay.com/sound-effects/film-special-effects-soccer-ball-kick-37625/ (silence trimmed, mono, peak-normalised)
+kick-2.mp3: "Soccer Kick" by freesound_community, https://pixabay.com/sound-effects/film-special-effects-soccer-kick-6235/ (silence trimmed, mono, peak-normalised)
+net.mp3: "A football hits the net, goal" by forza1903 (labelled AI generated on Pixabay), https://pixabay.com/sound-effects/film-special-effects-a-football-hits-the-net-goal-313216/ (first 1.8 s, mono, peak-normalised)
+ooh-2.mp3: "Crowd Disappointment Reaction" by Universfield, https://pixabay.com/sound-effects/people-crowd-disappointment-reaction-352718/; "groan crescendo" by freesound_community, https://pixabay.com/sound-effects/people-groan-crescendo-82041/; "football game in a big arena" by freesound_community (ckater), https://pixabay.com/sound-effects/city-football-game-in-a-big-arena-31575/ (as ooh.mp3, a second take)
+stomp.mp3: "Powerful Stomps Claps Cheering (Sport Rhythmic Applause)" by DJARTMUSIC, https://pixabay.com/sound-effects/people-powerful-stomps-claps-cheering-sport-rhythmic-applause-317290/ (fade tail trimmed, loudness-normalised)
+call-shot.mp3: "Football Commentator with FX What an amazing shot" by JonathanSlatterMusic, https://pixabay.com/sound-effects/film-special-effects-football-commentator-with-fx-what-an-amazing-shot-534994/ (silence trimmed, mono, loudness-normalised)
+call-strike.mp3: "Football Commentator with FX Oh what a sweet strike" by JonathanSlatterMusic, https://pixabay.com/sound-effects/film-special-effects-football-commentator-with-fx-oh-what-a-sweet-strike-546900/ (silence trimmed, mono, loudness-normalised)
+call-incredible.mp3: "Football Commentator with FX That is nothing but incredible" by JonathanSlatterMusic, https://pixabay.com/sound-effects/film-special-effects-football-commentator-with-fx-that-is-nothing-but-incredible-546898/ (silence trimmed, mono, loudness-normalised)

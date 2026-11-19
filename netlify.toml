@@ -1,0 +1,23 @@
+# Netlify (or Cloudflare Pages with the same build command and folder): the game as a static,
+# installable web app. Online and ranked matches need the match server hosted separately: set
+# VITE_SERVER_URL to its wss://…/ws address in the site's environment variables.
+[build]
+  command = "npm ci && npm run build:client"
+  publish = "dist/client"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+# The service worker and the page itself must never be cached long, or players keep an old version.
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache"
+[[headers]]
+  for = "/manifest.webmanifest"
+  [headers.values]
+    Content-Type = "application/manifest+json"
