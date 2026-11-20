@@ -422,7 +422,11 @@ export class GameRenderer {
     this.renderer.setPixelRatio(this.baseDpr * this.dyn.scale);
     const shadows = gfx.shadows && q > 0;
     this.renderer.shadowMap.enabled = shadows;
-    this.renderer.shadowMap.type = q > 1 ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+    // Always PCF. three r186 dropped PCFSoftShadowMap: it switches to PCF only when the shadows are
+    // drawn, after the materials were built for "soft", which sample the shadow map the wrong way.
+    // Chrome on Windows (Direct3D) then refuses those draws and the pitch, stands and players were
+    // black (20 Nov 2026); other systems happened to let it through.
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.sun.castShadow = shadows;
     const size = q >= 3 ? 4096 : q > 1 ? 2048 : 1024;
     if (this.sun.shadow.mapSize.x !== size) {
