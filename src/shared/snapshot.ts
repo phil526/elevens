@@ -31,7 +31,7 @@ export interface Snapshot {
   b: number[]; // x,y,z,vx,vy,vz,state,owner,flight,lastTouchTeam,receiver (receiver from 20 Nov 2026; older servers send 10)
   p: number[]; // PLAYER_STRIDE per player
   dv: number[][]; // [id, tx, ty, tz] for diving keepers
-  r: number[] | 0; // restart: type, team, taker, ready, x, z, readyT, aimX, aimZ
+  r: number[] | 0; // restart: type, team, taker, ready, x, z, readyT, aimX, aimZ, quick, curve, dip, shake, stutter, keeper commit (side + 2, 0 none)
   ctl: [number, number];
   nx: [number, number];
   hu: [0 | 1, 0 | 1];
@@ -67,7 +67,7 @@ export function encodeSnapshot(m: Match, ack: number, events: MatchEvent[], with
     so: m.shootout ? [m.shootout.kicks[0].map((k: boolean) => (k ? 1 : 0)), m.shootout.kicks[1].map((k: boolean) => (k ? 1 : 0)), m.shootout.team, m.shootout.winner] : undefined,
     b: [r2(b.pos.x), r2(b.pos.y), r2(b.pos.z), r2(b.vel.x), r2(b.vel.y), r2(b.vel.z), BALL_STATES.indexOf(b.state), b.owner, FLIGHTS.indexOf(b.flight), b.lastTouchTeam, b.receiver],
     p, dv,
-    r: r ? [RESTARTS.indexOf(r.type), r.team, r.taker, r.ready ? 1 : 0, r2(r.spot.x), r2(r.spot.z), r2(r.readyT), r2(r.aim.x), r2(r.aim.z), r.quick ? 1 : 0, r2(r.curve ?? 0), r2(r.dip ?? 0)] : 0,
+    r: r ? [RESTARTS.indexOf(r.type), r.team, r.taker, r.ready ? 1 : 0, r2(r.spot.x), r2(r.spot.z), r2(r.readyT), r2(r.aim.x), r2(r.aim.z), r.quick ? 1 : 0, r2(r.curve ?? 0), r2(r.dip ?? 0), r2(r.shake ?? 0), r.stutter ? 1 : 0, r.gk?.commit ? r.gk.commit.side + 2 : 0] : 0,
     ctl: [m.ctrl[0].pid, m.ctrl[1].pid], nx: [m.ctrl[0].next, m.ctrl[1].next], hu: [m.ctrl[0].human ? 1 : 0, m.ctrl[1].human ? 1 : 0],
     ad: [m.attackDir(0), m.attackDir(1)], ack, ev: events, g: m.goals.slice(), st: withStats ? [m.stats[0], m.stats[1]] : undefined,
     ps: withStats && (m.phase === 'fulltime' || m.phase === 'halftime') ? m.ratings() : undefined,

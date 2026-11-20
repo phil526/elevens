@@ -8,7 +8,7 @@ import type { InputEvent, InputFrame } from './types';
 import { ALL_CLUBS, TEAMS } from './teams';
 import type { RankedRecord } from './ranked';
 
-export const PROTOCOL_VERSION = 14;
+export const PROTOCOL_VERSION = 15;
 
 export type ClientMsg =
   | { t: 'hello'; v: number; token?: string; name?: string }

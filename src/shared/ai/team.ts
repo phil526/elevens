@@ -11,6 +11,7 @@ import type { Player, Restart, V2 } from '../types';
 import { carrierAI } from './carrier';
 import { gameState, scoreMentality } from './gamestate';
 import { applyPlayStyle, styleOf } from '../playstyle';
+import { aiPenalty, favouriteSide, setPieceRatings, takerSideZ, techVariant } from '../setpieces';
 import { G6 } from '../switches';
 import { updateHumanKeeper, updateKeeper } from './keeper';
 import { LINK, applySetPiece, bestPartner, forwardRestartOption, blindRun, blindTarget, boxMarkSpot, linkLevel, overlapAround, secondBalls, setPieceDefence, setPieceMarkSpot, shotLine, trackBoxRunners, underlapInside, underlapTo, unseenRunner, wantUnderlap, MATES3 } from './mates3';
@@ -1579,9 +1580,10 @@ export function chooseRestartKick(m: Match, r: Restart, auto = false): KickReque
       return { kind: 'pass', receiver: mid.id, target: { x: mid.pos.x, y: 0, z: mid.pos.z } };
     }
     case 'penalty': {
-      const side = m.rng.chance(0.5) ? 1 : -1;
-      const aimZ = m.rng.chance(0.08) ? 0 : side * m.rng.range(1.4, 2.5);
-      return { kind: 'shot', power: m.rng.range(0.7, 0.86), placed: false, target: { x: dir * PITCH.halfLength, y: 0, z: aimZ } };
+      // Technique, favourite side and a stutter now and then (20 Nov 2026).
+      const fav = favouriteSide(taker.def);
+      const pen = aiPenalty(m.rng, setPieceRatings(taker.def), takerSideZ(fav.side, dir), fav.lean);
+      return { kind: 'shot', power: pen.power, placed: false, variant: techVariant(pen.tech), stutter: pen.stutter, target: { x: dir * PITCH.halfLength, y: 0, z: pen.aimZ } };
     }
     case 'corner': {
       const aim = routineAim(m, r);

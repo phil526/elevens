@@ -12,6 +12,7 @@ import { TEAMMATE_ON, levelOf } from './team';
 import { chooseDistribution, counterOn } from './distribution';
 import { gameState } from './gamestate';
 import { G6 } from '../switches';
+import { SETPIECE, habitEdge } from '../setpieces';
 
 const R = BALL.radius;
 
@@ -54,6 +55,8 @@ export function manualDive(m: Match, gk: Player, sx: number, sz: number) {
     const toBall = cr.z - gk.pos.z;
     // Stick at rest, or pointing the way the ball is going: dive to meet it. The other way: a full dive that way.
     tz = !lateral || Math.sign(toBall) === lateral || Math.abs(toBall) < 0.3 ? gk.pos.z + clamp(toBall, -(reach + 1.1), reach + 1.1) : gk.pos.z + lateral * reach;
+    // Facing a penalty you have to pick a side: with the stick centred he only stands tall.
+    if (!lateral && m.time - m.penKickTime < 0.8) tz = gk.pos.z + clamp(toBall, -0.9, 0.9);
   } else {
     ty = 0.5;
     const l = Math.hypot(sx, sz);
@@ -124,16 +127,27 @@ export function updateKeeper(m: Match, gk: Player, _dt: number, humanGk = false)
     let read = reads.get(gk);
     if (!read || read.tag !== tag) {
       const cr = crossPlane(m, planeX, side) ?? predictGoalLine(b, side, 2.5);
-      read = { tag, live: false, tz: 0, ty: 0 };
+      read = { tag, live: false, tz: 0, ty: 0 } as { tag: string; live: boolean; tz: number; ty: number; now?: boolean };
       if (cr && Math.abs(cr.z) < PITCH.goalHalfWidth + 1.2 && cr.y < PITCH.goalHeight + 0.6) {
         const sigma = 0.1 + 0.45 * (1 - gkA) + lvl.keeperReaction * 0.5 + 0.2 * m.lastKickHelp;
         read = { tag, live: true, tz: cr.z + m.rng.gauss() * sigma, ty: clamp(cr.y + m.rng.gauss() * sigma * 0.5, 0.15, 2.5) };
         if (m.time - m.penKickTime < 0.6) {
           // Penalty: too close to react, so the keeper has guessed a side (or stayed up) as it was struck.
           const s = Math.sign(cr.z) || 1;
-          const g = m.rng.next();
-          const right = 0.3 + 0.15 * gkA;
-          if (Math.abs(cr.z) > 1.2 && g > right) read.tz = g < right + 0.12 ? 0 : -s * m.rng.range(1.8, 2.8);
+          const pg = m.penGuess && m.penGuess.team === gk.team ? m.penGuess : null;
+          if (pg && !pg.waited) {
+            // Decided before the strike: went early after a stutter, or a human standing tall.
+            if (pg.side === 0) read.tz = clamp(cr.z, gk.pos.z - 0.9, gk.pos.z + 0.9);
+            else if (pg.side !== s || Math.abs(cr.z) < 0.6) { read.tz = pg.side * m.rng.range(1.8, 2.8); read.now = true; }
+          } else if (m.penTech === 'panenka') {
+            // A Panenka beats a keeper who goes; one who stays up catches it.
+            if (!m.rng.chance(SETPIECE.panenkaStay + SETPIECE.panenkaStayGk * gkA)) { read.tz = (m.rng.chance(0.5) ? 1 : -1) * m.rng.range(1.8, 2.8); read.now = true; }
+          } else {
+            const g = m.rng.next();
+            // A keeper who waited out a stutter reads it better; one who has studied the side's penalties guesses better.
+            const right = 0.3 + 0.15 * gkA + (pg?.waited ? 0.15 : 0) + habitEdge(m, gk, s);
+            if (Math.abs(cr.z) > 1.2 && g > right) read.tz = g < right + 0.12 ? 0 : -s * m.rng.range(1.8, 2.8);
+          }
         }
       }
       reads.set(gk, read);
@@ -147,8 +161,8 @@ export function updateKeeper(m: Match, gk: Player, _dt: number, humanGk = false)
         gk.wish = { x: 0, z: Math.sign(read.tz - gk.pos.z) * Math.min(1, lateral * 2), mode: 'sprint', face: faceOut };
         return;
       }
-      // Dive when the ball is about a dive's travel time away (or now, if it is already close).
-      if (tArr > 0 && tArr > 0.42 && lateral > 0.6) {
+      // Dive when the ball is about a dive's travel time away (or now, if it is already close, or he has guessed).
+      if (tArr > 0 && tArr > 0.42 && lateral > 0.6 && !read.now) {
         gk.wish = { x: 0, z: Math.sign(read.tz - gk.pos.z), mode: 'sprint', face: faceOut };
         return;
       }
@@ -364,7 +378,7 @@ function segSegDist(p1: V3, q1: V3, p2: V3, q2: V3): number {
 /** Share of hard shots, parried straight, that spill loose a few metres out rather than being pushed clear. */
 const REBOUND_SPILL = 0.2;
 
-const reads = new WeakMap<Player, { tag: string; live: boolean; tz: number; ty: number }>();
+const reads = new WeakMap<Player, { tag: string; live: boolean; tz: number; ty: number; now?: boolean }>();
 
 export function keeperSaveCheck(m: Match, gk: Player, prev: V3): boolean {
   const b = m.ball;

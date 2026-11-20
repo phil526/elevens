@@ -6,6 +6,7 @@ import { PLAY_STYLE_NAMES, PLAY_STYLE_NOTES, styleForClub } from '../shared/play
 import type { Difficulty, GamePlan, Mentality } from '../shared/config';
 import { GAME_PLANS, GAME_PLAN_NAMES, MATCH, PITCH } from '../shared/config';
 import { inCrossZone, selectReceiver, timingRing, SEMI_PASS_ANGLE } from '../shared/kick';
+import { shakyRing, setPieceRatings, favouriteSide, takerSideZ, habitStreak, PEN_TECH_NAMES, type PenTech } from '../shared/setpieces';
 import { DIST_LABEL, distributionFor, pickDistribution } from '../shared/ai/distribution';
 import { wallSize } from '../shared/ai/team';
 import { partnerships } from '../shared/ai/mates3';
@@ -14,7 +15,7 @@ import { cleanWeather, rollWeatherKind, rollWind, windText, type MatchWeather, t
 import type { RoomState, ServerMsg } from '../shared/protocol';
 import { ROOM_CODE_RE } from '../shared/protocol';
 import { clockText, minuteText } from '../shared/snapshot';
-import { ALL_CLUBS, BADGE_EMBLEMS, BADGE_SHAPES, FLAVOURS, FLAVOUR_NAMES, FORMATIONS, FORMATION_NAMES, TEAMS, benchFor, buildCustomClub, defaultTactics, isCustomId, playableClubs, statLine as defStats, teamById, teamRatings, type CustomClubSpec, type Formation, type Kit, type Tactics, type TeamDef } from '../shared/teams';
+import { ALL_CLUBS, BADGE_EMBLEMS, BADGE_SHAPES, FLAVOURS, FLAVOUR_NAMES, FORMATIONS, FORMATION_NAMES, TEAMS, benchFor, buildCustomClub, footProfile, defaultTactics, isCustomId, playableClubs, statLine as defStats, teamById, teamRatings, type CustomClubSpec, type PlayerDef, type Formation, type Kit, type Tactics, type TeamDef } from '../shared/teams';
 import type { MatchConfig, MatchEvent, Player, TeamIndex, TeamStats } from '../shared/types';
 import { GameAudio, WHISTLES, type WhistleKind } from './audio/audio';
 import { CineDirector, introCaption } from './cine';
@@ -579,7 +580,7 @@ export class App {
     // Set-piece timing ring over the ball for a human free kick or penalty.
     const rs = v.restart;
     const ringOn = rs && rs.ready && !rs.quick && (rs.type === 'freekick' || rs.type === 'penalty') && s.localTeams.includes(rs.team) && v.humans[rs.team] && (v.ctl[rs.team] === rs.taker || v.mates?.[rs.team] === rs.taker);
-    const ringAt = ringOn && this.renderer ? { ...this.renderer.project(v.ball.pos.x, 0.2, v.ball.pos.z), q: timingRing(rs!.readyT) } : null;
+    const ringAt = ringOn && this.renderer ? { ...this.renderer.project(v.ball.pos.x, 0.2, v.ball.pos.z), q: shakyRing(rs!.readyT, rs!.shake ?? 0) } : null;
     const debug = this.debugOn && this.debugDraw && s instanceof OfflineSession ? { ...s.debugDraw(), shapes: true } : undefined;
     this.renderer!.render(v, dt, this.settings.camera, { localTeams: s.localTeams, receiver, showNext: this.settings.showNextMarker, playerRing: this.settings.playerRing, highContrast: this.settings.highContrast, slotStyle: this.slotStyles() }, debug);
     // Test pages keep a fixed resolution (software rendering is always slow) unless they ask (&autores).
@@ -1288,6 +1289,7 @@ export class App {
         ${open ? `<div class="stack more-opts">
         <div class="field"><span class="lbl">Your tactics</span>${this.seg('ment', [['defensive', 'Defensive'], ['balanced', 'Balanced'], ['attacking', 'Attacking']], c.mentality)}</div>
         ${this.tacticsHtml(t)}
+        <button class="btn" data-a="takers">Set-piece takers</button>
         <div class="field"><span class="lbl">Auto-switch when defending</span>${this.seg('auto', [['on', 'On'], ['off', 'Off']], this.settings.autoSwitch ? 'on' : 'off')}</div>
         <div class="field"><span class="lbl">Quick restarts</span>${this.seg('quick', [['on', 'On'], ['off', 'Off']], this.settings.quickRestarts ? 'on' : 'off')}
           <span class="note">Take throw-ins, corners and free kicks the moment your taker reaches the ball, before the other side is set.</span></div>
@@ -1308,8 +1310,57 @@ export class App {
       this.showMatchSettings();
       if (!this.touchMode) this.ui.querySelector<HTMLElement>('[data-a=moreopts]')?.focus({ preventScroll: true });
     });
+    this.on('[data-a=takers]', () => this.showTakers(teamById(c.club).players, () => this.showMatchSettings()));
     this.on('[data-a=back]', () => this.showTeams());
     this.on('[data-a=go]', () => this.startOffline());
+  }
+
+  /**
+   * Set-piece takers (20 Nov 2026): who takes penalties, free-kick shots and corners (or Auto), with
+   * each player's penalty, free-kick and nerve ratings. Kept with your tactics; a name from another
+   * club just means Auto.
+   */
+  private showTakers(players: PlayerDef[], back: () => void, applied?: (t: Tactics) => void) {
+    const t = this.settings.tactics;
+    const rated = players.map((d) => ({ d, r: setPieceRatings(d) }));
+    const outfield = rated.filter((x) => x.d.role !== 'GK');
+    const best = (k: 'pen' | 'fk') => [...outfield].sort((a, b) => b.r[k] - a.r[k]);
+    const KINDS: { k: 'pen' | 'fk' | 'corner'; label: string; order: typeof rated; auto: string }[] = [
+      { k: 'pen', label: 'Penalties', order: best('pen'), auto: best('pen')[0]?.d.short ?? '' },
+      { k: 'fk', label: 'Free-kick shots', order: best('fk'), auto: best('fk')[0]?.d.short ?? '' },
+      { k: 'corner', label: 'Corners', order: best('fk').sort((a, b) => b.d.attrs.passing - a.d.attrs.passing), auto: 'nearest wide player' },
+    ];
+    const cur = (k: 'pen' | 'fk' | 'corner') => rated.find((x) => x.d.name === t.takers?.[k]) ?? null;
+    const cls = (x: number) => x >= 80 ? 'r-top' : x >= 70 ? 'r-good' : x >= 58 ? 'r-mid' : 'r-low';
+    const rows = rated.map(({ d, r }) => {
+      const tags = KINDS.filter((K) => cur(K.k)?.d.name === d.name).map((K) => K.label.split(' ')[0]).join(', ');
+      return `<tr><td>${d.number}</td><td class="nm">${esc(d.short)}</td><td>${d.role}</td><td class="${cls(r.pen)}">${r.pen}</td><td class="${cls(r.fk)}">${r.fk}</td><td class="${cls(r.comp)}">${r.comp}</td><td>${footProfile(d).foot > 0 ? 'R' : 'L'}</td><td><small>${esc(tags)}</small></td></tr>`;
+    }).join('');
+    this.ui.innerHTML = `<div class="screen translucent"><div class="panel">
+      <h2>Set-piece takers</h2>
+      <p class="note">Press a button to go through the players (best first). PEN and FK make penalties and free-kick shots more accurate; NERVE is how well a player copes with pressure late in close games and in shootouts, where a nervous taker's timing ring wobbles.</p>
+      <div class="stack">${KINDS.map((K) => { const c = cur(K.k); return `<button class="btn" data-tk="${K.k}">${K.label}: <b>${c ? esc(c.d.short) : `Auto (${esc(K.auto)})`}</b></button>`; }).join('')}</div>
+      <table class="squad" style="margin-top:10px"><tr><th>#</th><th>Name</th><th>Pos</th><th>PEN</th><th>FK</th><th>NERVE</th><th>Foot</th><th>Takes</th></tr>${rows}</table>
+      <div class="row end" style="margin-top:12px"><button class="btn" data-a="auto">All auto</button><button class="btn primary" data-a="back">Back</button></div>
+    </div></div>`;
+    const save = () => {
+      if (t.takers && !Object.keys(t.takers).length) delete t.takers;
+      saveSettings(this.settings);
+      applied?.(t);
+      this.showTakers(players, back, applied);
+    };
+    this.ui.querySelectorAll<HTMLElement>('[data-tk]').forEach((b) => b.addEventListener('click', () => {
+      const K = KINDS.find((x) => x.k === b.dataset.tk)!;
+      const order = K.k === 'pen' ? best('pen').concat(rated.filter((x) => x.d.role === 'GK')) : K.order;
+      const i = order.findIndex((x) => x.d.name === t.takers?.[K.k]);
+      const next = order[i + 1];
+      t.takers ??= {};
+      if (next) t.takers[K.k] = next.d.name; else delete t.takers[K.k];
+      save();
+      this.ui.querySelector<HTMLElement>(`[data-tk=${K.k}]`)?.focus({ preventScroll: true });
+    }));
+    this.on('[data-a=auto]', () => { delete t.takers; save(); });
+    this.on('[data-a=back]', () => back());
   }
 
   private ensureRenderer(): GameRenderer {
@@ -1818,6 +1869,7 @@ export class App {
         ${subsLeft > 0 ? `<button class="btn" data-a="subs">Substitutions (${subsLeft} left)</button>` : ''}
         ${pv && !pv.shootout ? '<button class="btn" data-a="instr">Player instructions</button>' : ''}
         ${pv ? '<button class="btn" data-a="squads">Player stats</button>' : ''}
+        ${pv && !(offline && s.cfg.practice) ? '<button class="btn" data-a="takers">Set-piece takers</button>' : ''}
         <button class="btn" data-a="controls">Controls</button>
         <button class="btn" data-a="settings">Settings</button>
         <button class="btn danger" data-a="quit">${offline ? 'Quit to menu' : 'Leave match'}</button>
@@ -1833,6 +1885,11 @@ export class App {
     this.bindSeg('plan', (v) => { s.setPlan(v as GamePlan); setTimeout(() => this.overlay === 'pause' && this.openPause(), 50); });
     this.bindTactics(this.settings.tactics, (t) => { saveSettings(this.settings); s.setTactics({ ...t }); }, () => this.openPause());
     this.on('[data-a=squads]', () => this.showSquads());
+    this.on('[data-a=takers]', () => {
+      const v = s.view();
+      if (!v) return;
+      this.showTakers(v.players.filter((p) => p.team === myTeam && !p.off).map((p) => p.def), () => this.openPause(), (t) => s.setTactics({ ...t }));
+    });
     this.on('[data-a=instr]', () => this.showInstructions());
     this.on('[data-a=restart]', () => { const cfg = (s as OfflineSession).cfg; cfg.seed = (Math.random() * 2 ** 31) | 0; this.beginSession(this.makeOffline(cfg)); });
     this.on('[data-a=subs]', () => this.showSubs());
@@ -1883,10 +1940,11 @@ export class App {
       const rows = v.players.filter((p) => p.team === t && !p.off).map((p) => {
         const st = defStats(p.def, p.role);
         const cells = p.role === 'GK' ? [st.gk, st.pas, st.pac] : [st.pac, st.sho, st.pas, st.dri, st.def];
-        return `<tr><td>${p.def.number}</td><td class="nm">${esc(p.def.short)}</td><td>${p.role}</td><td><b class="${cls(st.ovr)}">${st.ovr}</b></td>${cells.map((c, i) => `<td class="${cls(c)}">${p.role === 'GK' ? ['GK ', 'PAS ', 'PAC '][i] : ''}${c}</td>`).join('')}${p.role === 'GK' ? '<td></td><td></td>' : ''}<td><i class="stam"><i style="width:${Math.round(p.stamina * 100)}%;background:${p.stamina < 0.45 ? 'var(--warn)' : 'var(--accent)'}"></i></i></td></tr>`;
+        const sp = setPieceRatings(p.def);
+        return `<tr><td>${p.def.number}</td><td class="nm">${esc(p.def.short)}</td><td>${p.role}</td><td><b class="${cls(st.ovr)}">${st.ovr}</b></td>${cells.map((c, i) => `<td class="${cls(c)}">${p.role === 'GK' ? ['GK ', 'PAS ', 'PAC '][i] : ''}${c}</td>`).join('')}${p.role === 'GK' ? '<td></td><td></td>' : ''}<td class="${cls(sp.pen)}">${sp.pen}</td><td class="${cls(sp.fk)}">${sp.fk}</td><td><i class="stam"><i style="width:${Math.round(p.stamina * 100)}%;background:${p.stamina < 0.45 ? 'var(--warn)' : 'var(--accent)'}"></i></i></td></tr>`;
       }).join('');
       return `<div><h3>${esc(v.teams[t].name)} <small>OVR ${tr.ovr} · ATT ${tr.att} · MID ${tr.mid} · DEF ${tr.def}</small></h3>
-        <table class="squad"><tr><th>#</th><th>Name</th><th>Pos</th><th>OVR</th><th>PAC</th><th>SHO</th><th>PAS</th><th>DRI</th><th>DEF</th><th>Energy</th></tr>${rows}</table></div>`;
+        <table class="squad"><tr><th>#</th><th>Name</th><th>Pos</th><th>OVR</th><th>PAC</th><th>SHO</th><th>PAS</th><th>DRI</th><th>DEF</th><th>PEN</th><th>FK</th><th>Energy</th></tr>${rows}</table></div>`;
     };
     this.ui.innerHTML = `<div class="screen translucent"><div class="panel wide">
       <h2>Player stats</h2>
