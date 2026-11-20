@@ -31,6 +31,7 @@ import { isTouchDevice, TouchControls, TouchModel, type TouchContext } from './i
 import { NetClient } from './net/netclient';
 import { isLocalHost, onServerState, PLAY_URL, serverState, serverUrl, wakeServer } from './net/hosting';
 import { TransferPanel } from './transfer';
+import { analysisHtml, MatchAnalysis, type AnalysisTab } from './analysis';
 import { OnlineSession, type StartInfo } from './net/online';
 import { AUTO_RES_MIN, GameRenderer, realisticPlayers } from './render/renderer';
 import { MOW_NAMES, MOW_PATTERNS, type MowSetting } from './render/vfx';
@@ -513,6 +514,7 @@ export class App {
       else if (e.type === 'offside' && e.player !== undefined && e.team !== undefined && this.renderer) this.cine.offside(v, e.player, e.team, this.renderer);
     }
     this.noteMoments(s, v, evs);
+    this.analysis.frame(v, evs);
     this.trackEvents(s, v, evs);
     this.commentator.frame(v, evs, dt, this.overlay === 'none' && !this.cine.active);
     this.matchToasts(v, evs);
@@ -700,6 +702,33 @@ export class App {
       if (this.cine.startHighlights(this.cine.book.reel(scope, v.half))) this.afterReel = back;
       else back(v);
     });
+  }
+
+  /** Match analysis (20 Nov 2026): shot map with xG, heat maps, pass map, momentum and a tip. */
+  private analysis = new MatchAnalysis();
+  private analysisTab: AnalysisTab = 'shots';
+  private heatTeam: 0 | 1 = 0;
+
+  private analysisButton() {
+    return this.analysis.active ? '<button class="btn" data-a="analysis">Match analysis</button>' : '';
+  }
+
+  private bindAnalysis(v: ViewState, back: (v: ViewState) => void) {
+    this.on('[data-a=analysis]', () => { this.heatTeam = (this.session?.localTeams[0] ?? 0) as 0 | 1; this.openAnalysis(v, back); });
+  }
+
+  private openAnalysis(v: ViewState, back: (v: ViewState) => void) {
+    const me = (this.session?.localTeams[0] ?? 0) as 0 | 1;
+    const tabs = this.seg('antab', [['shots', 'Shots'], ['heat', 'Heat map'], ['passes', 'Passes'], ['momentum', 'Momentum']], this.analysisTab);
+    this.ui.innerHTML = `<div class="screen translucent"><div class="panel narrow analysis">
+      <h3 style="text-align:center">Match analysis</h3>
+      ${tabs}
+      <div class="an-body">${analysisHtml(this.analysis, v, this.analysisTab, me, this.heatTeam)}</div>
+      <div class="row end"><button class="btn primary" data-a="anback" autofocus>Back</button></div>
+    </div></div>`;
+    this.bindSeg('antab', (t) => { this.analysisTab = t as AnalysisTab; this.openAnalysis(v, back); });
+    this.on('[data-heat]', (el) => { this.heatTeam = Number(el.dataset.heat) as 0 | 1; this.openAnalysis(v, back); });
+    this.on('[data-a=anback]', () => back(v));
   }
 
   /** The last shot struck (for commentary on how good it was). */
@@ -1607,6 +1636,7 @@ export class App {
     // A change kit is only for looks: the score bug, radar and line-ups read it from the match's club (also on restarts and rematches).
     if (s instanceof OfflineSession && this.kitOverride && s.cfg.teams[1] === this.kitOverride.id) s.match.teams[1] = this.kitOverride;
     this.track = { restart: '', restartKick: '', lastKick: { text: '', x: 0, z: 0, player: -1, team: -1, from: '' }, goals: [] };
+    this.analysis.reset(!(s instanceof OfflineSession && s.cfg.practice));
     this.resultsNote = null;
     this.coach?.dispose();
     this.coach = null;
@@ -2086,10 +2116,11 @@ export class App {
       <div class="final">${v.teams[0].abbr} ${v.score[0]} – ${v.score[1]} ${v.teams[1].abbr}</div>
       ${this.scorers(v)}${this.statsBlock(v)}
       <p class="note">${v.half === 2 ? 'Level after 90 minutes: two halves of 15 minutes, then penalties if it is still level.' : 'Teams change ends. The camera stays on the same side.'}</p>
-      ${offline ? `<div class="row end">${this.highlightsButton(v, 'half')}${this.ratingsButton(v)}<button class="btn primary" data-a="second">${v.half === 1 ? 'Start second half' : v.half === 2 ? 'Start extra time' : 'Start second half of extra time'}</button></div>` : '<p class="note ht-count"></p>'}
+      ${offline ? `<div class="row end">${this.highlightsButton(v, 'half')}${this.analysisButton()}${this.ratingsButton(v)}<button class="btn primary" data-a="second">${v.half === 1 ? 'Start second half' : v.half === 2 ? 'Start extra time' : 'Start second half of extra time'}</button></div>` : '<p class="note ht-count"></p>'}
     </div></div>`;
     this.on('[data-a=second]', () => { (this.session as OfflineSession).continueHalftime(); this.closeOverlay(); });
     this.bindHighlights(v, 'half', (w) => this.openHalftime(w));
+    this.bindAnalysis(v, (w) => this.openHalftime(w));
     this.bindStatsToggle();
   }
 
@@ -2118,10 +2149,11 @@ export class App {
       ${res?.html ?? ''}
       ${mm.kind === 'skill' ? '' : this.statsBlock(v)}
       ${mm.kind === 'skill' ? '' : this.saveGoalsHtml(v)}
-      <div class="row end">${mm.kind === 'skill' ? '' : this.highlightsButton(v, 'match') + this.ratingsButton(v)}${mm.kind === 'skill' || mm.kind === 'scenario' ? '<button class="btn" data-a="again">Try again</button>' : ''}<button class="btn primary" data-a="mcont">${esc(res?.label ?? 'Continue')}</button></div>
+      <div class="row end">${mm.kind === 'skill' ? '' : this.highlightsButton(v, 'match') + this.analysisButton() + this.ratingsButton(v)}${mm.kind === 'skill' || mm.kind === 'scenario' ? '<button class="btn" data-a="again">Try again</button>' : ''}<button class="btn primary" data-a="mcont">${esc(res?.label ?? 'Continue')}</button></div>
     </div></div>`;
     this.bindSaveGoals(v);
     this.bindHighlights(v, 'match', (w) => this.openResults(w));
+    this.bindAnalysis(v, (w) => this.openModeResults(w, mm, false));
     this.bindStatsToggle();
     this.on('[data-a=mcont]', () => { const next = res?.next; this.endSession(); if (next) next(); else this.showMode(); });
     this.on('[data-a=again]', () => { this.endSession(); this.playMode(mm); });
@@ -2269,12 +2301,13 @@ export class App {
       ${online && this.room?.ranked ? `<div class="rank-note">${this.rankRes ? rankedResultHtml(this.rankRes) : '<p class="note">Updating your division…</p>'}</div>` : ''}
       ${compNote}
       ${online ? '' : this.saveGoalsHtml(v)}
-      <div class="row end">${online ? '' : this.highlightsButton(v, 'match')}${this.ratingsButton(v)}<button class="btn" data-a="menu">Main menu</button>${this.compMatch ? '<button class="btn primary" data-a="comp">Continue</button>' : online && this.room?.ranked ? '<button class="btn primary" data-a="rankmenu">Ranked menu</button>' : '<button class="btn primary" data-a="rematch">Rematch</button>'}</div>
+      <div class="row end">${online ? '' : this.highlightsButton(v, 'match')}${this.analysisButton()}${this.ratingsButton(v)}<button class="btn" data-a="menu">Main menu</button>${this.compMatch ? '<button class="btn primary" data-a="comp">Continue</button>' : online && this.room?.ranked ? '<button class="btn primary" data-a="rankmenu">Ranked menu</button>' : '<button class="btn primary" data-a="rematch">Rematch</button>'}</div>
     </div></div>`;
     this.on('[data-a=comp]', () => { this.endSession(); this.showCompHub(); });
     this.on('[data-a=rankmenu]', () => { this.endSession(); this.showRanked(); });
     this.bindSaveGoals(v);
     this.bindHighlights(v, 'match', (w) => this.openResults(w));
+    this.bindAnalysis(v, (w) => this.openResults(w));
     this.bindStatsToggle();
     this.on('[data-a=menu]', () => { this.endSession(); this.showMode(); });
     this.on('[data-a=rematch]', (el) => {
