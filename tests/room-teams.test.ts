@@ -61,12 +61,16 @@ describe('two against two', () => {
     r.room.handle(tok(k === 0 ? 'a' : 'b'), { t: 'in', f: [{ seq: 1, mx: 0, mz: 0, sprint: false, jockey: false, ev: [{ k: 'pass', p: 0.3 }] }] });
     for (let i = 0; i < 600 && m.phase !== 'play'; i++) ticks(r, 1);
     expect(m.phase).toBe('play');
-    const pid = m.mates[0]!.pid;
-    const before = { ...m.players[pid].pos };
-    // One frame a tick, as a client sends them: a second of running covers several metres.
-    for (let i = 1; i <= 60; i++) { r.room.handle(tok('c'), { t: 'in', f: [{ seq: i, mx: 0, mz: 1, sprint: false, jockey: false, ev: [] }] }); ticks(r, 1); }
-    expect(m.mates[0]!.pid).toBe(pid);
-    expect(m.players[pid].pos.z - before.z).toBeGreaterThan(2.5);
+    // One frame a tick, as a client sends them: a second of running covers several metres. (The
+    // mate's control can auto-switch while defending, so add up whoever it is on each tick.)
+    let moved = 0;
+    for (let i = 1; i <= 60; i++) {
+      const pid = m.mates[0]!.pid, z0 = m.players[pid].pos.z;
+      r.room.handle(tok('c'), { t: 'in', f: [{ seq: i, mx: 0, mz: 1, sprint: false, jockey: false, ev: [] }] });
+      ticks(r, 1);
+      if (m.mates[0]!.pid === pid) moved += m.players[pid].pos.z - z0;
+    }
+    expect(moved).toBeGreaterThan(2.5);
   });
 
   it('when a side\'s main player drops, the partner becomes the main control and the match goes on', () => {
