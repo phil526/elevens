@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { PITCH } from '../../shared/config';
 import { canvasTex } from './textures';
+import { CAS_GLSL } from './sharp';
 
 export type MatchTime = 'day' | 'dusk' | 'night';
 
@@ -101,6 +102,9 @@ export const GradeShader = {
     uContrast: { value: 1 },
     uVignette: { value: 0 },
     uAspect: { value: 1.78 },
+    /** Sharper picture (render/sharp.ts): contrast-adaptive sharpening before the grade, 0 = off. */
+    uSharp: { value: 0 },
+    uTexel: { value: new THREE.Vector2(1 / 1280, 1 / 720) },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -108,11 +112,17 @@ export const GradeShader = {
   fragmentShader: /* glsl */ `
     uniform sampler2D tDiffuse;
     uniform vec3 uLift, uGain;
-    uniform float uSat, uContrast, uVignette, uAspect;
+    uniform float uSat, uContrast, uVignette, uAspect, uSharp;
+    uniform vec2 uTexel;
     varying vec2 vUv;
+    ${CAS_GLSL}
     void main() {
       vec4 t = texture2D(tDiffuse, vUv);
       vec3 c = clamp(t.rgb, 0.0, 1.0);
+      if (uSharp > 0.001) {
+        c = casSharpen(c, clamp(texture2D(tDiffuse, vUv + vec2(0.0, uTexel.y)).rgb, 0.0, 1.0), clamp(texture2D(tDiffuse, vUv - vec2(uTexel.x, 0.0)).rgb, 0.0, 1.0),
+          clamp(texture2D(tDiffuse, vUv + vec2(uTexel.x, 0.0)).rgb, 0.0, 1.0), clamp(texture2D(tDiffuse, vUv - vec2(0.0, uTexel.y)).rgb, 0.0, 1.0), uSharp);
+      }
       c = (c - 0.5) * uContrast + 0.5;
       float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
       c = mix(vec3(l), c, uSat);

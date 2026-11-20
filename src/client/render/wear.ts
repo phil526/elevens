@@ -136,6 +136,72 @@ export interface KitState {
   sweat: number;
   /** Share of the match already played when this player came on (substitutes start fresh). */
   since: number;
+  /** Rain soaking into the kit and hair, 0..1 (darker, glossier cloth that ripples less). */
+  soak: number;
+  /** Snow settled on the shoulders and head, 0..1 (shaken off when he sprints). */
+  snow: number;
+  /** Late in the match: shirt hanging out over the shorts, 0..1. */
+  untucked: number;
+  /** Late in the match: socks rolled down to mid-shin, 0..1. */
+  socks: number;
+}
+
+/** Clothes for the weather, picked per player at kick-off: 0 or 1 each. */
+export interface KitGear {
+  /** Long sleeves (base layer) under the shirt. */
+  sleeves: number;
+  /** Outfield players' black gloves. */
+  gloves: number;
+  /** Thermal tights showing down to the knee under the shorts. */
+  tights: number;
+}
+
+/** How likely each look is (per player, fixed by his name so he wears the same each cold match). */
+export const KIT_WEATHER = {
+  sleevesAlways: 0.12, sleevesCold: 0.38, sleevesSnow: 0.18, keeperSleeves: 0.6,
+  glovesCold: 0.22, glovesSnow: 0.28,
+  tightsCold: 0.14, tightsSnow: 0.18,
+  /** Share of outfielders who untuck their shirt / roll their socks down at some point, and from when (share of the match played). */
+  untuck: 0.32, socks: 0.26, lateFrom: 0.55, lateSpan: 0.35,
+  /** Rain: soaking reaches the weather's cover after about a quarter of the match; slides and dives soak at once. */
+  soakBase: 0.45, soakRamp: 4, soakSlide: 0.25,
+  /** Snow settles at this rate while standing or jogging, and is shaken off when sprinting. */
+  snowSettle: 0.035, snowShake: 0.3, snowMax: 0.8,
+} as const;
+
+/** A stable 0..1 number for a player and a purpose (name hash), so choices don't change from frame to frame. */
+export function kitRoll(name: string, salt: number): number {
+  let h = 2166136261 ^ salt;
+  for (let i = 0; i < name.length; i++) h = Math.imul(h ^ name.charCodeAt(i), 16777619);
+  h = Math.imul(h ^ (h >>> 13), 0x5bd1e995);
+  return ((h ^ (h >>> 15)) >>> 0) / 4294967296;
+}
+
+/** What a player wears for this match: cold = snow or a night match (as for breath). */
+export function gearFor(name: string, keeper: boolean, cold: boolean, snow: boolean): KitGear {
+  const K = KIT_WEATHER;
+  const sleevesChance = keeper ? K.keeperSleeves + (cold ? 0.25 : 0) : K.sleevesAlways + (cold ? K.sleevesCold : 0) + (snow ? K.sleevesSnow : 0);
+  const glovesChance = keeper ? 0 : (cold ? K.glovesCold : 0) + (snow ? K.glovesSnow : 0);
+  const tightsChance = (cold ? K.tightsCold : 0) + (snow ? K.tightsSnow : 0);
+  return {
+    sleeves: kitRoll(name, 11) < sleevesChance ? 1 : 0,
+    gloves: kitRoll(name, 23) < glovesChance ? 1 : 0,
+    tights: kitRoll(name, 37) < tightsChance ? 1 : 0,
+  };
+}
+
+/** Shirt out and socks down as the match goes on: by player, more and sooner when tired. Keepers stay tidy. */
+export function lateLook(name: string, keeper: boolean, played: number, stamina: number): { untucked: number; socks: number } {
+  if (keeper) return { untucked: 0, socks: 0 };
+  const K = KIT_WEATHER;
+  const tired = 1 - Math.max(0, Math.min(1, stamina));
+  // When he does it: a point in the last part of the match, earlier for a tired player.
+  const when = (salt: number) => K.lateFrom + kitRoll(name, salt) * K.lateSpan - tired * 0.2;
+  const ramp = (t: number) => Math.max(0, Math.min(1, (played - t) / 0.04));
+  return {
+    untucked: kitRoll(name, 51) < K.untuck ? ramp(when(52)) : 0,
+    socks: kitRoll(name, 61) < K.socks ? ramp(when(62)) : 0,
+  };
 }
 
 /**
@@ -152,16 +218,20 @@ export class KitWear {
   }
 
   get(id: number): KitState {
-    return (this.state[id] ??= { mud: 0, front: 0.5, sweat: 0, since: 0 });
+    return (this.state[id] ??= { mud: 0, front: 0.5, sweat: 0, since: 0, soak: 0, snow: 0, untucked: 0, socks: 0 });
   }
 
-  /** A substitute comes on in a clean, dry kit. */
+  /** A substitute comes on in a clean, dry kit, shirt tucked in. */
   fresh(id: number, view: ViewState) {
-    this.state[id] = { mud: 0, front: 0.5, sweat: 0, since: playedShare(view) };
+    this.state[id] = { mud: 0, front: 0.5, sweat: 0, since: playedShare(view), soak: 0, snow: 0, untucked: 0, socks: 0 };
   }
 
-  /** One frame. `wet` 0..1 from the weather; `pitch` gives the mud underfoot. */
-  update(view: ViewState, dt: number, wet: number, pitch: PitchWear | null) {
+  /**
+   * One frame. `wet` 0..1 from the rain (none when dry); `snowing` 0..1 from the snow; `pitch` gives
+   * the mud underfoot.
+   */
+  update(view: ViewState, dt: number, wet: number, pitch: PitchWear | null, snowing = 0) {
+    const K = KIT_WEATHER;
     // Sweat follows the match clock (both halves, plus extra time) and how tired each player is.
     const played = playedShare(view);
     for (const p of view.players) {
@@ -173,6 +243,7 @@ export class KitWear {
         const soil = 0.35 + wet * 0.6 + ground.mud * 0.8 + ground.wear * 0.3;
         if (a === 'slide') this.add(s, 0.3 * soil, 0);
         else if (a === 'dive') this.add(s, 0.22 * soil, 1);
+        if ((a === 'slide' || a === 'dive' || a === 'down') && wet > 0) s.soak = Math.min(1, s.soak + K.soakSlide * wet);
         else if (a === 'down' && last !== 'dive') this.add(s, 0.18 * soil, 0.8);
         else if (a === 'stumble' && last !== 'slide') this.add(s, 0.12 * soil, 0.6);
         else if (a === 'tackle') this.add(s, 0.05 * soil, 0.4);
@@ -184,7 +255,18 @@ export class KitWear {
         s.mud = Math.min(1, s.mud + dt * sp * (0.0001 + wet * 0.00025 + ground * 0.003));
       }
       this.prev[p.id] = a;
-      s.sweat = sweatLevel(Math.max(0, played - s.since), p);
+      const mine = Math.max(0, played - s.since);
+      s.sweat = sweatLevel(mine, p);
+      // Rain soaks in over the first part of the match (and never dries out during it).
+      if (wet > 0) s.soak = Math.max(s.soak, wet * Math.min(1, K.soakBase + mine * K.soakRamp));
+      // Snow settles on the shoulders and head while standing or jogging; a sprint shakes it off.
+      if (dt > 0) {
+        if (snowing > 0 && sp < 5.5) s.snow = Math.min(K.snowMax * snowing, s.snow + dt * K.snowSettle * snowing * (sp < 2 ? 1.6 : 1));
+        else if (sp >= 5.5) s.snow = Math.max(0, s.snow - dt * K.snowShake * (sp / 7));
+      }
+      const late = lateLook(p.def.name, p.role === 'GK', played, p.stamina);
+      s.untucked = Math.max(s.untucked, late.untucked * (s.since > 0 ? 0 : 1));
+      s.socks = Math.max(s.socks, late.socks * (s.since > 0 ? 0 : 1));
     }
   }
 
