@@ -53,7 +53,7 @@ import { possessionTeam } from '../view';
 import { AutoRes } from './autores';
 import { CrowdMoments } from './crowdlife';
 import type { MatchEvent } from '../../shared/types';
-import { KitWear, PitchWear, playedShare } from './wear';
+import { KitWear, PitchWear, gearFor, playedShare } from './wear';
 import { LiteDof } from './dof';
 import { Handheld, HANDHELD, pitchsideShot } from './handheld';
 import { FanDisplay } from './tifo';
@@ -63,6 +63,8 @@ import { WetReflection } from './wet';
 import { bankOrder, FloodHaze, litShare } from './haze';
 import { rollWeather, weatherLook, WeatherFx, type Weather, type WeatherSetting } from './weather';
 import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
+import { SharpPass, sharpenFor } from './sharp';
+import { CUTAWAY, type CutShot } from './cutaway';
 import type { MatchWeather } from '../../shared/weather';
 import { BallTrail, CrossShadows, FloodGlare, glowTexture, GradeShader, LOOKS, type MatchTime, NetPanel, Particles, type GrassUniforms, MOW_PATTERNS, type MowPattern, type MowSetting } from './vfx';
 
@@ -114,6 +116,8 @@ export interface GraphicsSettings {
   bigMoments?: boolean;
   /** Celebration camera: a handheld pitchside camera for goal celebrations (default), or steady shots. */
   handheld?: boolean;
+  /** Sharper picture: smoothing on Low and contrast-adaptive sharpening on every quality (render/sharp.ts, default on). */
+  sharpen?: boolean;
 }
 
 export { AUTO_RES_MIN } from './autores';
@@ -144,6 +148,11 @@ export interface DebugDraw {
 }
 
 const QUALITY = { low: 0, medium: 1, high: 2, ultra: 3 } as const;
+/**
+ * Test pages (?test) draw without Sharper picture unless they ask (&sharp): in software rendering
+ * it slows the frame rate a lot, and the older browser checks time their waits on it.
+ */
+const SHARP_TEST_OFF = typeof location !== 'undefined' && new URLSearchParams(location.search).has('test') && !new URLSearchParams(location.search).has('sharp');
 const DPR_CAP = { low: 1, medium: 1.5, high: 2, ultra: 2.5 } as const;
 const MAX_DPR = 3;
 /** On Low, realistic players further than this from the camera (m) don't plant their feet. */
@@ -330,6 +339,8 @@ export class GameRenderer {
   /** Turf worn and churned to mud where play goes, and kits getting muddy and sweaty. */
   readonly pitchWear = new PitchWear();
   readonly kitWear = new KitWear();
+  /** Screenshots and tests: force the weather looks on every realistic player. */
+  kitTest: { wear?: Partial<{ soak: number; snow: number; untucked: number; socks: number; mud: number; sweat: number }>; gear?: Partial<{ sleeves: number; gloves: number; tights: number }> } | null = null;
   /** Footprints and slide tracks in snow and mud, torn turf and divots (render/marks.ts). */
   readonly marks = new PitchMarks();
   /** The wet pitch's mirror image (High and Ultra, in the rain). */
@@ -373,6 +384,8 @@ export class GameRenderer {
   private goalT = 0;
   private goalTeam = -1;
   private dofW = 0;
+  /** Low and Medium: the frame smoothed and sharpened on its way to the screen (render/sharp.ts). */
+  readonly sharp = new SharpPass();
   /** Flags on the roof in the home club's colours, and the spring-mounted corner flags. */
   private clubFlags: ClubFlags | null = null;
   cornerFlags: CornerFlags | null = null;
@@ -626,6 +639,7 @@ export class GameRenderer {
 
   private setupPost(q: number) {
     if (q !== 1) this.liteDof.dispose();
+    if (q >= 2 || this.gfx.sharpen === false || SHARP_TEST_OFF) this.sharp.dispose();
     if (q < 2) {
       this.composer?.dispose();
       this.composer = null;
@@ -658,7 +672,11 @@ export class GameRenderer {
       this.composer.setPixelRatio(this.renderer.getPixelRatio());
       this.composer.setSize(w, h);
     }
-    if (this.grade) this.grade.uniforms.uAspect.value = w / Math.max(1, h);
+    if (this.grade) {
+      this.grade.uniforms.uAspect.value = w / Math.max(1, h);
+      const pr = this.renderer.getPixelRatio();
+      this.grade.uniforms.uTexel.value.set(1 / Math.max(1, w * pr), 1 / Math.max(1, h * pr));
+    }
     this.particles.setScale(h * this.renderer.getPixelRatio(), this.camera.cam.fov);
     this.breath.parts.setScale(h * this.renderer.getPixelRatio(), this.camera.cam.fov);
     this.weatherFx.setScale((h * this.renderer.getPixelRatio()) / (2 * Math.tan((this.camera.cam.fov * Math.PI) / 360)));
@@ -1315,7 +1333,7 @@ export class GameRenderer {
     const wet = this.weather === 'rain' ? this.weatherFx.cover : 0;
     if (wearOn && !this.cine) {
       this.pitchWear.update(view, dt, wet);
-      this.kitWear.update(view, dt, wet, this.pitchWear);
+      this.kitWear.update(view, dt, wet, this.pitchWear, this.weather === 'snow' ? Math.min(1, 0.4 + this.weatherFx.cover) : 0);
     }
     if (this.grassU?.uWearOn && this.grassU.uAge) {
       this.grassU.uWearOn.value = wearOn ? 1 : 0;
@@ -1375,6 +1393,13 @@ export class GameRenderer {
       if (m instanceof RealPlayerModel) {
         const kw = this.kitWear.get(i);
         m.wear.mud = wearOn ? kw.mud : 0; m.wear.front = kw.front; m.wear.sweat = wearOn ? kw.sweat : 0;
+        m.wear.soak = wearOn ? kw.soak : 0; m.wear.snow = wearOn ? kw.snow : 0;
+        m.wear.untucked = wearOn ? kw.untucked : 0; m.wear.socks = wearOn ? kw.socks : 0;
+        // Clothes for the weather: long sleeves, gloves and tights in the cold (picked per player).
+        const cold = coldFor(this.matchTime(), this.weather), gk = `${p.def.name}|${cold}|${this.weather}|${p.role === 'GK'}`;
+        if (m.gearKey !== gk) { m.gearKey = gk; m.gear = gearFor(p.def.name, p.role === 'GK', cold, this.weather === 'snow'); }
+        const kt = this.kitTest;
+        if (kt) { Object.assign(m.wear, kt.wear ?? {}); Object.assign(m.gear, kt.gear ?? {}); }
       }
       if (m instanceof RealPlayerModel) {
         if (lite) {
@@ -1556,11 +1581,15 @@ export class GameRenderer {
       this.grassU.uReflOn.value = on ? this.reflGain : 0;
       if (on) { this.grassU.uRefl.value = this.wet.target!.texture; this.grassU.uReflMat.value.copy(this.wet.matrix); }
     }
-    if (this.composer) this.composer.render();
-    else if (this.dofW > 0.02 && this.glCheck.level < 2) {
+    const sharpen = this.gfx.sharpen !== false && this.glCheck.level < 2 && !SHARP_TEST_OFF;
+    if (this.composer) {
+      if (this.grade) this.grade.uniforms.uSharp.value = sharpen ? sharpenFor(this.gfx.preset, this.dyn.scale) : 0;
+      this.composer.render();
+    } else if (this.dofW > 0.02 && this.glCheck.level < 2) {
       // Medium: blur round the focus, more for close shots (as a real lens), up to 1.4% of the screen.
       this.liteDof.render(this.renderer, this.scene, this.camera.cam, this.dofFocus, (4 / Math.max(4, this.dofFocus)) * this.dofW, 0.014 * this.dofW);
-    } else this.renderer.render(this.scene, this.camera.cam);
+    } else if (sharpen) this.sharp.render(this.renderer, this.scene, this.camera.cam, sharpenFor(this.gfx.preset, this.dyn.scale));
+    else this.renderer.render(this.scene, this.camera.cam);
     if (this.glCheck.afterFrame()) this.stepDownGraphics();
   }
 
@@ -1794,6 +1823,41 @@ export class GameRenderer {
     return p?.faceView?.(dist) ?? null;
   }
 
+  /**
+   * TV cutaway camera (render/cutaway.ts): a slow push in on a player's face or his manager on
+   * the touchline, or the fans behind the goal. `k` is how far into the shot (0..1).
+   */
+  cutawayShot(shot: CutShot, k: number): CineShot | null {
+    const e = k * k * (3 - 2 * k);
+    const dist = 2.15 - CUTAWAY.pushIn * e;
+    let fv: { pos: [number, number, number]; look: [number, number, number] } | null = null;
+    if (shot.kind === 'player') {
+      fv = this.faceView(shot.id, dist);
+      const p = this.lastView?.players[shot.id];
+      if (!fv && p) {
+        // Classic players: in front of him at head height.
+        const f = p.facing;
+        fv = { pos: [p.pos.x + Math.cos(f) * (dist + 0.4), 1.68, p.pos.z + Math.sin(f) * (dist + 0.4)], look: [p.pos.x, 1.6, p.pos.z] };
+      }
+    }
+    else if (shot.kind === 'manager') {
+      const m = this.managers?.models[shot.team] as { faceView?: (d: number) => typeof fv; root: THREE.Object3D } | undefined;
+      fv = m?.faceView?.(dist + 0.35) ?? null;
+      if (!fv && m) {
+        const r = m.root.position;
+        fv = { pos: [r.x, 1.7, r.z + 2.6], look: [r.x, 1.55, r.z] };
+      }
+    } else {
+      // The fans behind that side's goal (home end at the left, away end at the right), from pitch level.
+      const sx = shot.team === 0 ? -1 : 1, z = 7 * (e - 0.5);
+      return { pos: { x: sx * 47, y: 2.6, z: 9 + z }, look: { x: sx * 70, y: 9.5 - e * 0.6, z: z * 0.5 }, fov: 30 };
+    }
+    if (!fv) return null;
+    // Keep the camera above the grass when he has his head in his hands.
+    const py = Math.max(0.55, fv.pos[1]);
+    return { pos: { x: fv.pos[0], y: py, z: fv.pos[2] }, look: { x: fv.look[0], y: fv.look[1] - 0.12, z: fv.look[2] }, fov: shot.kind === 'manager' ? 30 : 28, near: 0.05 };
+  }
+
   /** Whether the celebration camera is handheld now (tests). */
   get handheldOn() {
     return this.gfx.handheld !== false && (!!this.liveCam || this.handheld.amount > 0);
@@ -1849,6 +1913,7 @@ export class GameRenderer {
 
   dispose() {
     this.composer?.dispose();
+    this.sharp.dispose();
     this.feed?.dispose();
     this.renderer.dispose();
   }

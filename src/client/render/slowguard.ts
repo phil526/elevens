@@ -40,19 +40,20 @@ export class SlowGuard {
 }
 
 export interface SlowSettings {
-  graphics: { preset: 'low' | 'medium' | 'high' | 'ultra'; renderScale: number; shadows: boolean };
+  graphics: { preset: 'low' | 'medium' | 'high' | 'ultra'; renderScale: number; shadows: boolean; sharpen?: boolean };
   menuBackdrop: boolean;
   matchIntro: boolean;
 }
 
 /**
- * Lower graphics one step: quality down to Low, then fewer pixels, then the live menu stadium and
- * match intro off. Returns what changed (for the message), or null when nothing is left to lower.
+ * Lower graphics one step: quality down to Low, then Sharper picture off, then fewer pixels, then
+ * the live menu stadium and match intro off. Returns what changed (for the message), or null when nothing is left to lower.
  */
 export function lowerGraphics(s: SlowSettings): string | null {
   const g = s.graphics;
   if (g.preset === 'ultra' || g.preset === 'high') { g.preset = 'medium'; return 'Quality is now Medium'; }
   if (g.preset === 'medium') { g.preset = 'low'; return 'Quality is now Low'; }
+  if (g.sharpen !== false) { g.sharpen = false; return 'Sharper picture is now off'; }
   if (g.renderScale > 0.7) { g.renderScale = 0.7; return 'Resolution is now 70%'; }
   if (g.renderScale > 0.5) { g.renderScale = 0.5; return 'Resolution is now 50%'; }
   if (s.menuBackdrop || s.matchIntro) { s.menuBackdrop = false; s.matchIntro = false; return 'The live menu stadium and match intro are off'; }
@@ -64,6 +65,7 @@ export function softwareGraphics(s: SlowSettings) {
   s.graphics.preset = 'low';
   s.graphics.renderScale = Math.min(s.graphics.renderScale, 0.5);
   s.graphics.shadows = false;
+  s.graphics.sharpen = false;
   s.menuBackdrop = false;
   s.matchIntro = false;
 }

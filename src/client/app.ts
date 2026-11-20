@@ -541,6 +541,7 @@ export class App {
     this.cine.varScreens = this.settings.varChecks !== false;
     this.cine.varChecks = s instanceof OfflineSession && this.settings.varChecks !== false && !this.cineOff && !s.cfg.practice && !v.shootout && this.overlay === 'none';
     this.cine.celebrate = s instanceof OfflineSession && this.settings.celebrations !== false && !this.cineOff && !s.cfg.practice && !v.shootout && this.overlay === 'none';
+    this.cine.cutaways = s instanceof OfflineSession && this.settings.cutaways !== false && !this.cineOff && !s.cfg.practice && !v.shootout && this.overlay === 'none' && !this.tv.holding;
     // Online the celebration cinematic doesn't play: the live match cuts to the pitchside camera instead.
     this.renderer!.liveHandheld = !(s instanceof OfflineSession) && this.settings.celebrations !== false && !v.shootout;
     const cv = this.cine.frame(v, dt, this.renderer!, allowReplay);
@@ -656,10 +657,17 @@ export class App {
         this.cine.moment({ kind: 'goal', team: e.team ?? 0, who: name(e.player) + (e.text === 'og' ? ' (og)' : ''), minute, half: v.half });
       } else if (e.type === 'post' || e.type === 'bar') {
         this.cine.moment({ kind: 'woodwork', team: recent ? this.lastShooter.team : e.team ?? 0, who: recent ? name(this.lastShooter.player) : '', minute, half: v.half });
+        if (recent) this.cine.cutawayMoment('woodwork', this.lastShooter.player);
       } else if (e.type === 'save') {
         this.cine.moment({ kind: 'save', team: e.team ?? 0, who: name(e.player), minute, half: v.half });
+        this.cine.cutawayMoment('save', e.player ?? -1);
       } else if (e.type === 'chance' && recent) {
         this.cine.moment({ kind: 'chance', team: this.lastShooter.team, who: name(this.lastShooter.player), minute, half: v.half });
+        this.cine.cutawayMoment('miss', this.lastShooter.player);
+      } else if (e.type === 'card') {
+        this.cine.cutawayMoment('card', e.player ?? -1);
+      } else if (e.type === 'foul') {
+        this.cine.cutawayMoment('foul', e.player ?? -1);
       }
     }
   }
@@ -3151,12 +3159,13 @@ export class App {
         <div class="row between"><span class="lbl">Weather</span>${this.seg('weather', [['random', 'Random'], ['clear', 'Clear'], ['rain', 'Rain'], ['snow', 'Snow']], s.graphics.weather ?? 'random')}</div>
         <div class="row between"><span class="lbl">Wind</span>${this.seg('wind', [['on', 'On'], ['off', 'Off']], s.wind !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Pitch and kit wear</span>${this.seg('wear', [['on', 'On'], ['off', 'Off']], s.graphics.wear !== false ? 'on' : 'off')}</div>
+        <div class="row between"><span class="lbl">Sharper picture</span>${this.seg('sharpen', [['on', 'On'], ['off', 'Off']], s.graphics.sharpen !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">TV colour grade</span>${this.seg('tvgrade', [['on', 'On'], ['off', 'Off']], s.graphics.tvGrade !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Big screens</span>${this.seg('bigscreen', [['live', 'Live pictures'], ['scores', 'Scores only']], s.graphics.bigScreen ?? 'live')}</div>
         <div class="row between wrapline"><span class="lbl">Mowing</span>${this.seg('mowing', [['random', 'Random'], ...MOW_PATTERNS.map((m): [string, string] => [m, MOW_NAMES[m].replace(' stripes', '')])], s.graphics.mowing ?? 'random').replace('class="seg"', 'class="seg wrap"')}</div>
         <div class="row between"><span class="lbl">TV graphics</span>${this.seg('tvg', [['on', 'On'], ['off', 'Off']], s.tvGraphics !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Menu background</span>${this.seg('menubg', [['on', 'Live stadium'], ['off', 'Plain']], s.menuBackdrop !== false ? 'on' : 'off')}</div>
-        <p class="note">Weather starts with the next match; Random picks clear, rain or snow each time. It changes how the ball plays: on a wet pitch it skids on and rolls further and keepers spill more, snow slows it down, and wind (shown by the arrow on the radar) carries crosses, long balls and shots. Wind Off keeps every match still. Pitch and kit wear: the grass scuffs and churns to mud where play goes (more in the rain), and kits pick up mud from slides, falls and dives and darken with sweat as the match goes on (realistic players). TV graphics shows the team line-ups before kick-off and match stats along the bottom of the screen. Menu background Live stadium shows a computer match in the stadium behind the menus (30 frames a second on phones and tablets); Plain saves battery. TV colour grade gives the picture a broadcast look: softer shadows, richer colour in the grass and kits, and on High and Ultra a soft glow round the floodlights. Big screens Live pictures shows play on the two big screens (Medium and up), with a slowed replay after each goal; Scores only shows the score and sponsors, which is a little faster. Mowing picks the pattern cut into the grass for the next match (Random changes it each time). Auto resolution draws slightly fewer pixels (never below ${Math.round(AUTO_RES_MIN * 100)}% of the render scale) when the frame rate drops during a match, and goes back up when it recovers. Frame rate Show puts a small readout at the top of the match screen: frames a second, the average and slowest frame time over the last half second, the quality and the resolution in use.</p>
+        <p class="note">Weather starts with the next match; Random picks clear, rain or snow each time. It changes how the ball plays: on a wet pitch it skids on and rolls further and keepers spill more, snow slows it down, and wind (shown by the arrow on the radar) carries crosses, long balls and shots. Wind Off keeps every match still. Pitch and kit wear: the grass scuffs and churns to mud where play goes (more in the rain), and kits pick up mud from slides, falls and dives and darken with sweat as the match goes on (realistic players). TV graphics shows the team line-ups before kick-off and match stats along the bottom of the screen. Menu background Live stadium shows a computer match in the stadium behind the menus (30 frames a second on phones and tablets); Plain saves battery. Sharper picture smooths jagged edges (on Low too) and sharpens the picture so lines, kits and faces look crisp, most of all on phones and tablets; Off draws a little faster on very old devices. TV colour grade gives the picture a broadcast look: softer shadows, richer colour in the grass and kits, and on High and Ultra a soft glow round the floodlights. Big screens Live pictures shows play on the two big screens (Medium and up), with a slowed replay after each goal; Scores only shows the score and sponsors, which is a little faster. Mowing picks the pattern cut into the grass for the next match (Random changes it each time). Auto resolution draws slightly fewer pixels (never below ${Math.round(AUTO_RES_MIN * 100)}% of the render scale) when the frame rate drops during a match, and goes back up when it recovers. Frame rate Show puts a small readout at the top of the match screen: frames a second, the average and slowest frame time over the last half second, the quality and the resolution in use.</p>
       </div>
       <h3>Camera</h3>
       <div class="stack">
@@ -3169,13 +3178,14 @@ export class App {
         <div class="row between"><span class="lbl">Celebration camera</span>${this.seg('handheld', [['on', 'Handheld'], ['off', 'Steady']], s.graphics.handheld !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Goal replays</span>${this.seg('replays', [['on', 'On'], ['off', 'Off']], s.goalReplays ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Offside checks</span>${this.seg('varchk', [['on', 'On'], ['off', 'Off']], s.varChecks !== false ? 'on' : 'off')}</div>
+        <div class="row between"><span class="lbl">TV cutaways</span>${this.seg('cutaways', [['on', 'On'], ['off', 'Off']], s.cutaways !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Half-time aerials</span>${this.seg('aerials', [['on', 'On'], ['off', 'Off']], s.aerials !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Half-time highlights</span>${this.seg('hlights', [['on', 'On'], ['off', 'Off']], s.highlights ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Big moments</span>${this.seg('bigm', [['on', 'On'], ['off', 'Off']], s.graphics.bigMoments !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Set-piece camera</span>${this.seg('spcam', [['on', 'On'], ['off', 'Off']], s.camera.setPiece !== false ? 'on' : 'off')}</div>
         <p class="note">Set-piece camera: for penalties, shootouts and free kicks in shooting range the view moves behind the ball, then follows the shot.</p>
         <div class="row between"><span class="lbl">Reduced camera motion</span>${this.seg('reduced', [['off', 'Off'], ['on', 'On']], s.camera.reducedMotion ? 'on' : 'off')}</div>
-        <p class="note">These play in matches against the computer, and any button skips them. Pre-match ceremony: mascots walk out holding the players' hands, then the handshake line and both team photos. Goal celebrations: the scorer's knee slide, crest kiss, huddle or cheer, before the replay. Celebration camera Handheld films them from a camera on the operator's shoulder by the touchline (online it cuts to it live after a goal); Steady keeps the shots smooth. Offside checks: the moment is shown again with the offside lines drawn, full screen and on the big screens. Half-time aerials: blimp and drone shots over the ground before the highlights.</p>
+        <p class="note">These play in matches against the computer, and any button skips them. Pre-match ceremony: mascots walk out holding the players' hands, then the handshake line and both team photos. Goal celebrations: the scorer's knee slide, crest kiss, huddle or cheer, before the replay. Celebration camera Handheld films them from a camera on the operator's shoulder by the touchline (online it cuts to it live after a goal); Steady keeps the shots smooth. Offside checks: the moment is shown again with the offside lines drawn, full screen and on the big screens. TV cutaways: when play stops after a near miss, a big save, a booking or a bad foul, a few seconds of the player's face, his manager on the touchline or the fans behind the goal. Half-time aerials: blimp and drone shots over the ground before the highlights.</p>
       </div>
       <h3>Gameplay and accessibility</h3>
       <div class="stack">
@@ -3265,6 +3275,7 @@ export class App {
     this.bindSeg('weather', (v) => { s.graphics.weather = v as 'random' | 'clear' | 'rain' | 'snow'; save(); redraw(); });
     this.bindSeg('wear', (v) => { s.graphics.wear = v === 'on'; save(); redraw(); });
     this.bindSeg('tvgrade', (v) => { s.graphics.tvGrade = v === 'on'; save(); redraw(); });
+    this.bindSeg('sharpen', (v) => { s.graphics.sharpen = v === 'on'; save(); redraw(); });
     this.bindSeg('bigscreen', (v) => { s.graphics.bigScreen = v as 'live' | 'scores'; save(); redraw(); });
     this.bindSeg('mowing', (v) => { s.graphics.mowing = v as MowSetting; save(); redraw(); });
     this.bindSeg('bigm', (v) => { s.graphics.bigMoments = v === 'on'; save(); redraw(); });
@@ -3287,6 +3298,7 @@ export class App {
     this.bindSeg('spcam', (v) => { s.camera.setPiece = v === 'on'; save(); redraw(); });
     this.bindSeg('celebs', (v) => { s.celebrations = v === 'on'; save(); redraw(); });
     this.bindSeg('varchk', (v) => { s.varChecks = v === 'on'; save(); redraw(); });
+    this.bindSeg('cutaways', (v) => { s.cutaways = v === 'on'; save(); redraw(); });
     this.bindSeg('aerials', (v) => { s.aerials = v === 'on'; save(); redraw(); });
     this.bindSeg('hlights', (v) => { s.highlights = v === 'on'; save(); redraw(); });
     this.bindSeg('reduced', (v) => { s.camera.reducedMotion = v === 'on'; save(); redraw(); });

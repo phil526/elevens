@@ -13,8 +13,9 @@ import { VAR, varInfo, varShot, type VarInfo } from './render/var';
 import { PHOTO_FLASHES, PREMATCH, PREMATCH_CUTS, PREMATCH_LENGTH, prematchPoses, prematchShot, preStage, stagePrematch } from './render/prematch';
 import { CELEB, celebKindFor, celebrationReactions, celebrationShot, planCelebration, stageCelebration, type CelebKind, type CelebPlan } from './render/celebration';
 import { HIGHLIGHTS, HighlightBook, MOMENT_TITLE, type Highlight, type MomentInfo } from './highlights';
+import { CUTAWAY, CutawayDirector, cutawayAt, cutawayLength, planCutaway, type CutShot, type CutTrigger } from './render/cutaway';
 
-export type CineMode = 'none' | 'intro' | 'replay' | 'instant' | 'highlights' | 'trophy' | 'celebration' | 'aerial' | 'var';
+export type CineMode = 'none' | 'intro' | 'replay' | 'instant' | 'highlights' | 'trophy' | 'celebration' | 'aerial' | 'var' | 'cutaway';
 
 /** Highlights reel playback: fades between clips, and how a goal is shown again from the net. */
 export const REEL = { fade: 0.35, caption: 3.4, netBefore: 2.3, netAfter: 0.7, netSpeed: 0.62 } as const;
@@ -54,6 +55,12 @@ export class CineDirector {
   varChecks = false;
   /** Offside checks on the big screens (any match, setting on). */
   varScreens = true;
+  /** TV cutaways at stoppages (set by the app each frame: offline, setting on). */
+  cutaways = false;
+  /** Decides when a cutaway is due (render/cutaway.ts). */
+  readonly cuts = new CutawayDirector();
+  private cut: { shots: CutShot[]; t: number; len: number; i: number; r: GameRenderer } | null = null;
+  private nameEl: HTMLElement;
   private replay: { t0: number; t1: number; tg: number; side: number; z: number; look: THREE.Vector3; shown: boolean } | null = null;
   private tunnel: TunnelInfo = { x: 0, z: -43, dir: 1 };
   private fadeIn = 0; // fade back to the match camera
@@ -76,7 +83,7 @@ export class CineDirector {
   constructor(host: HTMLElement) {
     this.el = document.createElement('div');
     this.el.className = 'cine';
-    this.el.innerHTML = `<div class="cine-fade"></div><div class="cine-flash"></div><div class="cine-cap"></div><div class="cine-tag"><i></i><span>REPLAY</span></div><div class="cine-goal">GOAL!</div><div class="cine-skip">Press any button to skip</div>`;
+    this.el.innerHTML = `<div class="cine-fade"></div><div class="cine-flash"></div><div class="cine-cap"></div><div class="cine-tag"><i></i><span>REPLAY</span></div><div class="cine-goal">GOAL!</div><div class="cine-skip">Press any button to skip</div><div class="cine-name"><b></b><small></small></div>`;
     host.insertBefore(this.el, document.getElementById('ui')); // under menus, over the HUD
     this.fadeEl = this.el.querySelector('.cine-fade')!;
     this.flashEl = this.el.querySelector('.cine-flash')!;
@@ -84,6 +91,7 @@ export class CineDirector {
     this.tagEl = this.el.querySelector('.cine-tag')!;
     this.goalEl = this.el.querySelector('.cine-goal')!;
     this.skipEl = this.el.querySelector('.cine-skip')!;
+    this.nameEl = this.el.querySelector('.cine-name')!;
   }
 
   get active() { return this.mode !== 'none'; }
@@ -91,6 +99,7 @@ export class CineDirector {
   /** A new session: forget recorded play. */
   reset() {
     this.end(false);
+    this.cuts.reset();
     this.rec.clear();
     this.book.clear();
     this.goalAt = null;
@@ -113,6 +122,7 @@ export class CineDirector {
   /** A goal was scored live: show it again shortly (if replays are on). */
   goal(e?: { player?: number; team?: number; text?: string }) {
     this.goalAt = this.clock;
+    this.cuts.cancel();
     this.celebDone = false;
     this.goalBy = e && e.team !== undefined ? { player: e.player ?? -1, team: e.team, og: e.text === 'og' } : null;
   }
@@ -141,6 +151,57 @@ export class CineDirector {
     if (!info) return;
     if (this.varScreens) r.showVarCheck(info);
     this.varPending = { info, at: this.clock };
+  }
+
+  /** A moment in live play that may get a TV cutaway at the next stoppage. */
+  cutawayMoment(trigger: CutTrigger, subject: number) {
+    this.cuts.note(trigger, subject, this.clock);
+  }
+
+  /** The cutaway playing now and how far in (tests). */
+  get cutaway(): { shots: CutShot[]; t: number; i: number } | null {
+    return this.cut ? { shots: this.cut.shots, t: this.cut.t, i: this.cut.i } : null;
+  }
+
+  /** Start a cutaway now (tests and screenshots); false if one can't play. */
+  forceCutaway(live: ViewState, trigger: CutTrigger, subject: number, r: GameRenderer): boolean {
+    return this.startCutaway(live, trigger, subject, r);
+  }
+
+  private startCutaway(live: ViewState, trigger: CutTrigger, subject: number, r: GameRenderer): boolean {
+    if (this.active) return false;
+    const shots = planCutaway(trigger, subject, live, Math.random());
+    if (!shots.length) return false;
+    this.cut = { shots, t: 0, len: cutawayLength(shots), i: -1, r };
+    r.cineReactions = true;
+    r.handheld.reset();
+    this.mode = 'cutaway';
+    this.t = 0;
+    this.el.className = 'cine on cutaway';
+    this.goalEl.classList.remove('show');
+    this.onChange('cutaway');
+    return true;
+  }
+
+  private cutFrame(live: ViewState, dt: number, r: GameRenderer): { view: ViewState; dt: number } | null {
+    const c = this.cut!;
+    c.t += dt;
+    const at = cutawayAt(c.shots, c.t);
+    const shot = at ? r.cutawayShot(at.shot, at.k) : null;
+    if (!at || !shot) { this.end(true); r.cine = null; return null; }
+    // Through black in and out; hard cuts between the shots, as on TV.
+    const edge = Math.min(c.t / CUTAWAY.fade, (c.len - c.t) / CUTAWAY.fade, 1);
+    this.fadeEl.style.opacity = String(1 - Math.max(0, edge));
+    if (at.i !== c.i) {
+      c.i = at.i;
+      const e = (x: string) => x.replace(/[&<>"]/g, (ch) => `&#${ch.charCodeAt(0)};`);
+      this.nameEl.innerHTML = `<b>${e(at.shot.name)}</b><small>${e(at.shot.line)}</small>`;
+      this.nameEl.classList.remove('show');
+    }
+    this.nameEl.classList.toggle('show', at.k > 0.12 && at.k < 0.93);
+    r.setTunnelShot(false);
+    r.cine = r.handheldShot(shot, dt);
+    return { view: live, dt };
   }
 
   /** The offside check playing now (tests). */
@@ -298,6 +359,7 @@ export class CineDirector {
     if (this.trophy) { this.trophy.r.stopCeremony(); this.trophy.r.reactions.reset(); this.trophy = null; }
     if (this.celeb) { this.celeb.r.cineReactions = false; this.celeb = null; }
     if (this.varPlay) { this.varPlay.r.varLines.show(null); this.varPlay = null; this.tagEl.querySelector('span')!.textContent = 'REPLAY'; }
+    if (this.cut) { this.cut.r.cineReactions = false; this.cut = null; this.nameEl.classList.remove('show'); }
     if (this.introR) { this.introR.cineReactions = false; this.introR.mascotMode = null; this.introR.officialStage = null; this.introR.reactions.reset(); this.introR = null; }
     this.flashEl.style.opacity = '0';
     this.el.className = 'cine';
@@ -341,6 +403,12 @@ export class CineDirector {
         this.goalAt = null;
         if (allowReplay) this.startReplay(tg);
       }
+      // A stoppage soon after a near miss, a save, a booking or a bad foul: cut away to the player,
+      // his manager or the fans (render/cutaway.ts).
+      if (this.mode === 'none' && this.cutaways && !live.shootout && this.goalAt === null) {
+        const due = this.cuts.due(this.clock, live.phase === 'restart');
+        if (due && this.startCutaway(live, due.trigger, due.subject, r)) return this.frame(live, 0, r, allowReplay);
+      }
       if (this.mode === 'none') return null;
     }
     this.t += dt;
@@ -372,6 +440,7 @@ export class CineDirector {
     if (this.mode === 'celebration') return this.celebFrame(live, dt, r);
     if (this.mode === 'aerial') return this.aerialFrame(live, dt, r);
     if (this.mode === 'var') return this.varFrame(live, dt, r);
+    if (this.mode === 'cutaway') return this.cutFrame(live, dt, r);
     // Replay: slow motion through the recorded moment, from inside the goal.
     const rp = this.replay!;
     const rt = rp.t0 + this.t * REPLAY.speed;

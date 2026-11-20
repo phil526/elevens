@@ -659,6 +659,16 @@ export interface PlayerLookUniforms {
   uExpr: { value: THREE.Vector4 };
   /** Cloth: time, ground speed and a per-player phase (shirts and shorts ripple more the faster he runs). */
   uCloth: { value: THREE.Vector3 };
+  /** Rain soaked into the kit and hair, and snow settled on the shoulders and head, 0..1 (render/wear.ts). */
+  uSoak: { value: number };
+  uSnow: { value: number };
+  /** Clothes for the weather: long sleeves, thermal tights (0/1) (render/wear.ts gearFor). */
+  uGear: { value: THREE.Vector2 };
+  /** Late in the match: shirt out over the shorts, socks rolled down (0..1). */
+  uLate: { value: THREE.Vector2 };
+  /** Gloves: on (keepers always; outfielders in the cold) and their colour. */
+  kitGloves: { value: number };
+  kitGlove: { value: THREE.Color };
 }
 
 /**
@@ -673,7 +683,12 @@ function kitMaterial(body: Body, kit: Kit, keeper: boolean, boot = 0x15161a, per
   // Skin tone relative to the body's own scan, kept within a modest range so textures stay natural.
   const tone = new THREE.Color(person.skin ?? body.tone.getHex());
   const tint = new THREE.Vector3(...[tone.r / Math.max(0.05, body.tone.r), tone.g / Math.max(0.05, body.tone.g), tone.b / Math.max(0.05, body.tone.b)].map((v) => Math.max(0.78, Math.min(1.25, 1 + (v - 1) * 0.6))) as [number, number, number]);
-  const look: PlayerLookUniforms = { uMud: { value: 0 }, uMudFront: { value: 0.5 }, uSweat: { value: 0 }, uMouth: { value: 0 }, uExpr: { value: new THREE.Vector4() }, uCloth: { value: new THREE.Vector3() } };
+  const look: PlayerLookUniforms = {
+    uMud: { value: 0 }, uMudFront: { value: 0.5 }, uSweat: { value: 0 }, uMouth: { value: 0 }, uExpr: { value: new THREE.Vector4() }, uCloth: { value: new THREE.Vector3() },
+    uSoak: { value: 0 }, uSnow: { value: 0 }, uGear: { value: new THREE.Vector2() }, uLate: { value: new THREE.Vector2() },
+    kitGlove: { value: new THREE.Color(keeper ? readableOn(kit.keeper, 0xf2f2f2) : 0x101114) },
+    kitGloves: { value: keeper ? 1 : 0 },
+  };
   // The club crest on the left chest (render/badgetex.ts), when the kit's club is known.
   const club = kitClub(kit);
   const uniforms = {
@@ -685,8 +700,6 @@ function kitMaterial(body: Body, kit: Kit, keeper: boolean, boot = 0x15161a, per
     // Trim on collar, cuffs, shorts hems and sock tops: the number colour, or a readable one on a keeper's shirt.
     kitTrim: { value: new THREE.Color(keeper ? readableOn(kit.keeper, 0x111111) : readableOn(kit.shirt, kit.number)) },
     kitBoot: { value: new THREE.Color(boot) },
-    kitGlove: { value: new THREE.Color(keeper ? readableOn(kit.keeper, 0xf2f2f2) : 0) },
-    kitGloves: { value: keeper ? 1 : 0 },
     // Shirt design and sponsor (render/kitstyle.ts); keepers wear plain shirts with the sponsor.
     kitSecond: { value: new THREE.Color(kit.second ?? kit.number) },
     kitPat: { value: keeper ? 0 : patternIndex(kit.pattern) },
@@ -698,6 +711,8 @@ function kitMaterial(body: Body, kit: Kit, keeper: boolean, boot = 0x15161a, per
     kitCoat: { value: person.coat ? 1 : 0 },
     kitSponsorCol: { value: new THREE.Color(keeper ? readableOn(kit.keeper, 0x111111) : sponsorColour(kit)) },
     uSkinTint: { value: tint },
+    // Skin colour itself (socks rolled down show the shins, where the scan has sock).
+    uSkinCol: { value: tone.clone() },
     uHairCol: { value: new THREE.Color(person.hair ?? 0x1c1410) },
     uHairLum: { value: Math.max(0.04, body.face.hairLum) },
     uHinge: { value: new THREE.Vector2(body.face.hingeY, body.face.hingeZ) },
@@ -721,6 +736,7 @@ uniform float uMouth;
 uniform vec4 uExpr;
 uniform vec2 uHinge;
 uniform vec3 uCloth;
+uniform float uSoak;
 uniform sampler2D kitMask;`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
 ${hasDetail ? 'vKit = aKit;' : ''}
@@ -733,7 +749,7 @@ if (uCloth.y > 0.05) {
     vec3 b0 = transformed;
     float t = uCloth.x * (7.0 + uCloth.y * 1.6) + uCloth.z;
     float hem = 0.35 + 0.65 * smoothstep(1.32, 1.0, b0.y) * step(0.8, b0.y) + 0.6 * kmv.b * smoothstep(0.62, 0.52, b0.y);
-    float amp = (0.0025 + min(uCloth.y, 8.0) * 0.0011) * hem * cloth;
+    float amp = (0.0025 + min(uCloth.y, 8.0) * 0.0011) * hem * cloth * (1.0 - 0.6 * uSoak);
     float w = sin(b0.y * 31.0 - t + b0.x * 11.0) * 0.6 + sin(b0.y * 53.0 + b0.x * 27.0 - t * 1.7 + b0.z * 9.0) * 0.4;
     transformed += normal * amp * w;
     // The loose back of the shirt and the shorts stream back a little at speed.
@@ -773,8 +789,9 @@ uniform sampler2D kitMask, kitSponsor, kitBadge;
 uniform float kitBadgeOn;
 varying float vMirror;
 ${KIT_PATTERN_GLSL}
-uniform vec3 uSkinTint, uHairCol;
-uniform float uHairLum, uMud, uMudFront, uSweat, uMouth;
+uniform vec3 uSkinTint, uHairCol, uSkinCol;
+uniform float uHairLum, uMud, uMudFront, uSweat, uMouth, uSoak, uSnow;
+uniform vec2 uGear, uLate;
 uniform vec4 uExpr;
 ${hasDetail ? 'varying vec3 vKit;' : ''}
 varying vec3 vFace;
@@ -790,7 +807,7 @@ float kNoise(vec3 p) {
       .replace(
         '#include <map_fragment>',
         `#include <map_fragment>
-        float kitW, skinW, hairW, mudK, shirtW;
+        float kitW, skinW, hairW, mudK, shirtW, snowK;
         {
           vec4 km = texture2D(kitMask, vMapUv);
           float kw = clamp(km.r + km.g + km.b + km.a, 0.0, 1.0);
@@ -810,11 +827,26 @@ float kNoise(vec3 p) {
           vec3 tex = diffuseColor.rgb;
           float lum = dot(tex, vec3(0.299, 0.587, 0.114));
           ${hasDetail ? `kc = mix(kc, kitTrim, smoothstep(0.3, 0.85, vKit.x) * kw);` : ''}
+          // Late in the match: the shirt hangs out over the top of the shorts (a soft shadow along
+          // its hem), and some roll their socks down to mid-shin (bunched at the roll, bare above).
+          float shin = 0.0;
+          if (uLate.x > 0.01) {
+            float out_ = uLate.x * km.b * smoothstep(0.878, 0.888, vBind.y);
+            kc = mix(kc, shirtC * mix(0.72, 1.0, smoothstep(0.888, 0.91, vBind.y)), out_);
+          }
+          if (uLate.y > 0.01) {
+            float roll = uLate.y * km.a * smoothstep(0.255, 0.27, vBind.y);
+            float bunch = 1.0 - smoothstep(0.315, 0.33, vBind.y);
+            kc = mix(kc, kitSocks * (0.72 + 0.28 * sin(vBind.y * 520.0)), roll * bunch);
+            shin = roll * (1.0 - bunch);
+          }
           // Fine knit, faded out where it would shimmer.
           vec2 fq = vMapUv * 1800.0;
           float knit = 0.035 * sin(fq.x) * sin(fq.y) * (1.0 - clamp(fwidth(fq.x) * 0.35, 0.0, 1.0));
           diffuseColor.rgb = tex * mix(vec3(1.0), kc * (1.0 + knit), kw);
-          float bare = 1.0 - kw;
+          diffuseColor.rgb = mix(diffuseColor.rgb, uSkinCol / max(uSkinTint, vec3(0.5)) * 0.62 * clamp(lum / 0.6, 0.7, 1.2) * (0.92 + 0.12 * kNoise(vBind * 90.0)), shin);
+          kitW *= 1.0 - shin;
+          float bare = max(1.0 - kw, shin);
           float gear = 0.0;
           ${hasDetail ? `diffuseColor.rgb = mix(diffuseColor.rgb, kitBoot * (0.3 + lum * 2.4), clamp(vKit.y, 0.0, 1.0) * bare);
           diffuseColor.rgb = mix(diffuseColor.rgb, kitGlove * (0.45 + lum * 1.6), clamp(vKit.z, 0.0, 1.0) * bare * kitGloves);
@@ -834,10 +866,35 @@ float kNoise(vec3 p) {
             diffuseColor.rgb = mix(diffuseColor.rgb, cc, cover);
             skinW *= 1.0 - cover;
           }
+          // Cold: long sleeves under the shirt (not over the hands), thermal tights down to the knee.
+          if (uGear.x + uGear.y > 0.5) {
+            // The sleeve ends in a cuff at the wrist (the hands hang below y 1.0 in the bind pose).
+            float arm = uGear.x * smoothstep(0.15, 0.18, abs(b.x)) * smoothstep(1.018, 1.026, b.y) * (1.0 - shin);
+            float cuff = 1.0 - smoothstep(1.03, 1.04, b.y);
+            float knee = uGear.y * smoothstep(0.5, 0.53, b.y) * (1.0 - smoothstep(0.72, 0.74, b.y)) * (1.0 - shin);
+            // Bare body only (skin, and the dark arm hair the face pass also marks as hair).
+            float cover = clamp(arm + knee, 0.0, 1.0) * (skinW + hairW);
+            vec3 cc = mix(kitShorts, mix(kitSleeves, kitTrim, cuff * 0.6), step(0.95, b.y)) * (0.45 + lum * 1.2);
+            diffuseColor.rgb = mix(diffuseColor.rgb, cc, cover);
+            skinW *= 1.0 - cover;
+            hairW *= 1.0 - cover;
+            kitW = max(kitW, cover);
+          }
+          // Gloves reach up to the wrist (the hand mask stops short of it in places).
+          if (kitGloves > 0.5) {
+            float wrist = smoothstep(0.15, 0.18, abs(b.x)) * step(0.8, b.y) * (1.0 - smoothstep(1.024, 1.034, b.y)) * (skinW + hairW);
+            diffuseColor.rgb = mix(diffuseColor.rgb, kitGlove * (0.45 + lum * 1.6), wrist);
+            skinW *= 1.0 - wrist;
+            hairW *= 1.0 - wrist;
+          }
           float strand = 0.5 + 0.5 * sin(b.y * 900.0 + kNoise(b * 40.0) * 6.0);
           float sfade = 1.0 - clamp(fwidth(b.y * 900.0) * 0.3, 0.0, 1.0);
           vec3 hc = uHairCol * clamp(lum / uHairLum, 0.35, 2.4) * (1.0 - 0.22 * strand * sfade);
-          diffuseColor.rgb = mix(diffuseColor.rgb, hc, hairW * 0.9);
+          diffuseColor.rgb = mix(diffuseColor.rgb, hc * (1.0 - 0.3 * uSoak), hairW * 0.9);
+          // Rain: a soaked kit is darker, and a light shirt clings and shows a little skin through it.
+          float kitLum = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11));
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.0, 0.86, 0.78), uSoak * shirtW * kitW * smoothstep(0.25, 0.6, kitLum) * 0.5);
+          diffuseColor.rgb *= 1.0 - 0.36 * uSoak * kitW;
           // Open mouth: the stretched lips show the dark inside of the mouth.
           diffuseColor.rgb *= 1.0 - clamp(uMouth * vFace.z * 1.6, 0.0, 0.88);
           // A frown or a knitted brow creases the skin; a grin or a squint deepens the lines by the eyes.
@@ -865,14 +922,25 @@ float kNoise(vec3 p) {
             vec3 mudCol = vec3(0.19, 0.135, 0.08) * (0.7 + 0.5 * kNoise(b * 70.0));
             diffuseColor.rgb = mix(diffuseColor.rgb, mudCol, mudK * 0.85);
           }
+          // Snow settled on what faces up: the tops of the shoulders and the head.
+          snowK = 0.0;
+          if (uSnow > 0.01) {
+            vec3 upV = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+            float upN = dot(normalize(vNormal), upV);
+            float lay = smoothstep(0.4, 0.8, upN) * smoothstep(1.2, 1.3, b.y) * (1.0 - 0.45 * hairW);
+            float nz = kNoise(b * 70.0) * 0.55 + kNoise(b * 190.0) * 0.45;
+            float c = uSnow * lay * 0.9;
+            snowK = smoothstep(1.0 - c, 1.08 - c, nz) * smoothstep(0.05, 0.3, c);
+            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.89, 0.93), snowK);
+          }
         }`,
       )
       // Shirts and shorts have a soft synthetic sheen; skin is softer and glistens when sweating; hair has a sheen; mud is matte.
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-roughnessFactor = mix(roughnessFactor, 0.55, kitW * 0.8);
-roughnessFactor = mix(roughnessFactor, 0.62 - 0.22 * uSweat, skinW);
-roughnessFactor = mix(roughnessFactor, 0.5, hairW);
-roughnessFactor = mix(roughnessFactor, 0.97, mudK);`)
+roughnessFactor = mix(roughnessFactor, 0.55 - 0.25 * uSoak, kitW * 0.8);
+roughnessFactor = mix(roughnessFactor, 0.62 - 0.22 * uSweat - 0.14 * uSoak, skinW);
+roughnessFactor = mix(roughnessFactor, 0.5 - 0.2 * uSoak, hairW);
+roughnessFactor = mix(roughnessFactor, 0.97, max(mudK, snowK));`)
       .replace('#include <opaque_fragment>', `{
   // Skin: a warm glow where light scatters under it (so shadowed skin isn't grey), and a soft rim.
   float ndv = clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
@@ -882,7 +950,7 @@ roughnessFactor = mix(roughnessFactor, 0.97, mudK);`)
 }
 #include <opaque_fragment>`);
   };
-  m.customProgramCacheKey = () => `elevens-kit3-${hasDetail}-${hasFace}`;
+  m.customProgramCacheKey = () => `elevens-kit4-${hasDetail}-${hasFace}`;
   m.roughness = 0.85;
   return { material: m, look };
 }
@@ -1067,7 +1135,12 @@ export class RealPlayerModel {
   /** Mud, sweat and mouth for this player's material (set by the renderer each frame). */
   look: PlayerLookUniforms;
   /** Mud and sweat, 0..1 (render/wear.ts KitWear); the mouth is worked out here from what the player is doing. */
-  wear = { mud: 0, front: 0.5, sweat: 0 };
+  wear = { mud: 0, front: 0.5, sweat: 0, soak: 0, snow: 0, untucked: 0, socks: 0 };
+  /** Clothes for the weather (render/wear.ts gearFor), set by the renderer at kick-off. */
+  gear = { sleeves: 0, gloves: 0, tights: 0 };
+  /** What the gear was picked for (player, cold, weather), so it is only picked again when that changes. */
+  gearKey = '';
+  private keeper = false;
   private mouth = 0;
   private expr: FaceExpr = { brow: 0, smile: 0, squint: 0, grit: 0 };
   /** Force a mood (photo tests); null lets the match decide. */
@@ -1107,6 +1180,7 @@ export class RealPlayerModel {
     this.root.add(this.body);
     this.body.add(this.model);
     const km = kitMaterial(body, kit, keeper, extra.boot, { skin, hair: extra.hair, coat: extra.coat });
+    this.keeper = keeper;
     const mat = km.material;
     this.look = km.look;
     this.model.traverse((o) => {
@@ -1768,6 +1842,11 @@ export class RealPlayerModel {
     this.look.uMud.value = this.wear.mud;
     this.look.uMudFront.value = this.wear.front;
     this.look.uSweat.value = this.wear.sweat;
+    this.look.uSoak.value = this.wear.soak;
+    this.look.uSnow.value = this.wear.snow;
+    this.look.uLate.value.set(this.wear.untucked, this.wear.socks);
+    this.look.uGear.value.set(this.gear.sleeves, this.gear.tights);
+    this.look.kitGloves.value = this.keeper || this.gear.gloves > 0.5 ? 1 : 0;
   }
 
   /** After the whistle (render/reactions.ts): set each frame by the renderer, null when not reacting. */

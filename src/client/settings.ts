@@ -61,6 +61,8 @@ export interface Settings {
   aerials?: boolean;
   /** Offside checks shown again with the lines drawn, on the big screens and full screen (offline). */
   varChecks?: boolean;
+  /** TV cutaways at stoppages: the player, his manager or the fans after a near miss, save, booking or foul (default on). */
+  cutaways?: boolean;
   /** TV line-ups before kick-off and stat strips during play (the broadcast score bug always shows). */
   tvGraphics: boolean;
   /** Live 3D stadium behind the menus (the computer plays a match; client/menuscene.ts). */
@@ -145,6 +147,7 @@ export function defaultSettings(): Settings {
     ceremony: true,
     aerials: true,
     varChecks: true,
+    cutaways: true,
     tvGraphics: true,
     wind: true,
     menuBackdrop: true,
