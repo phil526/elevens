@@ -3241,7 +3241,7 @@ export class App {
     const redraw = () => this.showSettings(back, overlay);
     this.bindSeg('mute', (v) => { s.audio.muted = v === 'on'; save(); redraw(); });
     this.bindSeg('music', (v) => { s.audio.musicOn = v === 'on'; save(); redraw(); });
-    this.bindSeg('commentary', (v) => { s.audio.commentary = v === 'on'; save(); redraw(); });
+    this.bindSeg('commentary', (v) => { s.audio.commentary = v === 'on'; save(); if (v === 'on') this.audio.loadCommentary(); redraw(); });
     this.bindSeg('commentator', (v) => { s.commentator = v as 'voice' | 'captions' | 'off'; save(); redraw(); this.commentator.mode = v as 'voice' | 'captions' | 'off'; });
     this.bindSeg('announcer', (v) => { s.audio.announcer = v === 'on'; save(); redraw(); this.syncAnnouncer(); if (!s.audio.announcer) this.announcer.stop(); });
     this.on('[data-a=voicetest]', (b) => {

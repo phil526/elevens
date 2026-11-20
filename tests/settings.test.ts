@@ -61,3 +61,20 @@ describe('a new player keeps their first settings (19 Nov 2026 bug hunt)', () =>
     expect(moved.audio.announcer).toBe(false);
   });
 });
+
+describe('recorded commentator setting (Philip, 20 Nov 2026: off by default, on in Settings)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('is off by default', () => {
+    expect(defaultSettings().audio.commentary).toBe(false);
+  });
+
+  it('turns it off once for settings saved before, then keeps the choice to turn it on', () => {
+    stubStorage({ audio: { commentary: true } });
+    const migrated = loadSettings();
+    expect(migrated.audio.commentary).toBe(false);
+    expect(migrated.commentatorVoiceOff).toBe(true);
+    stubStorage({ ...migrated, audio: { ...migrated.audio, commentary: true } });
+    expect(loadSettings().audio.commentary).toBe(true);
+  });
+});
