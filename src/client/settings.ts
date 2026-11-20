@@ -2,7 +2,7 @@ import { defaultTactics, cleanTactics, type Tactics } from '../shared/teams';
 // Player settings, persisted per browser (best effort: storage can be unavailable).
 
 import type { AudioSettings } from './audio/audio';
-import { cleanBindings, defaultBindings, type ControlBindings } from './input/bindings';
+import { cleanBindings, defaultBindings, migrateKeysNov20, type ControlBindings } from './input/bindings';
 import type { CameraSettings } from './render/camera';
 import type { GraphicsSettings } from './render/renderer';
 import type { SwitchSens, SwitchStyle } from '../shared/types';
@@ -77,6 +77,8 @@ export interface Settings {
   wind: boolean;
   /** Set once old saved settings have been moved to the new announcer Off default (19 Nov 2026). */
   announcerOffDefault?: boolean;
+  /** Set once keyboard controls still on the old defaults have moved to Philip's layout (20 Nov 2026). */
+  keysNov20?: boolean;
   /** Accessibility: kits chosen to stand apart for this kind of colour vision. */
   colourVision: import('./access').ColourVision;
   /** Accessibility: menu and on-screen text size. */
@@ -154,6 +156,7 @@ export function defaultSettings(): Settings {
     ringOffDefault: true,
     announcerOffDefault: true,
     commentaryOffTouch: true,
+    keysNov20: true,
   };
 }
 
@@ -194,6 +197,11 @@ export function loadSettings(): Settings {
     if (!s.announcerOffDefault) {
       out.audio.announcer = false;
       out.announcerOffDefault = true;
+    }
+    // Philip's keyboard layout became the default (20 Nov): untouched old default keys move to it once.
+    if (!s.keysNov20) {
+      migrateKeysNov20(out.controls);
+      out.keysNov20 = true;
     }
     return out;
   } catch {

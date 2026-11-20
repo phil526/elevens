@@ -17,18 +17,18 @@ The game opens on the main menu. **Kick off** (already highlighted: Enter, A or 
 | One-two | J again while your pass is on its way | The receiver plays it straight back first time, into the run of the player who passed it, who sprints on. Point the stick elsewhere to play a normal first-time pass instead |
 | Dummy | Hold E as a teammate's pass reaches you | You let the ball run through to the next teammate behind you in its path, and control moves to them. Only when someone is there |
 | Driven pass | Hold E while releasing J | Firm, fast ground pass: longer range and harder to cut out, but harder to control |
-| Shoot | K or Space (hold, release) | Hold to set power on the bar, release to strike; first-time if pressed as the ball arrives |
-| Finesse shot | Hold E while releasing K/Space | Curled with the inside of the foot: less pace, bends back on target into the far corner, more accurate |
-| Power shot | Hold E and Shift while releasing K/Space | Struck hard and rising: much faster, but wilder (more so for poorer shooters) and a fraction slower to strike |
-| Placed shot | Hold K/Space, tap Q before you let go | Side-footed: slow but the most accurate, kept low into the corner. Best close in |
+| Shoot | L (hold, release) | Hold to set power on the bar, release to strike; first-time if pressed as the ball arrives |
+| Finesse shot | Hold E while releasing L | Curled with the inside of the foot: less pace, bends back on target into the far corner, more accurate |
+| Power shot | Hold E and Shift while releasing L | Struck hard and rising: much faster, but wilder (more so for poorer shooters) and a fraction slower to strike |
+| Placed shot | Hold L, tap I before you let go | Side-footed: slow but the most accurate, kept low into the corner. Best close in |
 | Manual shooting | Settings → Shot assistance **Manual** | Shots go exactly where the stick points (no help finding the target), so you can miss the goal. With no direction the shot goes straight ahead |
-| Chip shot | Hold L, then hold and release K/Space (or press L during the charge) | High and slow, dropping under the bar: best when the keeper is off their line. Too much power clears the bar. The lob pass is not played |
-| Low driven shot | Hold I, then hold and release K/Space (or press I during the charge) | Kept low and hard, never skied |
-| Lofted pass / cross | L (hold, release) | From wide in the final third it is a **floated cross**: high and hanging, dropping onto the teammate (good for headers, but the keeper has time to come for it). Charge picks near or far like a pass |
-| Whipped cross | Hold E while releasing L, from wide | Fast and flat, curling away from the keeper into the gap in front of goal, still head high as it reaches the runner. Can be played early, from just past halfway |
+| Chip shot | Hold K, then hold and release L (or press K during the charge) | High and slow, dropping under the bar: best when the keeper is off their line. Too much power clears the bar. The lob pass is not played |
+| Low driven shot | Hold O, then hold and release L (or press O during the charge) | Kept low and hard, never skied |
+| Lofted pass / cross | K (hold, release) | From wide in the final third it is a **floated cross**: high and hanging, dropping onto the teammate (good for headers, but the keeper has time to come for it). Charge picks near or far like a pass |
+| Whipped cross | Hold E while releasing K, from wide | Fast and flat, curling away from the keeper into the gap in front of goal, still head high as it reaches the runner. Can be played early, from just past halfway |
 | Low cross | Hold E while releasing J, from wide in the final third | Driven along the ground across the six-yard box, into the runner's path |
-| Through ball | I (hold, release) | Played into space ahead of a running teammate. Charge picks near or far |
-| Lofted through ball | Hold E while releasing I | Over the top of the defence, dropping into the runner's path |
+| Through ball | O (hold, release) | Played into space ahead of a running teammate. Charge picks near or far |
+| Lofted through ball | Hold E while releasing O | Over the top of the defence, dropping into the runner's path |
 | First touch | Hold a direction as the ball arrives | The touch goes that way. Hold Shift too to push it well ahead and run onto it. With no direction held the ball is killed dead at your feet. Worse touch or a faster pass means a less accurate touch |
 | Close control | C (hold) | Small, slow touches with the ball right at your feet: tighter turns and harder for a defender to rob. Hold it as a pass arrives to kill the ball dead at your feet, or to chest down a high ball |
 | Sole stop | Hold C, let go of the direction while you are moving | You stop the ball under your sole. Push a direction within about a second to burst away with a push touch |
@@ -38,25 +38,25 @@ The game opens on the main menu. **Kick off** (already highlighted: Enter, A or 
 | Advanced skill moves (with the ball) | Hold E, then U plus a direction | Forward: **elastico** (out and back with the outside of the foot; the best fool a defender in front, but a poor touch can lose it). Sideways: **ball roll** (roll the sole across the ball and glide sideways). Straight back: **drag-back turn** (pull it back and spin away, ending up facing the other way). Diagonally forward: **Berba spin** (roll it across and spin right round on it, away the other side). Diagonally back: **McGeady spin** (sole on top, half a turn and away at a right angle) |
 | Chained step-overs | U again during a step-over | Up to three in a row, each to the other side and a little more convincing |
 | Skill move (with the ball) | U plus a direction | Towards where you face: knock-on (push the ball ahead and burst after it). Straight back: drag-back (pull it behind you and turn). Diagonally back: roulette (a full spin on the ball that rolls you about a metre to that side; the body shields the ball while you turn, and a defender charging in close can be left behind). Sideways or no direction: step-over, which can wrong-foot a defender in front of you |
-| Fake shot (with the ball) | Hold K, tap J before you let go | The shooting leg swings back, then cuts the ball across instead (towards the stick, or away from the nearest defender). Defenders within about 5 m who rush in to block can be left on the floor. A defender who is jockeying, side-on and set, is much harder to fool with any skill move |
+| Fake shot (with the ball) | Hold L, tap J before you let go | The shooting leg swings back, then cuts the ball across instead (towards the stick, or away from the nearest defender). Defenders within about 5 m who rush in to block can be left on the floor. A defender who is jockeying, side-on and set, is much harder to fool with any skill move |
 | Sprint burst | Press Shift from a jog | A short extra kick of pace; costs stamina and needs at least a quarter of the bar |
-| Tackle (without the ball) | J or K/Space | Standing tackle in front of you; from behind it is likely a foul. Alongside a running carrier (level with them, running the same way) it becomes a **shoulder barge**: win it and they are knocked off the ball, lose it and you bounce off |
-| Slide tackle (without the ball) | L | Lunges along the ground. Win the ball from the front or side and it is clean; hit the legs, or come from behind, and it is a foul with a good chance of a card |
-| Contain (without the ball) | I (hold) | Sends the nearest teammate to press the ball carrier while you hold position |
-| Tactical foul (without the ball) | Hold E and press L | A deliberate pull on the shirt of a carrier within reach, from behind or alongside: always a foul (no advantage), usually a yellow card (almost always when it stops a quick break or near your goal), a red if it denies a clear chance, a penalty in your box |
+| Tackle (without the ball) | J or L | Standing tackle in front of you; from behind it is likely a foul. Alongside a running carrier (level with them, running the same way) it becomes a **shoulder barge**: win it and they are knocked off the ball, lose it and you bounce off |
+| Slide tackle (without the ball) | K | Lunges along the ground. Win the ball from the front or side and it is clean; hit the legs, or come from behind, and it is a foul with a good chance of a card |
+| Contain (without the ball) | O (hold) | Sends the nearest teammate to press the ball carrier while you hold position |
+| Tactical foul (without the ball) | Hold E and press K | A deliberate pull on the shirt of a carrier within reach, from behind or alongside: always a foul (no advantage), usually a yellow card (almost always when it stops a quick break or near your goal), a red if it denies a clear chance, a penalty in your box |
 | Free kick curve and dip | Hold E and move | Before the kick: across the line of the kick bends it (the dotted line shows its path), towards goal adds dip (topspin that brings the ball down sharply over the wall) |
 | Jockey (without the ball) | E (hold) | Side-on, facing the ball. With no direction held your player contains automatically: holds a spot about 2 m goal-side of the carrier and mirrors them. Hold Shift too for a quicker shuffle that stays side-on (uses some stamina). After about 0.3 s in the stance you are "set": a standing tackle (J) is better timed and, if it misses, you recover quickly instead of stumbling; a carrier running straight at you has to check their stride, and you can nick the ball if they dribble into you |
 | Shield (with the ball) | E (hold) | Turn your back on the nearest opponent and hold them off: much harder to dispossess, especially from behind. Slower while you do it |
 | Team press (defending) | R | The three nearest players close down hard and the team pushes up for about 5 s. Then a 14 s wait before you can call it again |
 | Offside trap (defending) | T | The back four step up together for about 1.6 s to catch a runner offside. Mistime it and the striker is through. 8 s wait between calls |
-| Aimed header | J, I or L (pass buttons) or K as a high ball arrives | A pass button nods it to the teammate the stick points at (short and looping); shoot heads for goal towards the stick |
-| Volley | K/Space as a ball drops to knee or waist height | Struck first time in the air: the ball's pace adds power, but a higher or faster ball is harder to keep on target |
-| Set-piece routine (your corner or free kick) | Q before the kick | Cycles the routine; teammates move and the target moves with them. Corners: standard, near post, far post, short corner, edge of the box. Free kicks: standard, lay-off, far post |
-| Switch player | Q | Switches to the highlighted teammate (white ring), usually the best-placed defender. Press twice quickly to go on to the next player instead of back. At their corners, free kicks and throw-ins it picks another defender |
-| Call a run (with the ball) | Q | The teammate best placed to go in behind (the one the stick points towards, if it does) sprints past the defensive line for about 2.5 s. Pass soon, or they will be offside |
-| Take your keeper (defending) | U or G | You control the goalkeeper: the stick moves him, K/Space dives the way the stick points, J (or I/L) comes off the line at the ball for about 2.5 s (inside the area he dives at a striker's feet). U or G again hands him back; he is also handed back when the ball goes far away |
-| Defending a free kick in range | Stick · Q · K | The stick slides the wall across, Q sets 2 to 5 men in it, K/Space makes it jump |
-| Throw-in | J · L · I · Q | Short to feet, long throw, down the line; in their third Q sets up a long throw into the box |
+| Aimed header | J, O or K (pass buttons) or L as a high ball arrives | A pass button nods it to the teammate the stick points at (short and looping); shoot heads for goal towards the stick |
+| Volley | L as a ball drops to knee or waist height | Struck first time in the air: the ball's pace adds power, but a higher or faster ball is harder to keep on target |
+| Set-piece routine (your corner or free kick) | I before the kick | Cycles the routine; teammates move and the target moves with them. Corners: standard, near post, far post, short corner, edge of the box. Free kicks: standard, lay-off, far post |
+| Switch player | I | Switches to the highlighted teammate (white ring), usually the best-placed defender. Press twice quickly to go on to the next player instead of back. At their corners, free kicks and throw-ins it picks another defender |
+| Call a run (with the ball) | I | The teammate best placed to go in behind (the one the stick points towards, if it does) sprints past the defensive line for about 2.5 s. Pass soon, or they will be offside |
+| Take your keeper (defending) | U or G | You control the goalkeeper: the stick moves him, L dives the way the stick points, J (or O/K) comes off the line at the ball for about 2.5 s (inside the area he dives at a striker's feet). U or G again hands him back; he is also handed back when the ball goes far away |
+| Defending a free kick in range | Stick · I · L | The stick slides the wall across, I sets 2 to 5 men in it, L makes it jump |
+| Throw-in | J · K · O · I | Short to feet, long throw, down the line; in their third I sets up a long throw into the box |
 | Next game plan | Y | Park the bus, Counter-attack, Balanced, High press, All-out attack (also in the pause menu) |
 | Switch to a chosen player | Click them | Takes control of the teammate nearest the point you clicked |
 | Pause / menu | Esc or P | Offline only pauses the match; online opens the menu while play continues |
@@ -190,9 +190,9 @@ When your goalkeeper catches the ball, they hold it for up to 5 seconds while yo
 | Button | Keyboard | Controller (default) | What it does |
 | --- | --- | --- | --- |
 | Pass | J | A [✕] | **Roll out** along the ground to a nearby defender or midfielder: slow and very accurate |
-| Lob | L | B [○] | **Throw** overarm, up to about 40 m: quick, for starting a counter-attack down a flank |
-| Through ball | I | Y [△] | **Drop-kick**: flat and fast into a forward's stride, 30-60 m |
-| Shoot | K / Space | X [□] | **Punt**: high and long, up to about 70 m, less accurate |
+| Lob | K | B [○] | **Throw** overarm, up to about 40 m: quick, for starting a counter-attack down a flank |
+| Through ball | O | Y [△] | **Drop-kick**: flat and fast into a forward's stride, 30-60 m |
+| Shoot | L | X [□] | **Punt**: high and long, up to about 70 m, less accurate |
 
 If you do nothing the keeper releases it after 5 seconds. Computer keepers pick from the same four and release it at once when the opponents are caught upfield.
 
@@ -266,7 +266,7 @@ Fouls can bring a yellow card; a second yellow or a straight red sends the playe
 ## Visual cues
 
 - Yellow triangle and ring: player 1's controlled player. Cyan diamond: player 2 (online).
-- Faint white ring: who Q/LB will switch to.
+- Faint white ring: who I/LB will switch to.
 - White ring on a teammate: the intended receiver of a pass in flight.
 - Yellow ring with a dot at a set piece: your target (see Set pieces).
 - Yellow countdown ring round your keeper: time left to release the ball (six seconds).

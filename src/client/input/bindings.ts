@@ -52,8 +52,9 @@ export function defaultBindings(): ControlBindings {
   return {
     keys: {
       up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'], left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'],
-      sprint: ['ShiftLeft', 'ShiftRight'], pass: ['KeyJ'], shoot: ['KeyK', 'Space'], lob: ['KeyL'], through: ['KeyI'],
-      jockey: ['KeyE'], switch: ['KeyQ'], skill: ['KeyU'], close: ['KeyC'], teamPress: ['KeyR'], trap: ['KeyT'], keeper: ['KeyG'], plan: ['KeyY'], pause: ['KeyP'], help: ['KeyH'],
+      // Philip's layout (20 Nov 2026): J pass, L shoot, K lob, O through, I switch, E modifier, U skill.
+      sprint: ['ShiftLeft', 'ShiftRight'], pass: ['KeyJ'], shoot: ['KeyL'], lob: ['KeyK'], through: ['KeyO'],
+      jockey: ['KeyE'], switch: ['KeyI'], skill: ['KeyU'], close: ['KeyC'], teamPress: ['KeyR'], trap: ['KeyT'], keeper: ['KeyG'], plan: ['KeyY'], pause: ['KeyP'], help: ['KeyH'],
     },
     pad: {
       up: [], down: [], left: [], right: [],
@@ -68,6 +69,24 @@ export function defaultBindings(): ControlBindings {
       switch: ['Space', 'Mouse1'], skill: ['KeyF'], close: ['KeyC'], teamPress: ['KeyR'], trap: ['KeyT'], keeper: ['KeyG'], plan: ['KeyY'], pause: ['KeyP'], help: ['KeyH'],
     },
   };
+}
+
+/** The keyboard defaults before 20 Nov 2026 (K shoot / Space, L lob, I through, Q switch): saved tables equal to them move to the new defaults once. */
+export const OLD_DEFAULT_KEYS_NOV20: Record<BindAction, string[]> = {
+  up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'], left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'],
+  sprint: ['ShiftLeft', 'ShiftRight'], pass: ['KeyJ'], shoot: ['KeyK', 'Space'], lob: ['KeyL'], through: ['KeyI'],
+  jockey: ['KeyE'], switch: ['KeyQ'], skill: ['KeyU'], close: ['KeyC'], teamPress: ['KeyR'], trap: ['KeyT'], keeper: ['KeyG'], plan: ['KeyY'], pause: ['KeyP'], help: ['KeyH'],
+};
+
+/**
+ * One-time move to the 20 Nov 2026 keyboard defaults: a keyboard table still on the old defaults
+ * takes the new ones; a table the player changed is kept exactly as it is. Returns true if it moved.
+ */
+export function migrateKeysNov20(b: ControlBindings): boolean {
+  const same = (BIND_ACTIONS.map((a) => a.id) as BindAction[]).every((id) => b.keys[id].join() === OLD_DEFAULT_KEYS_NOV20[id].join());
+  if (!same) return false;
+  b.keys = defaultBindings().keys;
+  return true;
 }
 
 /** Mouse buttons and wheel turns a mouse binding can use. */

@@ -69,7 +69,7 @@ try {
     // Run with the ball and pass/shoot a bit.
     await page.keyboard.down('KeyD'); await page.keyboard.down('ShiftLeft'); await sleep(1500);
     await page.keyboard.up('ShiftLeft'); await page.keyboard.up('KeyD');
-    await page.keyboard.down('KeyK'); await sleep(400); await page.keyboard.up('KeyK');
+    await page.keyboard.down('KeyL'); await sleep(400); await page.keyboard.up('KeyL');
     await sleep(800);
     await page.screenshot({ path: OUT + 'offline-04-play.png' });
     const s1 = await state(page); await sleep(3000); const s2 = await state(page);

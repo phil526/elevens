@@ -51,7 +51,7 @@ try {
     const orig = window.__origRelease ?? (window.__origRelease = m.startKick.bind(m));
     m.startKick = (p, req, h) => { if (p.id === gk.id) window.__rel = { kind: req.kind, variant: req.variant ?? null, x: gk.pos.x }; return orig(p, req, h); };
   });
-  for (const [key, want, label] of [['KeyL', 'throw', 'THROW'], ['KeyK', 'punt', 'PUNT'], ['KeyJ', 'roll', 'ROLL OUT'], ['KeyI', 'dropkick', 'DROP-KICK']]) {
+  for (const [key, want, label] of [['KeyK', 'throw', 'THROW'], ['KeyL', 'punt', 'PUNT'], ['KeyJ', 'roll', 'ROLL OUT'], ['KeyO', 'dropkick', 'DROP-KICK']]) {
     await waitFor(() => window.__elevens.session.match.phase === 'play', 15000);
     await holdKeeper();
     const hint = await waitFor(() => { const h = document.querySelector('.hint'); return h && h.offsetParent && /Keeper's ball/.test(h.textContent) ? h.textContent : null; }, 5000);
@@ -78,7 +78,7 @@ try {
     const orig = window.__origK ?? (window.__origK = m.startKick.bind(m));
     m.startKick = (p, req, h) => { if (p.id === w.id) window.__x = { kind: req.kind, variant: req.variant ?? null }; return orig(p, req, h); };
   });
-  for (const [mod, key, label, flight] of [[false, 'KeyL', 'FLOATED CROSS', 'cross'], [true, 'KeyL', 'WHIPPED CROSS', 'cross'], [true, 'KeyJ', 'LOW CROSS', 'pass']]) {
+  for (const [mod, key, label, flight] of [[false, 'KeyK', 'FLOATED CROSS', 'cross'], [true, 'KeyK', 'WHIPPED CROSS', 'cross'], [true, 'KeyJ', 'LOW CROSS', 'pass']]) {
     await waitFor(() => window.__elevens.session.match.phase === 'play', 15000);
     await wing();
     await sleep(200);

@@ -107,19 +107,19 @@ try {
   await page.keyboard.down('KeyJ'); await sleep(150); await page.keyboard.up('KeyJ');
   await sleep(200);
   const k1 = await page.evaluate(() => ({ keys: window.__elevens.settings.controls.keys, msg: document.querySelector('.bindmsg')?.textContent ?? '' }));
-  check('keyboard: Controls opens on Keyboard without a pad; pressing J on Shoot swaps it with Pass', kTab === 'keys' && k1.keys.shoot.join() === 'KeyJ,Space' && k1.keys.pass.join() === 'KeyK' && /Pass \/ tackle moved to K/.test(k1.msg), `${kTab} ${k1.keys.shoot} / ${k1.keys.pass} "${k1.msg}"`);
+  check('keyboard: Controls opens on Keyboard without a pad; pressing J on Shoot swaps it with Pass', kTab === 'keys' && k1.keys.shoot.join() === 'KeyJ' && k1.keys.pass.join() === 'KeyL' && /Pass \/ tackle moved to L/.test(k1.msg), `${kTab} ${k1.keys.shoot} / ${k1.keys.pass} "${k1.msg}"`);
   await page.click('[data-bind=lob][data-slot="1"]');
   await page.keyboard.down('Escape'); await sleep(150); await page.keyboard.up('Escape');
   await sleep(200);
   const k2 = await page.evaluate(() => ({ lob: window.__elevens.settings.controls.keys.lob, rb: !!window.__elevens.rebind, scr: window.__elevens.screenName }));
-  check('keyboard: Esc cancels without leaving the menu', k2.lob.join() === 'KeyL' && !k2.rb && k2.scr === 'controls', JSON.stringify(k2));
+  check('keyboard: Esc cancels without leaving the menu', k2.lob.join() === 'KeyK' && !k2.rb && k2.scr === 'controls', JSON.stringify(k2));
   await page.click('[data-bind=lob][data-slot="1"]');
   await page.keyboard.down('KeyZ'); await sleep(150); await page.keyboard.up('KeyZ');
   await sleep(200);
   await page.click('[data-seg=ctab] [data-v=list]');
   const listText = await page.textContent('table.ctl');
   await page.screenshot({ path: OUT + 'remap-04-keyboard-list.png', fullPage: true });
-  check('keyboard: a second key can be added and the full list shows the new keys', /L or Z/.test(listText ?? ''), (listText ?? '').replace(/\s+/g, ' ').match(/Lofted[^A-Z]*cross.{0,60}/)?.[0]);
+  check('keyboard: a second key can be added and the full list shows the new keys', /K or Z/.test(listText ?? ''), (listText ?? '').replace(/\s+/g, ' ').match(/Lofted[^A-Z]*cross.{0,60}/)?.[0]);
   await page.click('[data-seg=ctab] [data-v=keys]');
   await page.screenshot({ path: OUT + 'remap-05-keyboard.png' });
   // The new keys work in a match.
@@ -130,8 +130,8 @@ try {
   await page.click('[data-a=next]');
   await page.click('[data-a=go]');
   await page.waitForFunction(() => window.__elevens?.session?.match?.phase === 'kickoff', null, { timeout: 30000 });
-  const inMatch = await page.evaluate(() => { const k = window.__elevens.keyboard; k.handle('KeyK', true); const a = k.read(); k.handle('KeyK', false); k.handle('KeyJ', true); const b = k.read(); k.handle('KeyJ', false); return { kPass: a.pass, jShoot: b.shoot }; });
-  check('keyboard: remapped keys survive a reload and drive the match', kept === 'KeyK' && inMatch.kPass && inMatch.jShoot, JSON.stringify({ kept, ...inMatch }));
+  const inMatch = await page.evaluate(() => { const k = window.__elevens.keyboard; k.handle('KeyL', true); const a = k.read(); k.handle('KeyL', false); k.handle('KeyJ', true); const b = k.read(); k.handle('KeyJ', false); return { kPass: a.pass, jShoot: b.shoot }; });
+  check('keyboard: remapped keys survive a reload and drive the match', kept === 'KeyL' && inMatch.kPass && inMatch.jShoot, JSON.stringify({ kept, ...inMatch }));
   await ctx.close();
   check('no console errors', report.consoleErrors.length === 0, report.consoleErrors.slice(0, 3).join(' | '));
 } finally {

@@ -85,12 +85,12 @@ try {
   await waitFor(() => window.__elevens.session.match.phase === 'play', 15000);
   await M(() => { const m = window.__elevens.session.match; m.ctrl[0].quickRestarts = false; m.award('corner', 0, { x: m.attackDir(0) * 52, z: 33.5 }); });
   await waitFor(() => { const r = window.__elevens.session.match.restart; return r && r.ready && r.type === 'corner'; }, 20000);
-  await page.keyboard.down('KeyQ'); await sleep(250); await page.keyboard.up('KeyQ');
+  await page.keyboard.down('KeyI'); await sleep(250); await page.keyboard.up('KeyI');
   const routineToast = await waitFor(() => [...document.querySelectorAll('.toast')].map((t) => t.textContent).find((t) => /Corner routine/.test(t)), 5000);
   await sleep(1500);
   await page.screenshot({ path: OUT + 'ideas-03-corner-routine.png' });
   check('set pieces: Q at a corner switches the routine and says which', /Near post/.test(routineToast ?? ''), routineToast ?? '');
-  await page.keyboard.down('KeyL'); await sleep(300); await page.keyboard.up('KeyL');
+  await page.keyboard.down('KeyK'); await sleep(300); await page.keyboard.up('KeyK');
   await waitFor(() => window.__elevens.session.match.phase === 'play', 15000);
 
   // --- Added time: the fourth official's board, and the clock running past 45:00.

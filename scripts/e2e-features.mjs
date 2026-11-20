@@ -54,7 +54,7 @@ try {
   await hold('KeyW', 900); // screen up: away from the camera
   const aim1 = await M(() => ({ ...window.__elevens.session.match.restart.aim }));
   check('free kick: holding W moves the target away from the camera', aim1.z < aim0.z - 1, `z ${aim0.z.toFixed(1)} -> ${aim1.z.toFixed(1)}`);
-  await hold('KeyK', 700);
+  await hold('KeyL', 700);
   const taken = await waitFor(() => window.__elevens.session.match.phase === 'play' && window.__elevens.session.match.ball.state !== 'dead', 15000);
   check('free kick: K takes it and play resumes', taken);
 
@@ -95,11 +95,11 @@ try {
   await waitFor(() => window.__elevens.session.match.phase === 'play', 15000);
   await giveBallNearBox();
   await M(() => { window.__kicks = []; const m = window.__elevens.session.match; const orig = m.startKick.bind(m); m.startKick = (p, req, h) => { window.__kicks.push({ kind: req.kind, variant: req.variant }); return orig(p, req, h); }; });
-  await page.keyboard.down('KeyL'); await sleep(60);
-  await page.keyboard.down('KeyK'); await sleep(300);
+  await page.keyboard.down('KeyK'); await sleep(60);
+  await page.keyboard.down('KeyL'); await sleep(300);
   const chipLabel = await page.textContent('.power b').catch(() => '');
   await page.screenshot({ path: OUT + 'features-07-chip-charge.png' });
-  await page.keyboard.up('KeyK'); await page.keyboard.up('KeyL');
+  await page.keyboard.up('KeyL'); await page.keyboard.up('KeyK');
   const chipped = await waitFor(() => window.__kicks.some((k) => k.kind === 'shot' && k.variant === 'chip'), 6000);
   const lobbed = await M(() => window.__kicks.some((k) => k.kind === 'lob'));
   const kicks = await M(() => JSON.stringify(window.__kicks));
@@ -109,7 +109,7 @@ try {
   await waitFor(() => window.__elevens.session.match.phase === 'play', 15000);
   await giveBallNearBox();
   await M(() => { const m = window.__elevens.session.match; m.calledRun[0] = { pid: -1, until: 0 }; });
-  await page.keyboard.press('KeyQ');
+  await page.keyboard.press('KeyI');
   const called = await waitFor(() => { const m = window.__elevens.session.match; return m.calledRun[0].pid >= 0 && m.calledRun[0].pid !== m.ctrl[0].pid; }, 6000);
   const callToast = await waitFor(() => /run in behind/.test(document.querySelector('.toast')?.textContent ?? ''), 4000);
   check('call a run: Q with the ball sends a teammate in behind, with a toast', called && callToast);
@@ -129,9 +129,9 @@ try {
   });
   await waitFor(() => window.__elevens.session.match.phase === 'play', 15000);
   await setupDefend();
-  await page.keyboard.down('KeyI');
+  await page.keyboard.down('KeyO');
   const contain = await waitFor(() => window.__elevens.session.match.contain[0] >= 0, 8000);
-  await page.keyboard.up('KeyI');
+  await page.keyboard.up('KeyO');
   check('contain: holding I without the ball sends a teammate to press', contain);
   await setupDefend();
   // U without the ball takes the keeper; J then brings him off his line; U again hands him back.
@@ -143,7 +143,7 @@ try {
   await hold('KeyU', 250);
   await waitFor(() => { const m = window.__elevens.session.match; return m.players[m.ctrl[0].pid].role !== 'GK'; }, 4000);
   await setupDefend();
-  await page.keyboard.press('KeyL');
+  await page.keyboard.press('KeyK');
   const slid = await waitFor(() => { const m = window.__elevens.session.match; return m.players[m.ctrl[0].pid].action.type === 'slide' || m.players[m.ctrl[0].pid].tackleCooldown > 1; }, 8000);
   await M(() => { const r = window.__elevens.renderer; const m = window.__elevens.session.match; const p = m.players[m.ctrl[0].pid]; r.viewOverride = { pos: [p.pos.x + 5, 3, p.pos.z + 7], look: [p.pos.x, 0.6, p.pos.z] }; });
   await sleep(1500);
@@ -243,7 +243,7 @@ try {
   const clk = await page.textContent('.clk').catch(() => '');
   await M(() => { window.__first = window.__elevens.session.match.restart; });
   await sleep(600);
-  await hold('KeyK', 250); // held: a quick press can fall between frames at software-render fps
+  await hold('KeyL', 250); // held: a quick press can fall between frames at software-render fps
   const again = await waitFor(() => { const m = window.__elevens.session.match; return m.restart && m.restart !== window.__first && m.restart.type === 'penalty'; }, 20000);
   await page.screenshot({ path: OUT + 'features-09-practice-penalties.png' });
   check('practice: penalties start at once, the bug reads PENALTIES, and another follows the kick', pen !== null && /PENALTIES/.test(clk ?? '') && again, `clock "${clk}"`);

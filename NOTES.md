@@ -116,3 +116,11 @@ Philip: "Optimize the game for mobile phone. Ensure all the character models loa
 - 10 crosses: `crossOnUs` (cross/lob/clear from them, engage point < 26 m from goal): cool-down 0.3 s, margin 0.45 s; a cross's receiver is met at head height (meetPoint maxY 2.6).
 - Benches: AI v AI byte-identical (bench-features 160 matches, seeds 1000-1159). Scripted human (bench-human 1 12 pro): switches 2177 -> 1961, flick-backs 203 -> 182, computer shots against 40 -> 23 (goals 4 -> 8, small numbers); HOLD=1: shots against 67 -> 42, goals against 10 -> 8.
 - tests/autoswitch.test.ts (23). `npm run e2e:switch` 12/12.
+
+## Keyboard defaults: Philip's layout (20 Nov 2026)
+
+Thread "Set default keyboard controls" (Philip sent a screenshot of his Controls > Keyboard tab: "i want these to be the default buttons for player 1").
+- `defaultBindings().keys` (input/bindings.ts): W A S D + arrows move, Shift (L/R) sprint, J pass, **L shoot** (Space dropped), **K lob / slide**, **O through / contain**, E modifier / jockey, **I switch / call a run**, U skill / keeper, C close control (his screenshot showed none; kept C so no action starts unbound), R team press, T trap, G keeper, Y game plan, P pause, H help. Q is now free.
+- One-time move: `migrateKeysNov20` + `OLD_DEFAULT_KEYS_NOV20`; `Settings.keysNov20` flag in loadSettings. A saved keyboard table identical to the old defaults takes the new one; any changed table is kept untouched. Controller and mouse tables unchanged. Skipped on ?test pages like the other one-time moves.
+- Local split keyboard (SPLIT_KEYS in game/local.ts) is a separate fixed layout and was not changed; with one keyboard + pads the keyboard player uses these bindings.
+- docs/CONTROLS.md keyboard rows rewritten; e2e scripts' hard-coded keys swapped (K<->L, I->O, Q->I). `node scripts/check-keys-migration.mjs` checks the move in the built game (4/4). Tests 637.

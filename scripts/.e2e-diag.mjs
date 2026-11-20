@@ -51,7 +51,7 @@ try {
   await hold('KeyW', 900); // screen up: away from the camera
   const aim1 = await M(() => ({ ...window.__elevens.session.match.restart.aim }));
   check('free kick: holding W moves the target away from the camera', aim1.z < aim0.z - 1, `z ${aim0.z.toFixed(1)} -> ${aim1.z.toFixed(1)}`);
-  await hold('KeyK', 700);
+  await hold('KeyL', 700);
   const taken = await waitFor(() => window.__elevens.session.match.phase === 'play' && window.__elevens.session.match.ball.state !== 'dead', 15000);
   check('free kick: K takes it and play resumes', taken);
 
@@ -92,12 +92,12 @@ try {
   for (let k = 0; k < 12; k++) { trace.push(await M(() => { const m = window.__elevens.session.match; const me = m.players[m.ctrl[0].pid]; const o = m.ball.owner >= 0 ? m.players[m.ball.owner] : null; return [m.phase, m.ball.owner, o?.team, o?.role, m.ball.state, o?.action.type, o ? +Math.hypot(o.vel.x, o.vel.z).toFixed(1) : null, +Math.hypot(m.ball.pos.x - me.pos.x, m.ball.pos.z - me.pos.z).toFixed(2), me.action.type, m.ctrl[0].pid].join(','); })); await sleep(100); }
   console.log('TRACE\n' + trace.join('\n'));
   await setupDefend();
-  await page.keyboard.down('KeyI');
+  await page.keyboard.down('KeyO');
   const contain = await waitFor(() => window.__elevens.session.match.contain[0] >= 0, 8000);
-  await page.keyboard.up('KeyI');
+  await page.keyboard.up('KeyO');
   check('contain: holding I without the ball sends a teammate to press', contain);
   await setupDefend();
-  await page.keyboard.press('KeyL');
+  await page.keyboard.press('KeyK');
   const slid = await waitFor(() => { const m = window.__elevens.session.match; return m.players[m.ctrl[0].pid].action.type === 'slide' || m.players[m.ctrl[0].pid].tackleCooldown > 1; }, 8000);
   await M(() => { const r = window.__elevens.renderer; const m = window.__elevens.session.match; const p = m.players[m.ctrl[0].pid]; r.viewOverride = { pos: [p.pos.x + 5, 3, p.pos.z + 7], look: [p.pos.x, 0.6, p.pos.z] }; });
   await sleep(1500);

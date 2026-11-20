@@ -99,11 +99,11 @@ try {
     window.__watch = setInterval(() => { const a = p.action; if (a.type === 'skill' && !window.__seen.includes(a.skill)) window.__seen.push(a.skill); if (a.type === 'kick' && a.kind === 'shot') window.__seen.push('shot'); }, 5);
     return p.id;
   });
-  await page.keyboard.down('KeyK');
+  await page.keyboard.down('KeyL');
   await sleep(250);
   await hold('KeyJ', 150);
   await sleep(150);
-  await page.keyboard.up('KeyK');
+  await page.keyboard.up('KeyL');
   await sleep(600);
   const seen1 = await M(() => window.__seen.slice());
   check('hold shoot + tap pass plays a fake shot, not a shot', seen1.includes('fakeshot') && !seen1.includes('shot'), JSON.stringify(seen1));

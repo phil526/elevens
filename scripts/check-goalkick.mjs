@@ -48,7 +48,7 @@ try {
     const ok = after.length === 0 && (scene === 'held' ? st.ball === 'held' : st.ready);
     if (!ok) fails++;
     console.log(`${ok ? 'PASS' : 'FAIL'}  ${scene}: in the box at start ${JSON.stringify(before)}, after 2.6 s ${JSON.stringify(after)} ${JSON.stringify(st)}`);
-    if (scene === 'goalkick') { await page.keyboard.down('KeyK'); await sleep(400); await page.keyboard.up('KeyK'); await page.waitForFunction(() => window.__elevens.session.match.phase === 'play', null, { timeout: 60000 }).catch(() => {}); }
+    if (scene === 'goalkick') { await page.keyboard.down('KeyL'); await sleep(400); await page.keyboard.up('KeyL'); await page.waitForFunction(() => window.__elevens.session.match.phase === 'play', null, { timeout: 60000 }).catch(() => {}); }
   }
 } finally { await browser.close(); server.kill(); }
 process.exit(fails ? 1 : 0);

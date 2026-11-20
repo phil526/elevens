@@ -100,7 +100,7 @@ try {
   const hint = await M(() => document.querySelector('.hint')?.textContent ?? '');
   check('wall hint shown for a free kick against you', /wall/i.test(hint), hint);
   const n0 = await M(() => window.__elevens.session.match.restart?.wall?.n ?? 0);
-  await hold('KeyQ');
+  await hold('KeyI');
   const n1 = await waitFor((n) => { const r = window.__elevens.session.match.restart; return r?.wall && r.wall.n !== n && r.wall.n; }, 3000, n0);
   check('switch changes the number in the wall', !!n1, `${n0} -> ${n1}`);
   await page.keyboard.down('KeyD');
@@ -108,11 +108,11 @@ try {
   await page.keyboard.up('KeyD');
   const shift = await M(() => window.__elevens.session.match.restart?.wall?.shift ?? 0);
   check('the stick shifts the wall', Math.abs(shift) > 0.3, shift.toFixed(2));
-  await page.keyboard.down('KeyK');
+  await page.keyboard.down('KeyL');
   const jumped = await waitFor(() => window.__elevens.session.match.players.some((p) => p.team === 0 && p.action.type === 'jump'), 3000);
   await sleep(120);
   await page.screenshot({ path: OUT + 'gp5-06-wall-jump.png' });
-  await page.keyboard.up('KeyK');
+  await page.keyboard.up('KeyL');
   check('shoot makes the wall jump', !!jumped);
 
   // Our throw-in: the hint names the three throws.
@@ -123,7 +123,7 @@ try {
   const th = await M(() => document.querySelector('.hint')?.textContent ?? '');
   check('throw-in hint lists short, long and down the line', /short/i.test(th) && /long/i.test(th) && /down the line/i.test(th), th);
   await page.screenshot({ path: OUT + 'gp5-07-throwin.png' });
-  await hold('KeyI', 150);
+  await hold('KeyO', 150);
   const thrown = await waitFor(() => window.__elevens.session.match.phase === 'play', 8000);
   check('a down-the-line throw is taken', !!thrown);
 

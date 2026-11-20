@@ -82,10 +82,10 @@ try {
   });
   await sleep(150);
   await page.keyboard.down('KeyE'); await page.keyboard.down('ShiftLeft'); await sleep(100);
-  await page.keyboard.down('KeyK'); await sleep(250);
+  await page.keyboard.down('KeyL'); await sleep(250);
   const label = await M(() => document.querySelector('.power b')?.textContent ?? '');
   await page.screenshot({ path: OUT + 'g6-04-power-shot.png' });
-  await page.keyboard.up('KeyK'); await sleep(80); await page.keyboard.up('ShiftLeft'); await page.keyboard.up('KeyE');
+  await page.keyboard.up('KeyL'); await sleep(80); await page.keyboard.up('ShiftLeft'); await page.keyboard.up('KeyE');
   const shot = await waitFor(() => { const b = window.__elevens.session.match.ball; return b.state === 'flight' && b.flight === 'shot' && Math.hypot(b.vel.x, b.vel.z); }, 3000);
   check('modifier + sprint + shoot is a power shot', label === 'POWER SHOT' && shot > 20, `${label}, ${shot && shot.toFixed(1)} m/s`);
   await sleep(1500);
@@ -123,7 +123,7 @@ try {
   const fk = await M(() => { const a = window.__elevens; const r = a.session.match.restart; return { curve: r?.curve ?? 0, dip: r?.dip ?? 0, line: !!a.renderer?.fkLine?.visible, hint: document.querySelector('.hint')?.textContent ?? '' }; });
   check('free kick: the modifier and stick set bend and dip, with the dotted line and hint', Math.abs(fk.curve) > 0.3 && fk.dip > 0.2 && fk.line && /bend/.test(fk.hint), JSON.stringify(fk));
   await page.screenshot({ path: OUT + 'g6-06-freekick-bend.png' });
-  await hold('KeyK', 450);
+  await hold('KeyL', 450);
   const fkBall = await waitFor(() => { const b = window.__elevens.session.match.ball; return b.state === 'flight' && { spin: b.spin, dip: b.dip ?? 0 }; }, 5000);
   check('the free kick is struck with that curl and topspin', fkBall && Math.abs(fkBall.spin) > 2.5 && fkBall.dip > 1, JSON.stringify(fkBall));
   await sleep(2500);
@@ -145,7 +145,7 @@ try {
     const orig = m.emit.bind(m);
     m.emit = (t, d) => { if (t === 'call' && d?.text === 'tactical') window.__g6fouls++; return orig(t, d); };
   });
-  await holdWith(['KeyE'], 'KeyL', 120);
+  await holdWith(['KeyE'], 'KeyK', 120);
   const tac = await waitFor(() => window.__g6fouls > 0 && { restart: window.__elevens.session.match.restart?.type, toast: document.querySelector('.toast')?.textContent ?? '' }, 3000);
   await sleep(150);
   await page.screenshot({ path: OUT + 'g6-07-tactical-foul.png' });

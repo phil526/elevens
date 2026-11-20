@@ -53,7 +53,7 @@ try {
   for (let i = 0; i < 60; i++) { if (await page.evaluate(() => window.__elevens.renderer.players.some((p) => p.solver))) break; await sleep(500); }
 
   // Live check: shots at the computer's keeper in a running match; log which animations play.
-  for (let i = 0; i < 100; i++) { if ((await page.evaluate(() => window.__elevens.session.match.phase)) === 'play') break; await page.keyboard.down('KeyK'); await sleep(300); await page.keyboard.up('KeyK'); await sleep(300); }
+  for (let i = 0; i < 100; i++) { if ((await page.evaluate(() => window.__elevens.session.match.phase)) === 'play') break; await page.keyboard.down('KeyL'); await sleep(300); await page.keyboard.up('KeyL'); await sleep(300); }
   const SHOTS = [[4.4, 1.0, 22], [3.9, 2.4, 22], [2.8, 1.2, 22]];
   for (const [z, y, sp] of SHOTS) {
     const ok = await page.evaluate(([z, y, sp]) => {
@@ -86,7 +86,7 @@ try {
     await page.screenshot({ path: `${OUT}gk-live-${z}-${y}.png` });
     // Restore play if a restart started.
     await page.evaluate(() => { const m = window.__elevens.session.match; if (m.ball.state === 'held') {} });
-    for (let i = 0; i < 40; i++) { if ((await page.evaluate(() => window.__elevens.session.match.phase)) === 'play') break; await page.keyboard.down('KeyK'); await sleep(300); await page.keyboard.up('KeyK'); await sleep(300); }
+    for (let i = 0; i < 40; i++) { if ((await page.evaluate(() => window.__elevens.session.match.phase)) === 'play') break; await page.keyboard.down('KeyL'); await sleep(300); await page.keyboard.up('KeyL'); await sleep(300); }
   }
 } finally {
   await browser.close();
