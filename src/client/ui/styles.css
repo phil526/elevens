@@ -150,6 +150,10 @@ kbd { background: var(--ink); border: 1px solid var(--line); border-bottom-width
 .power i { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, var(--accent), #ffd60a 70%, #ff5a5f); width: 0; }
 .power.ticks { background: linear-gradient(90deg, transparent calc(33% - 1px), #fff9 calc(33% - 1px) 33%, transparent 33% calc(66% - 1px), #fff9 calc(66% - 1px) 66%, transparent 66%), #000a; }
 .power b { position: absolute; left: 50%; bottom: 13px; transform: translateX(-50%); font: 700 10px/1 system-ui, sans-serif; letter-spacing: .06em; color: #fff; text-shadow: 0 1px 2px #000, 0 0 4px #000; white-space: nowrap; }
+/* Your player off the screen: an arrow at the edge pointing to him with his shirt number (20 Nov 2026). */
+.edgearrow { position: absolute; width: 0; height: 0; display: none; pointer-events: none; z-index: 3; }
+.edgearrow i { position: absolute; left: 0; top: 0; width: 0; height: 0; border-top: 11px solid transparent; border-bottom: 11px solid transparent; border-left: 20px solid #ffd60a; filter: drop-shadow(0 0 3px #000); transform-origin: 50% 50%; }
+.edgearrow b { position: absolute; left: 0; top: 0; transform: translate(-50%, -50%); margin-top: 22px; font: 700 13px/1 system-ui, sans-serif; color: #fff; background: rgba(0,0,0,.65); border-radius: 9px; padding: 2px 6px; white-space: nowrap; }
 .tring { position: absolute; width: 0; height: 0; display: none; pointer-events: none; }
 .tring::before { content: ''; position: absolute; width: 22px; height: 22px; left: -11px; top: -11px; border-radius: 50%; border: 2px solid #ffd60a; box-shadow: 0 0 4px #000; }
 .tring i { position: absolute; display: block; left: 50%; top: 50%; transform: translate(-50%, -50%); border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 4px #000; }

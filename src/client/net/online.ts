@@ -109,7 +109,9 @@ export class OnlineSession implements Session {
     // A pass on its way to this player: the server steers him onto the ball (receive assist, or the
     // stick still held from the pass being ignored), so follow it rather than predict from the stick.
     const receiving = BALL_STATES[s.b[6]] === 'flight' && s.b[10] === pid;
-    const canPredict = this.predictionEnabled && phase === 'play' && action === 'none' && !(BALL_STATES[s.b[6]] === 'held') && !receiving;
+    // Just switched while defending: the server runs him at the ball until the stick is let go or moved.
+    const closing = s.ca?.[side] === 1;
+    const canPredict = this.predictionEnabled && phase === 'play' && action === 'none' && !(BALL_STATES[s.b[6]] === 'held') && !receiving && !closing;
     if (!canPredict) { this.dropPrediction(); return; }
     const m: MoverState = {
       pos: { x: s.p[o], z: s.p[o + 1] }, vel: { x: s.p[o + 2], z: s.p[o + 3] }, facing: s.p[o + 4], stamina: s.p[o + 5] / 100,

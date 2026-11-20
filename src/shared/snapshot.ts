@@ -44,9 +44,12 @@ export interface Snapshot {
   hold: number;
   gp?: [number, number]; // each side's game plan (index into GAME_PLANS), sent when not both Balanced
   mo?: number; // home crowd momentum, -1 (away on top) .. 1 (home on top), sent when not level
+  /** Per side: 1 while the stick from before a switch is being ignored (the new man closes down the ball; 20 Nov 2026). */
+  ca?: [number, number];
 }
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
+const switchCarry = (m: Match, t: number) => m.ctrl[t].carry !== undefined && m.ctrl[t].carryKind === 'switch';
 
 export function encodeSnapshot(m: Match, ack: number, events: MatchEvent[], withStats: boolean): Snapshot {
   const b = m.ball;
@@ -74,6 +77,7 @@ export function encodeSnapshot(m: Match, ack: number, events: MatchEvent[], with
     hold: r2(m.holdT),
     gp: m.plan[0] !== 'balanced' || m.plan[1] !== 'balanced' ? [GAME_PLANS.indexOf(m.plan[0]), GAME_PLANS.indexOf(m.plan[1])] : undefined,
     mo: Math.abs(m.momentum.value) > 0.005 ? r2(m.momentum.value) : undefined,
+    ca: switchCarry(m, 0) || switchCarry(m, 1) ? [switchCarry(m, 0) ? 1 : 0, switchCarry(m, 1) ? 1 : 0] : undefined,
   };
 }
 

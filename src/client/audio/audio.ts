@@ -638,6 +638,14 @@ export class GameAudio {
     this.menuSfx.play(kind);
   }
 
+  /** Control switched to another of your players (Settings > Switch flash and sound), on the effects level. */
+  switchCue(manual: boolean) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    this.menuSfx ??= new MenuSfx(ctx, this.fx, this.noise);
+    this.menuSfx.switchCue(manual);
+  }
+
   /** A floodlight bank switching on (match intro), panned towards it. */
   floodlight(pan = 0) {
     const ctx = this.ctx;

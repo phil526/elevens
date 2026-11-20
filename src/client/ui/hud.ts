@@ -32,6 +32,8 @@ export interface HudInfo {
   fps?: string | null;
   /** Local multiplayer: the other players' kick charges (null: not charging). */
   extraPower?: ({ x: number; y: number; visible: boolean; charge: number; label: string } | null)[];
+  /** Your player is off the screen: an arrow at the edge pointing to him, with his shirt number (20 Nov 2026). */
+  edge?: { x: number; y: number; angle: number; label: string } | null;
 }
 
 export class Hud {
@@ -40,6 +42,7 @@ export class Hud {
   private pcard: HTMLDivElement;
   private power: HTMLDivElement;
   private tring: HTMLDivElement;
+  private edgeEl!: HTMLDivElement;
   private extraBars: HTMLDivElement[] = [];
   private localSet = new Set<number>([0]);
   /** Momentum meter under the score bug. */
@@ -72,6 +75,7 @@ export class Hud {
       <div class="pcard"><div class="nm"></div><div class="stam"><i></i></div></div>
       <div class="power"><i></i><b></b></div>
       <div class="tring"><i></i></div>
+      <div class="edgearrow"><i></i><b></b></div>
       <canvas class="radar" width="210" height="136"></canvas>
       <div class="conn"><span class="dot"></span><span class="txt"></span></div>
       <div class="banner"><div class="big"></div><div class="sub"></div></div>
@@ -86,6 +90,7 @@ export class Hud {
     this.pcard = root.querySelector('.pcard')!;
     this.power = root.querySelector('.power')!;
     this.tring = root.querySelector('.tring')!;
+    this.edgeEl = root.querySelector('.edgearrow')!;
     this.radar = root.querySelector('.radar')!;
     this.conn = root.querySelector('.conn')!;
     this.banner = root.querySelector('.banner')!;
@@ -335,6 +340,16 @@ export class Hud {
       o.style.width = o.style.height = `${size}px`;
       this.tring.classList.toggle('good', rg.q < 0.2);
     } else this.tring.style.display = 'none';
+    // Your man off the screen: an arrow at the edge points to him.
+    const ed = info.edge;
+    if (ed) {
+      this.edgeEl.style.display = 'block';
+      this.edgeEl.style.left = `${ed.x}px`;
+      this.edgeEl.style.top = `${ed.y}px`;
+      (this.edgeEl.firstElementChild as HTMLElement).style.transform = `translate(-50%, -50%) rotate(${ed.angle}rad)`;
+      const b = this.edgeEl.lastElementChild as HTMLElement;
+      if (b.textContent !== ed.label) b.textContent = ed.label;
+    } else if (this.edgeEl.style.display !== 'none') this.edgeEl.style.display = 'none';
     // Restart hint for a human taker.
     const r = v.restart;
     if (r && r.ready && lt !== undefined && r.team === lt && v.ctl[lt] === r.taker && v.humans[lt]) {

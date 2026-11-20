@@ -4,7 +4,7 @@
 import { MATCH } from './config';
 import type { Mentality } from './config';
 import { cleanTactics, type Tactics } from './teams';
-import type { InputEvent, InputFrame } from './types';
+import { SWITCH_SENS, SWITCH_STYLES, type InputEvent, type InputFrame, type SwitchSens, type SwitchStyle } from './types';
 import { ALL_CLUBS, TEAMS } from './teams';
 import type { RankedRecord } from './ranked';
 
@@ -14,7 +14,7 @@ export type ClientMsg =
   | { t: 'hello'; v: number; token?: string; name?: string }
   | { t: 'create'; name: string }
   | { t: 'join'; code: string; name: string }
-  | { t: 'lobby'; club?: string; kit?: 'home' | 'away'; mentality?: Mentality; minutes?: number; ready?: boolean; swap?: boolean }
+  | { t: 'lobby'; club?: string; kit?: 'home' | 'away'; mentality?: Mentality; minutes?: number; ready?: boolean; swap?: boolean; sw?: [SwitchStyle, SwitchSens] }
   | { t: 'in'; f: InputFrame[] }
   | { t: 'ping'; c: number }
   | { t: 'tactic'; mentality: Mentality; tac?: Tactics }
@@ -149,6 +149,8 @@ export function parseClientMsg(raw: string): ClientMsg | null {
       if (x.minutes !== undefined) { if (!MATCH.allowedRealMinutes.includes(x.minutes as number)) return null; out.minutes = x.minutes as number; }
       if (x.ready !== undefined) { if (typeof x.ready !== 'boolean') return null; out.ready = x.ready; }
       if (x.swap !== undefined) out.swap = x.swap === true;
+      // Your auto-switch style and sensitivity (20 Nov 2026); anything else is ignored.
+      if (Array.isArray(x.sw) && SWITCH_STYLES.includes(x.sw[0]) && SWITCH_SENS.includes(x.sw[1])) out.sw = [x.sw[0], x.sw[1]];
       return out;
     }
     case 'in': {
