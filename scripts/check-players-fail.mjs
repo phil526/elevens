@@ -1,5 +1,6 @@
 // Check: with the realistic player files blocked (BLOCK=models/ Q=?test), Kick off must still reach the match.
 // Usage: npm run build && BLOCK=models/ Q=?test CHROMIUM_PATH=/opt/pw-browsers/chromium node scripts/check-players-fail.mjs
+import { spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 const PORT = 8811, BASE = `http://127.0.0.1:${PORT}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
