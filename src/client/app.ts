@@ -13,7 +13,8 @@ import { partnerships } from '../shared/ai/mates3';
 import { defaultConfig } from '../shared/match';
 import { cleanWeather, rollWeatherKind, rollWind, windText, type MatchWeather, type WeatherKind } from '../shared/weather';
 import type { RoomState, ServerMsg } from '../shared/protocol';
-import { ROOM_CODE_RE } from '../shared/protocol';
+import { ROOM_CODE_RE, FORMAT_SEATS } from '../shared/protocol';
+import type { RoomFormat, AiDiff } from '../shared/protocol';
 import { clockText, minuteText } from '../shared/snapshot';
 import { ALL_CLUBS, BADGE_EMBLEMS, BADGE_SHAPES, FLAVOURS, FLAVOUR_NAMES, FORMATIONS, FORMATION_NAMES, TEAMS, benchFor, buildCustomClub, footProfile, defaultTactics, isCustomId, playableClubs, statLine as defStats, teamById, teamRatings, type CustomClubSpec, type PlayerDef, type Formation, type Kit, type Tactics, type TeamDef } from '../shared/teams';
 import type { MatchConfig, MatchEvent, Player, TeamIndex, TeamStats } from '../shared/types';
@@ -1062,6 +1063,14 @@ export class App {
   /** Marker style (P number - 1) for each human, indexed team * 2 + slot; undefined outside local multiplayer. */
   private slotStyles(): number[] | undefined {
     const seats = this.localPlaying;
+    const os = this.session instanceof OnlineSession ? this.session.start : null;
+    if (!seats && os && os.format && os.format !== '1v1') {
+      // Online team rooms: you P1 yellow, your teammate the third colour, the other side the second and fourth.
+      const me = os.side, them = 1 - os.side;
+      const out = [-1, -1, -1, -1];
+      out[me * 2] = 0; out[me * 2 + 1] = 2; out[them * 2] = 1; out[them * 2 + 1] = 3;
+      return out;
+    }
     if (!seats) return undefined;
     const out = [-1, -1, -1, -1];
     for (const st of seats) out[st.team * 2 + st.slot] = st.player - 1;
@@ -2360,7 +2369,7 @@ export class App {
       ${pens ? `<div class="final small">Penalties ${pens[0]} – ${pens[1]}</div>` : ''}
       ${this.motm(v)}
       ${this.scorers(v)}${this.statsBlock(v)}
-      <p class="note rematch-note">${online && !this.room?.ranked ? 'A rematch starts when both players choose it.' : ''}</p>
+      <p class="note rematch-note">${online && !this.room?.ranked ? ((this.room?.format ?? '1v1') === '1v1' ? 'A rematch starts when both players choose it.' : 'A rematch starts when everyone chooses it.') : ''}</p>
       ${online && this.room?.ranked ? `<div class="rank-note">${this.rankRes ? rankedResultHtml(this.rankRes) : '<p class="note">Updating your division…</p>'}</div>` : ''}
       ${compNote}
       ${this.levelNote}
@@ -3329,7 +3338,7 @@ export class App {
     const name = this.settings.name;
     this.set(`<div class="panel narrow">
       <h2>Online match</h2>
-      <p class="note">Play one other person. You each control one club; the computer runs your teammates.</p>
+      <p class="note">Play one other person, two against two, or team up with a friend against the computer. Each person controls one player at a time; the computer runs the rest of the team.</p>
       <p class="note server-state">${this.serverStateText()}</p>
       <button class="btn big" data-a="ranked">Ranked match<small class="note"> · climb the divisions</small></button>
       <div class="field"><label for="nm">Your name</label><input id="nm" type="text" maxlength="16" value="${esc(name)}" placeholder="Player" autocomplete="nickname"></div>
@@ -3481,7 +3490,7 @@ export class App {
         break;
       }
       case 'start': {
-        this.onlineStart = { side: m.side, teams: m.teams, kits: m.kits, minutes: m.minutes, mentality: m.mentality, weather: m.weather };
+        this.onlineStart = { side: m.side, slot: m.slot, format: m.format, teams: m.teams, kits: m.kits, minutes: m.minutes, mentality: m.mentality, weather: m.weather };
         const info = this.onlineStart;
         if (this.session instanceof OnlineSession) this.session.dispose();
         this.loading(`Building ${groundInSentence(groundFor(teamById(info.teams[0])).name)}…`, () => {
@@ -3497,8 +3506,14 @@ export class App {
       }
       case 'opp':
         if (this.session instanceof OnlineSession) {
-          this.session.oppStatus = m.status === 'disconnected' ? `Opponent reconnecting (${Math.round((m.graceMs ?? 0) / 1000)} s)` : '';
-          this.hud.toast(m.status === 'disconnected' ? 'Opponent lost connection. The computer controls their team while they reconnect.' : m.status === 'reconnected' ? 'Opponent reconnected' : 'Opponent left the match', 4000);
+          const who = m.who ? esc(m.who) : 'Opponent';
+          if (m.mate) {
+            // Two against two or together against the computer: play goes on, the computer covers.
+            this.hud.toast(m.status === 'disconnected' ? `${who} lost connection. The computer plays for them while they reconnect.` : m.status === 'reconnected' ? `${who} is back` : `${who} left. The computer plays for them.`, 4000);
+          } else {
+            this.session.oppStatus = m.status === 'disconnected' ? `Opponent reconnecting (${Math.round((m.graceMs ?? 0) / 1000)} s)` : '';
+            this.hud.toast(m.status === 'disconnected' ? 'Opponent lost connection. The computer controls their team while they reconnect.' : m.status === 'reconnected' ? 'Opponent reconnected' : 'Opponent left the match', 4000);
+          }
         } else if (m.status === 'left' && this.screenName === 'lobby') this.renderLobby();
         break;
       case 'end':
@@ -3543,9 +3558,12 @@ export class App {
       this.renderLobby();
     } else if (r.state === 'results' && this.overlay === 'fulltime') {
       const note = this.ui.querySelector('.rematch-note');
-      const other = r.seats[1 - r.you];
-      if (note && r.rematch[1 - r.you]) note.textContent = 'Your opponent wants a rematch.';
-      if (note && !other) note.textContent = 'Your opponent has left.';
+      const others = FORMAT_SEATS[r.format ?? '1v1'].filter((i) => i !== r.you);
+      const team = (r.format ?? '1v1') !== '1v1';
+      const keen = others.filter((i) => r.rematch[i] && r.seats[i]).map((i) => r.seats[i]!.name);
+      if (note && keen.length) note.textContent = team ? `${keen.join(' and ')} ${keen.length > 1 ? 'want' : 'wants'} a rematch.` : 'Your opponent wants a rematch.';
+      if (note && others.some((i) => !r.seats[i])) note.textContent = team ? 'A player has left, so there is no rematch in this room.' : 'Your opponent has left.';
+      if (others.some((i) => !r.seats[i])) this.ui.querySelector('[data-a=rematch]')?.setAttribute('disabled', '');
     }
   }
 
@@ -3572,34 +3590,63 @@ export class App {
       this.on('[data-a=rleave]', () => { this.net?.send({ t: 'leave' }); this.room = null; this.showRanked(); });
       return;
     }
-    const me = r.seats[r.you]!, other = r.seats[1 - r.you];
+    const me = r.seats[r.you]!;
     const host = r.host === r.you;
+    const fmt: RoomFormat = r.format ?? '1v1';
+    const active = FORMAT_SEATS[fmt];
+    const mySide = r.you % 2;
+    const others = active.filter((i) => i !== r.you);
+    const missing = others.filter((i) => !r.seats[i]).length;
+    const clubOf = (side: number) => r.clubs?.[side] ?? r.seats[side]?.club ?? r.seats[side + 2]?.club ?? TEAMS[side].id;
+    const kitOf = (side: number) => r.kits?.[side] ?? r.seats[side]?.kit ?? r.seats[side + 2]?.kit ?? 'home';
     // Keep any ?server= override so the link works when the client and server are hosted apart.
     const q = new URLSearchParams(location.search);
     q.delete('test');
     q.set('room', r.code);
     const link = `${location.origin}${location.pathname}?${q.toString()}`;
-    const seat = (s: typeof me | null, label: string) => s
-      ? `<div class="club ${s === me ? 'on' : ''}"><span class="abbr">${label}</span><span class="name">${esc(s.name)}</span>
-         <span>${esc(teamById(s.club).name)} ${this.kitSwatch(s.club, s.kit)} · ${s.mentality}</span>
+    const label = (i: number) => i === r.you ? (i === r.host ? 'You (host)' : 'You')
+      : `${fmt === '1v1' ? (i === r.host ? 'Host' : 'Guest') : i % 2 === mySide ? 'Teammate' : 'Opponent'}${fmt !== '1v1' && i === r.host ? ' (host)' : ''}`;
+    const seat = (i: number) => {
+      const s = r.seats[i];
+      return s
+        ? `<div class="club ${i === r.you ? 'on' : ''}" data-seat="${i}"><span class="abbr">${label(i)}</span><span class="name">${esc(s.name)}</span>
+         ${fmt === '1v1' ? `<span>${esc(teamById(s.club).name)} ${this.kitSwatch(s.club, s.kit)} · ${s.mentality}</span>` : ''}
          <span>${s.connected ? '<span class="badge ok">Connected</span>' : '<span class="badge bad">Disconnected</span>'} ${s.ready ? '<span class="badge ok">Ready</span>' : '<span class="badge warn">Not ready</span>'}</span></div>`
-      : `<div class="club"><span class="abbr">${label}</span><span class="name">Waiting…</span><span class="note">Share the code or link below.</span></div>`;
+        : `<div class="club" data-seat="${i}"><span class="abbr">Free place</span><span class="name">Waiting…</span><span class="note">Share the code or link below.</span></div>`;
+    };
+    const DIFF_WORD: Record<AiDiff, string> = { casual: 'Casual', pro: 'Pro', elite: 'Elite' };
+    const sideCol = (side: number) => {
+      const club = clubOf(side), kit = kitOf(side);
+      const head = `<div class="side-head">${clubBadge(teamById(club), 20)} <b>${esc(teamById(club).name)}</b> ${this.kitSwatch(club, kit)}${side === mySide ? ' <span class="badge ok">Your team</span>' : ''}</div>`;
+      if (fmt === 'coop' && side === 1) return `<div class="lobby-side">${head}<div class="club cpu"><span class="abbr">Computer</span><span class="name">${DIFF_WORD[r.aiDiff ?? 'pro']}</span><span class="note">The computer runs the whole team.</span></div></div>`;
+      return `<div class="lobby-side">${head}${[side, side + 2].filter((i) => active.includes(i)).map(seat).join('')}</div>`;
+    };
+    const teamWord = fmt === '1v1' ? 'your opponent' : 'everyone';
+    const notReady = others.filter((i) => r.seats[i] && !r.seats[i]!.ready).map((i) => r.seats[i]!.name);
     const status = this.net?.status === 'reconnecting' ? 'Reconnecting to the server…'
-      : r.state === 'countdown' ? `Both ready. Kick-off in ${Math.ceil(r.countdown / 1000)}…`
-      : !other ? 'Waiting for an opponent to join.' : !other.connected ? 'Opponent disconnected.' : !me.ready ? 'Press Ready when you are happy with the settings.' : !other.ready ? 'Waiting for your opponent to get ready.' : '';
+      : r.state === 'countdown' ? `${fmt === '1v1' ? 'Both' : 'Everyone'} ready. Kick-off in ${Math.ceil(r.countdown / 1000)}…`
+      : missing ? (fmt === '1v1' ? 'Waiting for an opponent to join.' : `Waiting for ${missing} more ${missing > 1 ? 'players' : 'player'} to join.`)
+      : others.some((i) => !r.seats[i]!.connected) ? (fmt === '1v1' ? 'Opponent disconnected.' : 'A player has disconnected.')
+      : !me.ready ? 'Press Ready when you are happy with the settings.'
+      : notReady.length ? (fmt === '1v1' ? 'Waiting for your opponent to get ready.' : `Waiting for ${notReady.map(esc).join(' and ')} to get ready.`) : '';
+    const fmtWord = { '1v1': '1 v 1', '2v2': '2 v 2', coop: 'Together v computer' } as const;
+    const fmtNote = fmt === '1v1' ? 'One against one: you each control a club.' : fmt === '2v2' ? 'Two against two: you and a teammate share a club against two others. Each of you controls one player; the computer runs the rest.' : 'You and a friend share a club against the computer. Each of you controls one player; the computer runs the rest.';
     this.set(`<div class="panel">
       <div class="row between"><h2>Private room</h2><span class="bigcode">${r.code}</span></div>
       <div class="row"><input type="text" readonly value="${esc(link)}" style="flex:1;min-width:200px;font-size:14px" id="link"><button class="btn small" data-a="copy">Copy link</button></div>
-      <div class="grid2" style="margin-top:14px">${seat(r.seats[0], r.you === 0 ? 'You (host)' : 'Host')}${seat(r.seats[1], r.you === 1 ? 'You' : 'Guest')}</div>
+      <div class="row between" style="margin-top:12px"><span class="lbl">Format${host ? '' : ' (host chooses)'}</span>${host ? this.seg('fmt', (['1v1', '2v2', 'coop'] as RoomFormat[]).map((f) => [f, fmtWord[f]]), fmt) : `<span>${fmtWord[fmt]}</span>`}</div>
+      <p class="note">${fmtNote}</p>
+      <div class="grid2 lobby-sides" style="margin-top:10px">${sideCol(0)}${sideCol(1)}</div>
       <div class="stack" style="margin-top:14px">
-        <div class="row between"><span class="lbl">Club${host ? '' : ' (host chooses)'}</span>${host ? `<button class="btn small" data-a="swap">Swap clubs</button>` : `<span>${esc(teamById(me.club).name)}</span>`}</div>
-        <div class="row between"><span class="lbl">Your kit</span>${this.seg('kit', [['home', 'Home'], ['away', 'Away']], me.kit)}</div>
-        <div class="row between"><span class="lbl">Your tactics</span>${this.seg('ment', [['defensive', 'Defensive'], ['balanced', 'Balanced'], ['attacking', 'Attacking']], me.mentality)}</div>
+        <div class="row between"><span class="lbl">Clubs${host ? '' : ' (host chooses)'}</span>${host ? `<button class="btn small" data-a="swap">Swap clubs</button>` : `<span>${esc(teamById(clubOf(mySide)).name)}</span>`}</div>
+        ${fmt === 'coop' ? `<div class="row between"><span class="lbl">Computer${host ? '' : ' (host chooses)'}</span>${host ? this.seg('aidiff', [['casual', 'Casual'], ['pro', 'Pro'], ['elite', 'Elite']], r.aiDiff ?? 'pro') : `<span>${DIFF_WORD[r.aiDiff ?? 'pro']}</span>`}</div>` : ''}
+        <div class="row between"><span class="lbl">${fmt === '1v1' ? 'Your kit' : 'Team kit'}</span>${this.seg('kit', [['home', 'Home'], ['away', 'Away']], me.kit)}</div>
+        <div class="row between"><span class="lbl">${fmt === '1v1' ? 'Your tactics' : 'Team tactics'}</span>${this.seg('ment', [['defensive', 'Defensive'], ['balanced', 'Balanced'], ['attacking', 'Attacking']], me.mentality)}</div>
         <div class="row between"><span class="lbl">Match length${host ? '' : ' (host chooses)'}</span>${host ? this.seg('min', MATCH.allowedRealMinutes.map((m) => [String(m), `${m} min`]), String(r.minutes)) : `<span>${r.minutes} min</span>`}</div>
       </div>
       <p class="note lobby-sig">${this.signalHtml()}</p>
-      <p class="note" style="margin-top:12px">${esc(status)}</p>
-      <div class="row end"><button class="btn" data-a="leave">Leave room</button><button class="btn ${me.ready ? '' : 'primary'}" data-a="ready" ${other ? '' : 'disabled'}>${me.ready ? 'Not ready' : 'Ready'}</button></div>
+      <p class="note lobby-status" style="margin-top:12px">${esc(status)}</p>
+      <div class="row end"><button class="btn" data-a="leave">Leave room</button><button class="btn ${me.ready ? '' : 'primary'}" data-a="ready" ${missing ? 'disabled' : ''} title="Ready when ${teamWord} has joined">${me.ready ? 'Not ready' : 'Ready'}</button></div>
     </div>`);
     const n = this.net!;
     this.on('[data-a=copy]', () => {
@@ -3611,6 +3658,8 @@ export class App {
     this.bindSeg('kit', (v) => n.send({ t: 'lobby', kit: v as 'home' | 'away' }));
     this.bindSeg('ment', (v) => n.send({ t: 'lobby', mentality: v as Mentality }));
     this.bindSeg('min', (v) => n.send({ t: 'lobby', minutes: Number(v) }));
+    this.bindSeg('fmt', (v) => n.send({ t: 'lobby', format: v as RoomFormat }));
+    this.bindSeg('aidiff', (v) => n.send({ t: 'lobby', aiDiff: v as AiDiff }));
     this.on('[data-a=ready]', () => n.send({ t: 'lobby', ready: !me.ready, sw: [this.settings.switchStyle ?? 'full', this.settings.switchSens ?? 'normal'] }));
     this.on('[data-a=leave]', () => { this.net?.close(); this.net = null; this.room = null; history.replaceState(null, '', location.pathname); this.showOnline(); });
   }

@@ -46,6 +46,9 @@ export interface Snapshot {
   mo?: number; // home crowd momentum, -1 (away on top) .. 1 (home on top), sent when not level
   /** Per side: 1 while the stick from before a switch is being ignored (the new man closes down the ball; 20 Nov 2026). */
   ca?: [number, number];
+  /** Online team rooms (20 Nov 2026): each side's co-op mate's player (-1 none), and which of the two the receiving seat is (1 = the mate). */
+  mt?: [number, number];
+  sl?: 0 | 1;
 }
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
@@ -78,6 +81,7 @@ export function encodeSnapshot(m: Match, ack: number, events: MatchEvent[], with
     gp: m.plan[0] !== 'balanced' || m.plan[1] !== 'balanced' ? [GAME_PLANS.indexOf(m.plan[0]), GAME_PLANS.indexOf(m.plan[1])] : undefined,
     mo: Math.abs(m.momentum.value) > 0.005 ? r2(m.momentum.value) : undefined,
     ca: switchCarry(m, 0) || switchCarry(m, 1) ? [switchCarry(m, 0) ? 1 : 0, switchCarry(m, 1) ? 1 : 0] : undefined,
+    mt: m.mates[0] || m.mates[1] ? [m.mates[0]?.human ? m.mates[0].pid : -1, m.mates[1]?.human ? m.mates[1].pid : -1] : undefined,
   };
 }
 

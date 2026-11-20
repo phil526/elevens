@@ -37,6 +37,9 @@ const KICK_OF: Record<string, 'pass' | 'through' | 'lob' | 'shot'> = { pass: 'pa
 
 export interface StartInfo {
   side: 0 | 1;
+  /** Team rooms: 1 when this device drives its side's co-op mate control (it can change mid-match). */
+  slot?: 0 | 1;
+  format?: import('../../shared/protocol').RoomFormat;
   teams: [string, string];
   kits: ['home' | 'away', 'home' | 'away'];
   minutes: number;
@@ -104,6 +107,11 @@ export class OnlineSession implements Session {
     };
   }
 
+  /** Which of the side's two controls this device drives, from the latest snapshot (team rooms). */
+  private slotIn(s: Snapshot): 0 | 1 { return s.sl ?? this.start.slot ?? 0; }
+  /** The player this device controls in a snapshot. */
+  private myPid(s: Snapshot): number { return this.slotIn(s) === 1 ? s.mt?.[this.start.side] ?? -1 : s.ctl[this.start.side]; }
+
   /** Feed a snapshot from the network. */
   push(s: Snapshot, recvAt: number) {
     this.lastSnapAt = recvAt;
@@ -134,7 +142,8 @@ export class OnlineSession implements Session {
 
   private repredict(s: Snapshot) {
     const side = this.start.side;
-    const pid = s.ctl[side];
+    const pid = this.myPid(s);
+    if (pid < 0) { this.dropPrediction(); return; }
     const o = pid * PLAYER_STRIDE;
     const action = ACTIONS[s.p[o + 6]];
     const phase = PHASES[s.ph];
@@ -143,7 +152,7 @@ export class OnlineSession implements Session {
     // stick still held from the pass being ignored), so follow it rather than predict from the stick.
     const receiving = BALL_STATES[s.b[6]] === 'flight' && s.b[10] === pid;
     // Just switched while defending: the server runs him at the ball until the stick is let go or moved.
-    const closing = s.ca?.[side] === 1;
+    const closing = this.slotIn(s) === 0 && s.ca?.[side] === 1;
     const canPredict = this.predictionEnabled && phase === 'play' && action === 'none' && !(BALL_STATES[s.b[6]] === 'held') && !receiving && !closing;
     if (!canPredict) { this.dropPrediction(); return; }
     const m: MoverState = {
@@ -320,7 +329,14 @@ export class OnlineSession implements Session {
     v.score = b.sc;
     v.restart = b.r ? { type: RESTARTS[b.r[0]], team: b.r[1], taker: b.r[2], ready: b.r[3] === 1, spot: { x: b.r[4], z: b.r[5] }, readyT: b.r[6], aim: { x: b.r[7] ?? b.r[4], z: b.r[8] ?? b.r[5] }, quick: b.r[9] === 1, curve: b.r[10] ?? 0, dip: b.r[11] ?? 0, shake: b.r[12] ?? 0, stutter: b.r[13] === 1, gkCommit: b.r[14] ? b.r[14] - 2 : undefined } : null;
     v.momentum = undefined; // no home crowd online (room.ts)
-    v.ctl = b.ctl;
+    v.ctl = [b.ctl[0], b.ctl[1]];
+    v.mates = b.mt ? [b.mt[0], b.mt[1]] : undefined;
+    // Driving the side's mate control: swap the two so ctl[side] is always this device's player
+    // (and the partner shows as the mate).
+    if (this.slotIn(b) === 1 && v.mates) {
+      const sd = this.start.side;
+      [v.ctl[sd], v.mates[sd]] = [v.mates[sd], v.ctl[sd]];
+    }
     v.next = b.nx;
     v.humans = [b.hu[0] === 1, b.hu[1] === 1];
     v.attackDir = b.ad;
@@ -344,7 +360,7 @@ export class OnlineSession implements Session {
 
     // Local prediction overrides the interpolated position of our controlled player.
     const latest = this.snaps[this.snaps.length - 1];
-    const pid = latest.ctl[this.start.side];
+    const pid = this.myPid(latest);
     if (this.predicted && this.predFor === pid) {
       const p = v.players[pid];
       const before = { x: p.pos.x, z: p.pos.z };

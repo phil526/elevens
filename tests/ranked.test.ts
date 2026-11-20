@@ -89,8 +89,8 @@ describe('ranked over the network', () => {
     b.send({ t: 'ranked', id: '3'.repeat(32), key: '4'.repeat(32), name: 'Bob', club: clubs[7].id });
     const ra = await a.wait('rank');
     expect(ra.rec.points).toBe(0);
-    const room = await a.wait('room', (m) => !!m.ranked && m.seats.every(Boolean));
-    expect(room.seats.map((x) => x!.club).sort()).toEqual([clubs[5].id, clubs[7].id].sort());
+    const room = await a.wait('room', (m) => !!m.ranked && m.seats.slice(0, 2).every(Boolean));
+    expect(room.seats.slice(0, 2).map((x) => x!.club).sort()).toEqual([clubs[5].id, clubs[7].id].sort());
     await a.wait('start', () => true, 9000);
     b.send({ t: 'leave' });
     const res = await a.wait('rankres');

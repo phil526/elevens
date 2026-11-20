@@ -534,6 +534,30 @@ export class Match {
     for (const p of this.teamPlayers(team)) p.queued = null;
   }
 
+  /**
+   * Online team rooms: a seat's human drops (the computer takes that control) or comes back.
+   * Slot 1 is the co-op mate. When the main control's human drops while the mate's is still
+   * there, or the mate comes back to a side the computer runs, the two controls swap so the side
+   * keeps its main human; returns true when they swapped (the room swaps the seats' slots).
+   */
+  setSeatHuman(team: TeamIndex, slot: 0 | 1, human: boolean): boolean {
+    const mt = this.mates[team];
+    if (slot === 1) {
+      if (!mt) return false;
+      if (human && !this.ctrl[team].human) { this.swapMate(team); this.setHuman(team, true); return true; }
+      mt.human = human; mt.input = emptyInput(); this.matePending[team] = [];
+      return false;
+    }
+    if (!human && mt?.human) {
+      this.swapMate(team);
+      const m = this.mates[team]!;
+      m.human = false; m.input = emptyInput(); this.matePending[team] = [];
+      return true;
+    }
+    this.setHuman(team, human);
+    return false;
+  }
+
   /** Apply one input frame for a team. Validated and clamped; events are queued in order. */
   applyInput(team: TeamIndex, f: InputFrame, slot: 0 | 1 = 0) {
     if (slot === 1) { this.asMate(team, () => this.applyInput(team, f)); return; }

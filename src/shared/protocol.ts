@@ -8,13 +8,13 @@ import { SWITCH_SENS, SWITCH_STYLES, type InputEvent, type InputFrame, type Swit
 import { ALL_CLUBS, TEAMS } from './teams';
 import type { RankedRecord } from './ranked';
 
-export const PROTOCOL_VERSION = 15;
+export const PROTOCOL_VERSION = 16;
 
 export type ClientMsg =
   | { t: 'hello'; v: number; token?: string; name?: string }
   | { t: 'create'; name: string }
   | { t: 'join'; code: string; name: string }
-  | { t: 'lobby'; club?: string; kit?: 'home' | 'away'; mentality?: Mentality; minutes?: number; ready?: boolean; swap?: boolean; sw?: [SwitchStyle, SwitchSens] }
+  | { t: 'lobby'; club?: string; kit?: 'home' | 'away'; mentality?: Mentality; minutes?: number; ready?: boolean; swap?: boolean; sw?: [SwitchStyle, SwitchSens]; format?: RoomFormat; aiDiff?: AiDiff }
   | { t: 'in'; f: InputFrame[] }
   | { t: 'ping'; c: number }
   | { t: 'tactic'; mentality: Mentality; tac?: Tactics }
@@ -25,6 +25,20 @@ export type ClientMsg =
   | { t: 'ranked'; id: string; key: string; name: string; club: string; saved?: { rec: RankedRecord; sig: string } }
   | { t: 'unranked' }
   | { t: 'board' };
+
+/**
+ * Private room formats (20 Nov 2026): one against one; two against two (each side two people,
+ * the computer runs their other teammates); or two people together against the computer.
+ */
+export type RoomFormat = '1v1' | '2v2' | 'coop';
+export const ROOM_FORMATS: RoomFormat[] = ['1v1', '2v2', 'coop'];
+export type AiDiff = 'casual' | 'pro' | 'elite';
+export const AI_DIFFS: AiDiff[] = ['casual', 'pro', 'elite'];
+/**
+ * Seats by format. Seat i plays for side i % 2; seats 2 and 3 are each side's second player (the
+ * co-op mate). Seats 0 and 1 are the 1 v 1 seats, as before.
+ */
+export const FORMAT_SEATS: Record<RoomFormat, number[]> = { '1v1': [0, 1], '2v2': [0, 1, 2, 3], coop: [0, 2] };
 
 export interface LobbySeat {
   name: string;
@@ -38,13 +52,21 @@ export interface LobbySeat {
 export interface RoomState {
   t: 'room';
   code: string;
-  you: 0 | 1;
+  /** Your seat (0-3; your side is you % 2). */
+  you: number;
+  /** Four seats (unused ones null). */
   seats: (LobbySeat | null)[];
+  format?: RoomFormat;
+  /** Together against the computer: how good the computer side is. */
+  aiDiff?: AiDiff;
+  /** The two sides' clubs and kits (the computer side's too, which has no seat). */
+  clubs?: [string, string];
+  kits?: ['home' | 'away', 'home' | 'away'];
   minutes: number;
   state: 'lobby' | 'countdown' | 'match' | 'results';
   countdown: number;
-  rematch: [boolean, boolean];
-  host: 0 | 1;
+  rematch: boolean[];
+  host: number;
   /** A ranked match (no lobby settings; the result moves both players' division points). */
   ranked?: boolean;
 }
@@ -53,9 +75,9 @@ export type ServerMsg =
   | { t: 'welcome'; token: string; resumed: boolean }
   | RoomState
   | { t: 'err'; code: ErrCode; msg: string }
-  | { t: 'start'; side: 0 | 1; teams: [string, string]; kits: ['home' | 'away', 'home' | 'away']; minutes: number; mentality: [Mentality, Mentality]; weather?: import('./weather').MatchWeather }
+  | { t: 'start'; side: 0 | 1; slot?: 0 | 1; format?: RoomFormat; teams: [string, string]; kits: ['home' | 'away', 'home' | 'away']; minutes: number; mentality: [Mentality, Mentality]; weather?: import('./weather').MatchWeather }
   | { t: 'pong'; c: number; s: number }
-  | { t: 'opp'; status: 'disconnected' | 'reconnected' | 'left'; graceMs?: number }
+  | { t: 'opp'; status: 'disconnected' | 'reconnected' | 'left'; graceMs?: number; who?: string; mate?: boolean }
   | { t: 'end'; reason: 'fulltime' | 'abandoned' | 'opponent_left' }
   /** Ranked: your record (and whether you are queued, and how many are waiting). */
   | { t: 'rank'; rec: RankedRecord; queued: boolean; waiting: number; sig?: string }
@@ -151,6 +173,8 @@ export function parseClientMsg(raw: string): ClientMsg | null {
       if (x.swap !== undefined) out.swap = x.swap === true;
       // Your auto-switch style and sensitivity (20 Nov 2026); anything else is ignored.
       if (Array.isArray(x.sw) && SWITCH_STYLES.includes(x.sw[0]) && SWITCH_SENS.includes(x.sw[1])) out.sw = [x.sw[0], x.sw[1]];
+      if (x.format !== undefined) { if (!ROOM_FORMATS.includes(x.format as RoomFormat)) return null; out.format = x.format as RoomFormat; }
+      if (x.aiDiff !== undefined) { if (!AI_DIFFS.includes(x.aiDiff as AiDiff)) return null; out.aiDiff = x.aiDiff as AiDiff; }
       return out;
     }
     case 'in': {
