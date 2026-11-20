@@ -611,3 +611,16 @@ ul.partners small { opacity: 0.7; margin-left: 6px; }
 .club .pstyle { display: inline-block; font-size: 12px; letter-spacing: 0.05em; color: var(--accent); text-transform: uppercase; }
 .club-sum .note.pstyle { display: block; color: var(--accent); }
 .club.mini .pstyle { font-size: 11px; }
+
+/* Move to another device (Profile > Save slots, 20 Nov 2026) */
+.xfer { margin-top: 18px; padding: 14px; border-radius: 12px; background: var(--ink-2); border: 1px solid var(--line); }
+.xfer h3 { margin-top: 0; }
+.xfer-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 8px; }
+.xfer-cols > div { display: flex; flex-direction: column; gap: 8px; }
+@media (max-width: 640px) { .xfer-cols { grid-template-columns: 1fr; } }
+.xfer-enter input { width: 7.5em; text-transform: uppercase; letter-spacing: 0.2em; font-weight: 700; }
+.xfer-code { display: flex; flex-direction: column; gap: 4px; padding: 10px; border-radius: 10px; background: rgba(0,0,0,0.25); border: 1px dashed var(--accent); }
+.xfer-code b { font-size: 30px; letter-spacing: 0.12em; font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--accent); }
+.xfer-confirm { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 10px; border: 1px solid #e0a040; background: rgba(224,160,64,0.12); }
+.xfer-err { color: #ff8a7a; margin-top: 8px; }
+.xfer-ok, .xfer-busy { margin-top: 8px; }

@@ -29,7 +29,8 @@ import { attachKeyboard, KeyboardState } from './input/keyboard';
 import { attachMouse, MouseSource } from './input/mouse';
 import { isTouchDevice, TouchControls, TouchModel, type TouchContext } from './input/touch';
 import { NetClient } from './net/netclient';
-import { isLocalHost, onServerState, PLAY_URL, serverState, wakeServer } from './net/hosting';
+import { isLocalHost, onServerState, PLAY_URL, serverState, serverUrl, wakeServer } from './net/hosting';
+import { TransferPanel } from './transfer';
 import { OnlineSession, type StartInfo } from './net/online';
 import { AUTO_RES_MIN, GameRenderer, realisticPlayers } from './render/renderer';
 import { MOW_NAMES, MOW_PATTERNS, type MowSetting } from './render/vfx';
@@ -2546,12 +2547,14 @@ export class App {
           return `<div class="slot ${on ? 'on' : ''}"><b>${esc(q.name)}</b><span class="note">Slot ${i + 1} · since ${q.created}</span><span>${q.stats.played} played · ${q.stats.won} won · ${q.trophies.length} trophies · ${Object.keys(q.achievements).length} achievements</span>
             <div class="row wrap">${on ? '<span class="badge ok">In use</span>' : `<button class="btn small primary" data-use="${i}">Use this slot</button>`}<button class="btn small" data-ren="${i}">Rename</button><button class="btn small danger" data-wipe="${i}">${this.slotConfirm === i ? 'Sure? Press again' : 'Delete'}</button></div></div>`;
         }).join('')}</div>
-        <div class="field" style="margin-top:14px"><label for="pname">Profile name</label><input id="pname" type="text" maxlength="18" value="${esc(p.name)}" autocomplete="nickname"></div>`;
+        <div class="field" style="margin-top:14px"><label for="pname">Profile name</label><input id="pname" type="text" maxlength="18" value="${esc(p.name)}" autocomplete="nickname"></div>
+        ${this.transfer.html()}`;
     }
     this.set(`<div class="panel"><h2>${esc(p.name)}</h2>${tabs}<div class="ptab-body">${body}</div>
       <div class="row end" style="margin-top:16px"><button class="btn" data-a="back">Back</button></div></div>`, 'scroll');
     this.bindSeg('ptab', (v) => { this.profileTab = v as typeof this.profileTab; this.slotConfirm = -1; this.showProfile(); });
     this.on('[data-a=back]', () => { this.slotConfirm = -1; this.showMode(); });
+    if (tab === 'slots') this.transfer.bind();
     this.on('[data-a=newclub]', () => this.openCreator(null));
     this.on('[data-edit]', (el) => this.openCreator(p.clubs.find((c) => c.id === el.dataset.edit) ?? null));
     this.on('[data-del]', (el) => {
@@ -2585,6 +2588,15 @@ export class App {
   }
 
   private delClub = '';
+  /** Profile > Save slots: move every save to another device with a code or a file (20 Nov 2026). */
+  private transfer = new TransferPanel({
+    on: (sel, fn) => this.on(sel, fn),
+    root: () => this.ui,
+    redraw: () => { if (this.screenName === 'profile' && this.profileTab === 'slots') this.showProfile(); },
+    serverUrl: () => serverUrl(),
+    wake: () => wakeServer(),
+    reload: () => location.reload(),
+  });
 
   private useSlot(i: number) {
     if (!this.store.slots[i]) return;

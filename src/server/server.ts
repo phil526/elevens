@@ -9,6 +9,7 @@ import { NET, SIM } from '../shared/config';
 import { parseClientMsg, PROTOCOL_VERSION, ROOM_CODE_RE, type ServerMsg } from '../shared/protocol';
 import { newCode, newToken, Room, type Conn } from './room';
 import { RankQueue, RankStore } from './ranked';
+import { TransferStore } from './transfer';
 
 export interface ServerOptions {
   port: number;
@@ -57,6 +58,8 @@ export class GameServer {
   private log: (m: string) => void;
   tickMs = 0;
   ranks: RankStore;
+  /** Saves on their way to another device (held in memory for 30 minutes). */
+  transfer = new TransferStore();
   queue = new RankQueue<Client>();
   private lastPair = 0;
 
@@ -170,6 +173,7 @@ export class GameServer {
 
   private serveHttp(req: IncomingMessage, res: import('node:http').ServerResponse) {
     const url = new URL(req.url ?? '/', 'http://x');
+    if (url.pathname === '/transfer' || url.pathname.startsWith('/transfer/')) { this.transfer.handle(req, res, url); return; }
     if (url.pathname === '/health') {
       // Any page may ask (the game wakes a sleeping server with this before going online).
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', 'access-control-allow-origin': '*' });
