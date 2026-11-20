@@ -1537,6 +1537,16 @@ export class App {
   }
 
   /** What Settings says about the announcer's voice. */
+  /** Whether the recorded crowd and match sounds loaded (Settings > Audio), so a quiet or odd-sounding match can be reported. */
+  private soundStatus(): string {
+    const a = this.audio;
+    if (!a.ctx) return 'Crowd and match sounds: they load after your first tap or key press.';
+    const st = a.sampleStatus;
+    if (!a.loaded) return `Crowd and match sounds: loading (${st.loaded} of ${st.total})…`;
+    if (!st.failed) return `Crowd and match sounds: all ${st.total} loaded.`;
+    return `Crowd and match sounds: ${st.failed} of ${st.total} could not load (${esc(st.error)}).`;
+  }
+
   private voiceStatus(): string {
     const a = this.announcer;
     if (!a.available) return 'This browser has no speech, so the stadium announcer stays quiet.';
@@ -2806,6 +2816,7 @@ export class App {
         <div class="row between"><span class="lbl">Master</span>${range('master', s.audio.master)}</div>
         <div class="row between"><span class="lbl">Effects</span>${range('effects', s.audio.effects)}</div>
         <div class="row between"><span class="lbl">Crowd</span>${range('crowd', s.audio.crowd)}</div>
+        <p class="note sound-status">${this.soundStatus()}</p>
         <div class="row between"><span class="lbl">Menu music</span>${range('music', s.audio.music)}</div>
         <div class="row between"><span class="lbl">Music</span>${this.seg('music', [['on', 'On'], ['off', 'Off']], s.audio.musicOn ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Commentary</span>${this.seg('commentator', [['voice', 'Voice and captions'], ['captions', 'Captions'], ['off', 'Off']], s.commentator ?? 'captions')}</div>

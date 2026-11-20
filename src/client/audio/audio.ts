@@ -81,9 +81,10 @@ export class GameAudio {
   private settings: AudioSettings;
   private crowdTarget = 0; // silent until a match is running
   private samples: Partial<Record<SampleName, AudioBuffer>> = {};
-  private synthCrowd!: GainNode; // synthesised murmur: silent unless the recorded crowd failed to load
-  /** Every recorded sound has been tried (loaded or failed). Until then nothing falls back to noise. */
+  /** Every recorded sound has been tried (loaded or failed). */
   loaded = false;
+  /** How the recorded sounds got on (Settings > Audio shows it). */
+  sampleStatus = { loaded: 0, failed: 0, total: Object.keys(SAMPLES).length, error: '' };
   private bed: GainNode | null = null;
   private surge: GainNode | null = null; // lifts the crowd bed as a shot goes in, under the reaction
   private nextChant = 0;
@@ -182,21 +183,26 @@ export class GameAudio {
   /** Loads every recorded sound that exists; a missing or broken file just keeps the synthesised one. */
   private async loadSamples() {
     const ctx = this.ctx!;
+    const st = this.sampleStatus;
     const load = async (k: SampleName) => {
-      try {
-        const r = await fetch(this.sfxBase + SAMPLES[k]);
-        if (!r.ok) return;
-        const buf = await r.arrayBuffer();
-        this.samples[k] = await decode(ctx, buf);
-      } catch { /* keep the synthesised fallback */ }
+      const url = this.sfxBase + SAMPLES[k];
+      for (let i = 0; i < 3 && !this.samples[k]; i++) {
+        if (i) await new Promise((ok) => setTimeout(ok, 700 * i * i));
+        try {
+          const r = await fetch(url);
+          if (!r.ok) { st.error = `${SAMPLES[k]}: HTTP ${r.status}`; if (r.status === 404) break; continue; }
+          const buf = await r.arrayBuffer();
+          this.samples[k] = await decode(ctx, buf);
+        } catch (e) { st.error = `${SAMPLES[k]}: ${String((e as Error)?.message ?? e).slice(0, 80)}`; }
+      }
+      if (this.samples[k]) st.loaded++; else st.failed++;
     };
     // The stadium beds first, so the crowd is there as early as possible on a slow connection.
     await Promise.all((['crowdA', 'crowdB'] as SampleName[]).map(load));
     this.startBed();
     await Promise.all((Object.keys(SAMPLES) as SampleName[]).filter((k) => k !== 'crowdA' && k !== 'crowdB').map(load));
     this.loaded = true;
-    // Only if no recorded crowd could be loaded at all does the synthesised murmur stand in.
-    if (!this.bed) this.synthCrowd.gain.setTargetAtTime(1, ctx.currentTime, 1);
+    if (st.failed) console.warn(`[audio] ${st.failed} of ${st.total} sounds could not load (${st.error})`);
   }
 
   /** True once a recorded sound has loaded (tests and the settings screen use it). */
@@ -266,42 +272,11 @@ export class GameAudio {
 
   private startCrowd() {
     const ctx = this.ctx!;
-    // Stadium murmur: warm, low-passed "brown" noise in two soft bands. It stays
-    // at zero until a match calls setCrowdIntensity, so menus are silent.
+    // The crowd is the recordings only (startBed). There used to be a synthesised murmur of filtered
+    // noise as well, and on phones it was heard as a white-noise hiss; if the recordings can't load
+    // the match is simply quieter. crowdLevel stays as the level the bed and chants follow.
     this.crowdLevel = ctx.createGain();
     this.crowdLevel.gain.value = 0;
-    const warm = ctx.createBiquadFilter();
-    warm.type = 'lowpass';
-    warm.frequency.value = 900;
-    warm.Q.value = 0.5;
-    this.synthCrowd = ctx.createGain();
-    this.synthCrowd.gain.value = 0; // see loadSamples: only a fallback
-    this.synthCrowd.connect(this.crowdBus);
-    warm.connect(this.synthCrowd);
-    this.crowdLevel.connect(warm);
-    const brown = ctx.createBuffer(1, this.noise!.length, ctx.sampleRate);
-    const w = this.noise!.getChannelData(0), b = brown.getChannelData(0);
-    let last = 0;
-    for (let i = 0; i < b.length; i++) { last = (last + 0.02 * w[i]) / 1.02; b[i] = last * 3.5; }
-    for (const [f, q, g] of [[320, 0.8, 0.6], [650, 1.0, 0.22]] as const) {
-      const src = ctx.createBufferSource();
-      src.buffer = brown;
-      src.loop = true;
-      const bp = ctx.createBiquadFilter();
-      bp.type = 'bandpass';
-      bp.frequency.value = f;
-      bp.Q.value = q;
-      const gain = ctx.createGain();
-      gain.gain.value = g;
-      const lfo = ctx.createOscillator();
-      lfo.frequency.value = 0.13 + Math.random() * 0.1;
-      const lfoGain = ctx.createGain();
-      lfoGain.gain.value = g * 0.35;
-      lfo.connect(lfoGain).connect(gain.gain);
-      src.connect(bp).connect(gain).connect(this.crowdLevel);
-      src.start();
-      lfo.start();
-    }
     this.crowdLevel.gain.setTargetAtTime(this.crowdTarget, ctx.currentTime, 1.5);
   }
 
@@ -609,26 +584,7 @@ export class GameAudio {
       case 'boo': if (this.play('boo', this.crowdBus, 0.55 * lvl, { dur: 3, fade: 0.4 })) return; return; // no synthesised boo
       case 'applause': if (this.play('applause', this.crowdBus, 0.6 * lvl, { offset: Math.random() * 14, dur: 7, fade: 0.8 })) return; return;
     }
-    // Still loading: stay quiet rather than play a burst of noise in place of the recording.
-    if (!this.loaded) return;
-    const now = ctx.currentTime;
-    const n = ctx.createBufferSource();
-    n.buffer = this.noise;
-    n.loop = true;
-    const bp = ctx.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.Q.value = 0.8;
-    const g = ctx.createGain();
-    const len = kind === 'goal' ? 4.5 : 1.6;
-    const peak = kind === 'goal' ? 0.9 : 0.4;
-    bp.frequency.setValueAtTime(kind === 'groan' ? 500 : 700, now);
-    bp.frequency.linearRampToValueAtTime(kind === 'ooh' ? 1100 : kind === 'goal' ? 1400 : 380, now + 0.6);
-    g.gain.setValueAtTime(0.0001, now);
-    g.gain.linearRampToValueAtTime(peak, now + (kind === 'goal' ? 0.5 : 0.35));
-    g.gain.setTargetAtTime(0.0001, now + len * 0.45, len * 0.25);
-    n.connect(bp).connect(g).connect(this.crowdBus);
-    n.start(now, Math.random());
-    n.stop(now + len + 1);
+    // Not loaded (yet): stay quiet. A synthesised burst of noise in its place sounded like white noise on phones.
   }
 
   click() {
