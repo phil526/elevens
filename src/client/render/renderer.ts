@@ -46,6 +46,7 @@ import type { Arena } from './arena';
 import { canvasTex } from './textures';
 import { ballMaterial, BallSpin } from './ball';
 import { ReactionDirector } from './reactions';
+import { GlCheck } from './glcheck';
 import { INJURY } from '../../shared/injury';
 import { firstTouchFor, makeGesture, tirednessFor } from './motion';
 import { possessionTeam } from '../view';
@@ -249,6 +250,8 @@ export class GameRenderer {
   private builtFor = '';
   // High and Ultra: multisampled HDR target, subtle bloom on floodlights and highlights, image-based light.
   private composer: EffectComposer | null = null;
+  /** Watches for draws the browser refuses and steps down to simpler drawing (render/glcheck.ts). */
+  private glCheck!: GlCheck;
   private bloom: UnrealBloomPass | null = null;
   private envMap: THREE.Texture | null = null;
   private grade: ShaderPass | null = null;
@@ -377,6 +380,7 @@ export class GameRenderer {
     this.renderer.toneMappingExposure = 1.05;
     // Count every pass of a frame (shadows, scene, post-processing) in the debug figures.
     this.renderer.info.autoReset = false;
+    this.glCheck = new GlCheck(this.renderer, canvas);
     this.camera = new BroadcastCamera(1);
     this.scene.fog = new THREE.Fog(0x27486f, 160, 420);
     this.hemi = new THREE.HemisphereLight(0xcfe3ff, 0x2f4a2a, 1.1);
@@ -420,7 +424,8 @@ export class GameRenderer {
     this.baseDpr = Math.min(MAX_DPR, Math.min(window.devicePixelRatio || 1, DPR_CAP[gfx.preset]) * scale);
     if (gfx.autoRes === false) this.dyn.reset();
     this.renderer.setPixelRatio(this.baseDpr * this.dyn.scale);
-    const shadows = gfx.shadows && q > 0;
+    // Safe level 1 and up: no shadows (the graphics check saw this browser refuse draws).
+    const shadows = gfx.shadows && q > 0 && this.glCheck.level < 1;
     this.renderer.shadowMap.enabled = shadows;
     // Always PCF. three r186 dropped PCFSoftShadowMap: it switches to PCF only when the shadows are
     // drawn, after the materials were built for "soft", which sample the shadow map the wrong way.
@@ -461,7 +466,7 @@ export class GameRenderer {
     }
     this.scene.environment = q >= 2 ? this.envMap : null;
     this.scene.environmentIntensity = 0.22;
-    this.setupPost(q);
+    this.setupPost(this.glCheck.level >= 2 ? 0 : q);
     this.sky.setQuality(q);
     this.marks.setQuality(q);
     this.wet.setQuality(q);
@@ -937,6 +942,7 @@ export class GameRenderer {
   /** Build (or rebuild) the scene for a match between these teams/kits. */
   setupMatch(teams: [TeamDef, TeamDef], kits: ['home' | 'away', 'home' | 'away'], weather?: MatchWeather) {
     this.wantPlayers();
+    this.glCheck.rearm();
     this.chooseWeather(weather);
     this.chooseMowing();
     this.feed?.reset();
@@ -1490,17 +1496,29 @@ export class GameRenderer {
     this.updateFeed(view, dt);
     this.marks.flush(this.renderer);
     // The wet pitch's mirror image, drawn before the frame itself.
-    if (this.grassU?.uReflOn && this.grassU.uRefl && this.grassU.uReflMat) {
+    if (this.grassU?.uReflOn && this.grassU.uRefl && this.grassU.uReflMat && this.glCheck.level < 2) {
       this.camera.cam.updateMatrixWorld();
       const on = this.wet.render(this.renderer, this.scene, this.camera.cam, wet);
       this.grassU.uReflOn.value = on ? this.reflGain : 0;
       if (on) { this.grassU.uRefl.value = this.wet.target!.texture; this.grassU.uReflMat.value.copy(this.wet.matrix); }
     }
     if (this.composer) this.composer.render();
-    else if (this.dofW > 0.02) {
+    else if (this.dofW > 0.02 && this.glCheck.level < 2) {
       // Medium: blur round the focus, more for close shots (as a real lens), up to 1.4% of the screen.
       this.liteDof.render(this.renderer, this.scene, this.camera.cam, this.dofFocus, (4 / Math.max(4, this.dofFocus)) * this.dofW, 0.014 * this.dofW);
     } else this.renderer.render(this.scene, this.camera.cam);
+    if (this.glCheck.afterFrame()) this.stepDownGraphics();
+  }
+
+  /** The browser refused some drawing: rebuild with the next safer level (shadows off, then plain drawing). */
+  private stepDownGraphics() {
+    if (this.grassU?.uReflOn) this.grassU.uReflOn.value = 0;
+    this.applyGraphics(this.gfx);
+    // Materials were built for the old set-up (shadow samplers and all): build them again.
+    this.scene.traverse((o) => {
+      const m = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+      if (Array.isArray(m)) for (const x of m) x.needsUpdate = true; else if (m) m.needsUpdate = true;
+    });
   }
 
   /** A team's captain on the pitch now (the armband; the first outfielder still on if he has gone off). */
@@ -1542,7 +1560,7 @@ export class GameRenderer {
   private updateFeed(view: ViewState, dt: number) {
     const q = QUALITY[this.gfx.preset];
     const arena = this.stadium?.userData.arena as Arena | undefined;
-    if (q === 0 || this.gfx.bigScreen === 'scores' || !arena) {
+    if (q === 0 || this.gfx.bigScreen === 'scores' || !arena || this.glCheck.level >= 2) {
       if (this.feed) { this.feed.dispose(); this.feed = null; }
       return;
     }

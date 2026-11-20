@@ -33,6 +33,7 @@ import { OnlineSession, type StartInfo } from './net/online';
 import { AUTO_RES_MIN, GameRenderer, realisticPlayers } from './render/renderer';
 import { MOW_NAMES, MOW_PATTERNS, type MowSetting } from './render/vfx';
 import { loadPlayerAssets, playerAssetStatus } from './render/realplayer';
+import { glStatusText } from './render/glcheck';
 import type { CameraMode } from './render/camera';
 import { loadSettings, saveSettings, type Settings } from './settings';
 import { controlsTable, guideLine } from './ui/controls';
@@ -2849,6 +2850,7 @@ export class App {
         <div class="row between"><span class="lbl">Shadows</span>${this.seg('shadows', [['on', 'On'], ['off', 'Off']], s.graphics.shadows ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Players</span>${this.seg('players', [['realistic', 'Realistic'], ['classic', 'Classic']], s.graphics.players ?? 'realistic')}</div>
         ${realisticPlayers(s.graphics) ? `<p class="note players-status">${({ idle: 'Realistic players: not loaded yet', loading: 'Realistic players: loading…', ready: 'Realistic players: loaded', failed: `Realistic players could not load, so simple players are shown (${esc(playerAssetStatus.detail)})` } as const)[playerAssetStatus.state]}</p>` : ''}
+        <p class="note gl-status">${esc(glStatusText())}</p>
         <div class="row between"><span class="lbl">Match time</span>${this.seg('matchTime', [['day', 'Day'], ['dusk', 'Dusk'], ['night', 'Night']], s.graphics.matchTime ?? 'dusk')}</div>
         <div class="row between"><span class="lbl">Weather</span>${this.seg('weather', [['random', 'Random'], ['clear', 'Clear'], ['rain', 'Rain'], ['snow', 'Snow']], s.graphics.weather ?? 'random')}</div>
         <div class="row between"><span class="lbl">Wind</span>${this.seg('wind', [['on', 'On'], ['off', 'Off']], s.wind !== false ? 'on' : 'off')}</div>
