@@ -1,13 +1,15 @@
 import type { Tactics } from '../../shared/teams';
 import type { Rated } from '../../shared/ratings';
 import { benchFor } from '../../shared/teams';
-// Online match view: snapshot interpolation (100 ms buffer) for everything,
-// plus prediction of the locally controlled player's movement, reconciled by
-// replaying unacknowledged input from each authoritative snapshot. The ball is
-// never predicted (only drawn relative to a locally predicted dribbler).
+// Online match view: snapshot interpolation for everything (the buffer adapts to how steadily
+// snapshots arrive: about 75 ms on a good link, up to 160 ms on a patchy one), plus prediction
+// of the locally controlled player's movement, reconciled by replaying unacknowledged input
+// from each authoritative snapshot. Kicks and tackles are shown at once (the animation starts
+// on the button press; the server's result follows). The ball is never predicted (only drawn
+// relative to a locally predicted dribbler).
 
 import type { Mentality } from '../../shared/config';
-import { GAME_PLANS, NET, SIM, type GamePlan } from '../../shared/config';
+import { GAME_PLANS, NET, PLAYER, SIM, type GamePlan } from '../../shared/config';
 import { cleanWeather, weatherPlay, type MatchWeather, type WeatherPlay } from '../../shared/weather';
 import { angleOf } from '../../shared/math';
 import { carrierMove, stepMovement, type MoveMode, type MoverState } from '../../shared/movement';
@@ -16,16 +18,28 @@ import { teamById, type TeamDef } from '../../shared/teams';
 import type { Attributes, InputFrame, MatchEvent, TeamStats } from '../../shared/types';
 import { emptyStats } from '../../shared/types';
 import type { ActionLayer } from '../input/actions';
-import type { ConnInfo, Session } from '../game/session';
+import { signalBars, type ConnInfo, type Session } from '../game/session';
 import type { ViewState } from '../view';
 import { possessionTeam } from '../view';
 import type { NetClient } from './netclient';
 
 const TICK_MS = 1000 / SIM.tickRate;
-const INTERP_TICKS = (NET.interpDelayMs / 1000) * SIM.tickRate;
+/** The interpolation buffer stays within these (ms); it starts at NET.interpDelayMs. */
+export const INTERP_MIN_MS = 60, INTERP_MAX_MS = 160;
+
+/** How far behind the server to draw, from the mean gap between snapshots and how much it varies. */
+export function interpTarget(gapMs: number, jitterMs: number): number {
+  return Math.max(INTERP_MIN_MS, Math.min(INTERP_MAX_MS, gapMs * 1.15 + jitterMs * 2.5 + 12));
+}
+
+/** Kick kinds by button (the server's startKick uses the same). */
+const KICK_OF: Record<string, 'pass' | 'through' | 'lob' | 'shot'> = { pass: 'pass', through: 'through', lob: 'lob', shoot: 'shot' };
 
 export interface StartInfo {
   side: 0 | 1;
+  /** Team rooms: 1 when this device drives its side's co-op mate control (it can change mid-match). */
+  slot?: 0 | 1;
+  format?: import('../../shared/protocol').RoomFormat;
   teams: [string, string];
   kits: ['home' | 'away', 'home' | 'away'];
   minutes: number;
@@ -59,6 +73,18 @@ export class OnlineSession implements Session {
   private instrEvents: number[] = [];
   private instr = new Array(11).fill(0);
   predictionEnabled = true;
+  /** Interpolation buffer (ms), adapting to the snapshot timing; gap and jitter are smoothed (ms). */
+  interpMs: number = NET.interpDelayMs;
+  private gapMs = 1000 / SIM.snapshotRate;
+  private gapJitter = 8;
+  private prevRecv = -1;
+  /** Share of snapshots arriving late (smoothed). */
+  private lateShare = 0;
+  /**
+   * A kick or tackle pressed on this device, drawn at once on the controlled player (the server's
+   * own action replaces it when it arrives; if the server never starts one, it is dropped soon).
+   */
+  private predAct: { pid: number; type: 'kick' | 'tackle' | 'slide'; kind?: 'pass' | 'through' | 'lob' | 'shot'; t: number; dur: number; confirm: number; seen: boolean } | null = null;
 
   constructor(public start: StartInfo, private net: NetClient, private actions: ActionLayer) {
     this.localTeams = [start.side];
@@ -81,9 +107,24 @@ export class OnlineSession implements Session {
     };
   }
 
+  /** Which of the side's two controls this device drives, from the latest snapshot (team rooms). */
+  private slotIn(s: Snapshot): 0 | 1 { return s.sl ?? this.start.slot ?? 0; }
+  /** The player this device controls in a snapshot. */
+  private myPid(s: Snapshot): number { return this.slotIn(s) === 1 ? s.mt?.[this.start.side] ?? -1 : s.ctl[this.start.side]; }
+
   /** Feed a snapshot from the network. */
   push(s: Snapshot, recvAt: number) {
     this.lastSnapAt = recvAt;
+    // Snapshot timing: the mean gap and how much it varies set the interpolation buffer.
+    if (this.prevRecv >= 0) {
+      const gap = recvAt - this.prevRecv;
+      if (gap < 1000) {
+        this.gapJitter = this.gapJitter * 0.92 + Math.abs(gap - this.gapMs) * 0.08;
+        this.gapMs = this.gapMs * 0.95 + gap * 0.05;
+        this.lateShare = this.lateShare * 0.97 + (gap > this.gapMs * 1.8 ? 0.03 : 0);
+      }
+    }
+    this.prevRecv = recvAt;
     const est = s.t - recvAt / TICK_MS;
     // Track the server clock; ignore late packets when estimating, snap on big jumps (tab was hidden).
     if (this.tickOffset === null || Math.abs(est - this.tickOffset) > 30) this.tickOffset = est;
@@ -101,7 +142,8 @@ export class OnlineSession implements Session {
 
   private repredict(s: Snapshot) {
     const side = this.start.side;
-    const pid = s.ctl[side];
+    const pid = this.myPid(s);
+    if (pid < 0) { this.dropPrediction(); return; }
     const o = pid * PLAYER_STRIDE;
     const action = ACTIONS[s.p[o + 6]];
     const phase = PHASES[s.ph];
@@ -110,7 +152,7 @@ export class OnlineSession implements Session {
     // stick still held from the pass being ignored), so follow it rather than predict from the stick.
     const receiving = BALL_STATES[s.b[6]] === 'flight' && s.b[10] === pid;
     // Just switched while defending: the server runs him at the ball until the stick is let go or moved.
-    const closing = s.ca?.[side] === 1;
+    const closing = this.slotIn(s) === 0 && s.ca?.[side] === 1;
     const canPredict = this.predictionEnabled && phase === 'play' && action === 'none' && !(BALL_STATES[s.b[6]] === 'held') && !receiving && !closing;
     if (!canPredict) { this.dropPrediction(); return; }
     const m: MoverState = {
@@ -174,6 +216,7 @@ export class OnlineSession implements Session {
         const cm = ownsBall ? carrierMove(m.a, mode, !!f.close) : { mode, speed: 1, accel: 1, turn: 1 };
         stepMovement(m, f.mx, f.mz, cm.mode, SIM.dt, face, (ownsBall ? 0.92 : 1) * cm.speed * this.wp.speed, cm.accel * this.wp.accel, cm.turn * this.wp.turn);
       }
+      this.predictAction(f.ev);
       if (this.planEvent >= 0 && f.ev.length < 4) { f.ev.push({ k: 'plan', p: this.planEvent / 4 }); this.planEvent = -1; }
       while (this.instrEvents.length && f.ev.length < 4) f.ev.push({ k: 'instr', p: this.instrEvents.shift()! / 32 });
       if (this.outbox.length >= 2 || f.ev.length) {
@@ -184,12 +227,47 @@ export class OnlineSession implements Session {
     const k = Math.exp(-dt * 10);
     this.smooth.x *= k;
     this.smooth.z *= k;
+    // The buffer drifts towards its target slowly (a few ms a second), so play never jumps.
+    const target = interpTarget(this.gapMs, this.gapJitter);
+    this.interpMs += Math.max(-dt * 12, Math.min(dt * 25, target - this.interpMs));
+    if (this.predAct) {
+      this.predAct.t += dt;
+      this.predAct.confirm -= dt;
+      if (this.predAct.t >= this.predAct.dur || (!this.predAct.seen && this.predAct.confirm <= 0)) this.predAct = null;
+    }
     this.buildView(now);
+  }
+
+  /** Start drawing a kick or tackle the moment it is pressed (the server decides what happens). */
+  private predictAction(ev: InputFrame['ev']) {
+    if (!this.predictionEnabled || this.predAct || !ev.length) return;
+    const v = this.v;
+    const pid = v.ctl[this.start.side];
+    if (pid < 0 || v.phase !== 'play' || v.players[pid]?.action.type !== 'none') return;
+    const me = v.players[pid];
+    const own = v.ball.owner === pid && v.ball.state === 'dribble';
+    const theirs = v.ball.state === 'dribble' && v.ball.owner >= 0 && v.players[v.ball.owner].team !== this.start.side;
+    // Long enough for the round trip and the interpolation buffer, then give up if nothing came.
+    const confirm = Math.min(0.6, (Math.max(0, this.net.latency) + this.interpMs) / 1000 + 0.12);
+    for (const e of ev) {
+      const kind = KICK_OF[e.k];
+      if (!kind) continue;
+      if (own) {
+        const w = kind === 'shot' ? (e.v === 'power' ? PLAYER.shotWindup + 0.08 : PLAYER.shotWindup) : PLAYER.kickWindup;
+        this.predAct = { pid, type: 'kick', kind, t: 0, dur: w + 0.28, confirm, seen: false };
+        return;
+      }
+      if (theirs && me.role !== 'GK' && !e.m) {
+        if (e.k === 'pass' || e.k === 'shoot') this.predAct = { pid, type: 'tackle', t: 0, dur: PLAYER.tackleDuration, confirm, seen: false };
+        else if (e.k === 'lob') this.predAct = { pid, type: 'slide', t: 0, dur: PLAYER.slideDuration, confirm, seen: false };
+        if (this.predAct) return;
+      }
+    }
   }
 
   private buildView(now: number) {
     if (!this.snaps.length || this.tickOffset === null) return;
-    const renderTick = now / TICK_MS + this.tickOffset - INTERP_TICKS;
+    const renderTick = now / TICK_MS + this.tickOffset - (this.interpMs / 1000) * SIM.tickRate;
     let a = this.snaps[0], b = this.snaps[0];
     for (let i = 0; i < this.snaps.length; i++) {
       if (this.snaps[i].t <= renderTick) a = this.snaps[i];
@@ -251,7 +329,14 @@ export class OnlineSession implements Session {
     v.score = b.sc;
     v.restart = b.r ? { type: RESTARTS[b.r[0]], team: b.r[1], taker: b.r[2], ready: b.r[3] === 1, spot: { x: b.r[4], z: b.r[5] }, readyT: b.r[6], aim: { x: b.r[7] ?? b.r[4], z: b.r[8] ?? b.r[5] }, quick: b.r[9] === 1, curve: b.r[10] ?? 0, dip: b.r[11] ?? 0, shake: b.r[12] ?? 0, stutter: b.r[13] === 1, gkCommit: b.r[14] ? b.r[14] - 2 : undefined } : null;
     v.momentum = undefined; // no home crowd online (room.ts)
-    v.ctl = b.ctl;
+    v.ctl = [b.ctl[0], b.ctl[1]];
+    v.mates = b.mt ? [b.mt[0], b.mt[1]] : undefined;
+    // Driving the side's mate control: swap the two so ctl[side] is always this device's player
+    // (and the partner shows as the mate).
+    if (this.slotIn(b) === 1 && v.mates) {
+      const sd = this.start.side;
+      [v.ctl[sd], v.mates[sd]] = [v.mates[sd], v.ctl[sd]];
+    }
     v.next = b.nx;
     v.humans = [b.hu[0] === 1, b.hu[1] === 1];
     v.attackDir = b.ad;
@@ -275,7 +360,7 @@ export class OnlineSession implements Session {
 
     // Local prediction overrides the interpolated position of our controlled player.
     const latest = this.snaps[this.snaps.length - 1];
-    const pid = latest.ctl[this.start.side];
+    const pid = this.myPid(latest);
     if (this.predicted && this.predFor === pid) {
       const p = v.players[pid];
       const before = { x: p.pos.x, z: p.pos.z };
@@ -288,6 +373,22 @@ export class OnlineSession implements Session {
         // Draw our dribbled ball relative to the predicted player to avoid visible lag.
         v.ball.pos.x += p.pos.x - before.x;
         v.ball.pos.z += p.pos.z - before.z;
+      }
+    }
+    // A kick or tackle pressed here: drawn from the press (ahead of the server's, which replaces it).
+    const pa = this.predAct;
+    if (pa) {
+      const p = v.players[pa.pid];
+      if (pa.pid !== v.ctl[this.start.side] && !pa.seen) this.predAct = null;
+      else if (p.action.type === pa.type) {
+        pa.seen = true;
+        // The server's own action is behind ours by the round trip: keep ours until it catches up.
+        if (p.action.t < pa.t) p.action = { ...p.action, t: pa.t };
+        else this.predAct = null;
+      } else if (pa.seen) {
+        this.predAct = null; // the server's action is over
+      } else if (p.action.type === 'none') {
+        p.action = pa.type === 'kick' ? { type: 'kick', t: pa.t, dur: pa.dur, kind: pa.kind } : { type: pa.type, t: pa.t, dur: pa.dur };
       }
     }
     // Release events once the rendered timeline reaches them.
@@ -345,7 +446,8 @@ export class OnlineSession implements Session {
     if (this.oppStatus) return { show: true, state: this.oppStatus, latency: this.net.latency, colour: '#ffb020' };
     if (stale) return { show: true, state: 'Waiting for server…', latency: this.net.latency, colour: '#ffb020' };
     const lat = this.net.latency;
-    return { show: true, state: 'Online', latency: lat, colour: lat > 180 ? '#ffb020' : '#3ee08f' };
+    const bars = signalBars(lat, Math.max(this.net.jitter, this.gapJitter), this.lateShare);
+    return { show: true, state: 'Online', latency: lat, colour: bars <= 1 ? '#ff5a5f' : bars === 2 ? '#ffb020' : '#3ee08f', bars };
   }
 
   /** After the tab was hidden: discard stale snapshots and resynchronise. */
@@ -357,7 +459,7 @@ export class OnlineSession implements Session {
 
   debugText() {
     const last = this.snaps[this.snaps.length - 1];
-    return `online  latency ${this.net.latency.toFixed(0)} ms  status ${this.net.status}\nserver tick ${last?.t ?? '-'}  buffered ${this.snaps.length}  pending inputs ${this.pending.length}\nack ${last?.ack ?? '-'}  predicted ${this.predicted ? 'yes' : 'no'}  smooth ${Math.hypot(this.smooth.x, this.smooth.z).toFixed(2)} m\nphase ${this.v.phase}  ball ${this.v.ball.state}/${this.v.ball.flight} owner ${this.v.ball.owner}\ncontrolled ${this.v.ctl[this.start.side]}`;
+    return `online  latency ${this.net.latency.toFixed(0)} ms (jitter ${this.net.jitter.toFixed(0)})  buffer ${this.interpMs.toFixed(0)} ms (gap ${this.gapMs.toFixed(0)} ± ${this.gapJitter.toFixed(0)})  status ${this.net.status}\nserver tick ${last?.t ?? '-'}  buffered ${this.snaps.length}  pending inputs ${this.pending.length}\nack ${last?.ack ?? '-'}  predicted ${this.predicted ? 'yes' : 'no'}  smooth ${Math.hypot(this.smooth.x, this.smooth.z).toFixed(2)} m\nphase ${this.v.phase}  ball ${this.v.ball.state}/${this.v.ball.flight} owner ${this.v.ball.owner}\ncontrolled ${this.v.ctl[this.start.side]}`;
   }
 
   dispose() {}

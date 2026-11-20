@@ -4,9 +4,10 @@
 import { readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { NodeIO } from '@gltf-transform/core';
+import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
 
 const dir = process.argv[2];
-const io = new NodeIO();
+const io = new NodeIO().registerExtensions(ALL_EXTENSIONS);
 for (const f of readdirSync(dir).filter((f) => f.endsWith('.glb'))) {
   const doc = await io.read(join(dir, f));
   const { json, resources } = await io.writeJSON(doc, { format: 'gltf' });

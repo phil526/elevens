@@ -42,6 +42,8 @@ export class CineDirector {
   celebrate = false;
   /** Force the next celebration (tests and screenshots). */
   nextCeleb: CelebKind | null = null;
+  /** Club level reward: the local side's scorers always do this celebration. */
+  signature: { kind: CelebKind; team: 0 | 1 } | null = null;
   private celeb: { plan: CelebPlan; t: number; pos: THREE.Vector3; look: THREE.Vector3; r: GameRenderer; replay: boolean } | null = null;
   private celebDone = false;
   private introR: GameRenderer | null = null;
@@ -510,7 +512,7 @@ export class CineDirector {
       if (!mine.length) return false;
       scorer = mine[0].id;
     }
-    const kind = this.nextCeleb ?? celebKindFor(scorer, live.score[0] + live.score[1]);
+    const kind = this.nextCeleb ?? (this.signature && this.signature.team === team ? this.signature.kind : celebKindFor(scorer, live.score[0] + live.score[1]));
     this.nextCeleb = null;
     const plan = planCelebration(live, scorer, team, kind);
     this.celeb = { plan, t: 0, pos: new THREE.Vector3(), look: new THREE.Vector3(), r, replay: replayAfter };

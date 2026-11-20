@@ -71,7 +71,7 @@ export class BroadcastCamera {
     this.fx.v = 0;
     this.fz.x = view.ball.pos.z;
     this.fz.v = 0;
-    this.yawS.x = this.mode === 'broadcast' ? Math.atan2(this.fx.x, PITCH.halfWidth + 36 - (this.fz.x * 0.6 + 2)) : 0;
+    this.yawS.x = this.mode === 'broadcast' ? Math.atan2(this.fx.x, PITCH.halfWidth + (PITCH.walls ? 21 : 36) - (this.fz.x * 0.6 + 2)) : 0;
     this.yawS.v = 0;
   }
 
@@ -199,8 +199,10 @@ export class BroadcastCamera {
     const airborne = b.pos.y > 2 && Math.hypot(b.vel.x, b.vel.z) > 14;
     const z = this.zoom.step((s.reducedMotion ? 1 : airborne ? 1.12 : 1) * ZOOM[s.zoom], 1.2, dt);
     const h = HEIGHT[s.height];
-    const camY = 34 * h;
-    const camZ = PITCH.halfWidth + 36;
+    // A street cage is small: the gantry is lower and nearer, and keeps less of the pitch in shot.
+    const cage = PITCH.walls;
+    const camY = (cage ? 19 : 34) * h;
+    const camZ = PITCH.halfWidth + (cage ? 21 : 36);
     this.cam.position.set(0, camY, camZ);
     const lookZ = fz * 0.6 + 2;
     this.cam.lookAt(fx, 0, lookZ);
@@ -208,7 +210,7 @@ export class BroadcastCamera {
     const aspect = this.cam.aspect;
     const narrow = aspect < 1.3 ? 1 + (1.3 - aspect) * 0.6 : 1;
     const d = Math.hypot(fx, camY, camZ - lookZ);
-    const fov = THREE.MathUtils.radToDeg(2 * Math.atan((34 * z * narrow) / 2 / d));
+    const fov = THREE.MathUtils.radToDeg(2 * Math.atan(((cage ? 25 : 34) * z * narrow) / 2 / d));
     if (Math.abs(fov - this.cam.fov) > 0.01) { this.cam.fov = fov; this.cam.updateProjectionMatrix(); }
     // Heading for input: smoothed so a pan doesn't jerk the controls mid-run.
     this.inputYaw = this.yawS.step(Math.atan2(fx, camZ - lookZ), 3, dt);

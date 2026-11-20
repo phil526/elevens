@@ -13,7 +13,8 @@ import { partnerships } from '../shared/ai/mates3';
 import { defaultConfig } from '../shared/match';
 import { cleanWeather, rollWeatherKind, rollWind, windText, type MatchWeather, type WeatherKind } from '../shared/weather';
 import type { RoomState, ServerMsg } from '../shared/protocol';
-import { ROOM_CODE_RE } from '../shared/protocol';
+import { ROOM_CODE_RE, FORMAT_SEATS } from '../shared/protocol';
+import type { RoomFormat, AiDiff } from '../shared/protocol';
 import { clockText, minuteText } from '../shared/snapshot';
 import { ALL_CLUBS, BADGE_EMBLEMS, BADGE_SHAPES, FLAVOURS, FLAVOUR_NAMES, FORMATIONS, FORMATION_NAMES, TEAMS, benchFor, buildCustomClub, footProfile, defaultTactics, isCustomId, playableClubs, statLine as defStats, teamById, teamRatings, type CustomClubSpec, type PlayerDef, type Formation, type Kit, type Tactics, type TeamDef } from '../shared/teams';
 import type { MatchConfig, MatchEvent, Player, TeamIndex, TeamStats } from '../shared/types';
@@ -22,14 +23,18 @@ import { CineDirector, introCaption } from './cine';
 import { groundFor, groundInSentence } from '../shared/grounds';
 import { OfflineSession } from './game/offline';
 import { defaultPicks, listDevices, localKind, moveToken, seatsFor, splitKeyMap, SPLIT_KEYS, type LocalDevice, type Seat, type SidePick } from './game/local';
-import type { Session } from './game/session';
+import { signalBars, type Session } from './game/session';
 import { ActionLayer, type InputSource } from './input/actions';
 import { GamepadSource } from './input/gamepad';
 import { attachKeyboard, KeyboardState } from './input/keyboard';
 import { attachMouse, MouseSource } from './input/mouse';
 import { isTouchDevice, TouchControls, TouchModel, type TouchContext } from './input/touch';
 import { NetClient } from './net/netclient';
-import { isLocalHost, onServerState, PLAY_URL, serverState, wakeServer } from './net/hosting';
+import { isLocalHost, onServerState, PLAY_URL, serverState, serverUrl, wakeServer } from './net/hosting';
+import { TransferPanel } from './transfer';
+import { analysisHtml, MatchAnalysis, type AnalysisTab } from './analysis';
+import type { CelebKind } from './render/celebration';
+import { applyAccent, clearLevels, equipped, levelNoteHtml, levelOf, loadLevels, netColour, recordLevels, saveLevels, showLevels, titleOf, trailColour, type LevelStore, type MatchFacts } from './levels';
 import { OnlineSession, type StartInfo } from './net/online';
 import { AUTO_RES_MIN, GameRenderer, realisticPlayers } from './render/renderer';
 import { MOW_NAMES, MOW_PATTERNS, type MowSetting } from './render/vfx';
@@ -46,7 +51,7 @@ import { WEATHER_NAMES } from './render/weather';
 import type { ViewState } from './view';
 import { SLOW_MO, SlowMo } from './slowmo';
 import { CUP_SIZES, LEAGUE_SIZES, cupRounds, leagueTable, myFixture, newCompetition, opponentOf, recordResult, roundName, scoreText, type CompKind, type Competition, type Fixture } from '../shared/competition';
-import { ACHIEVEMENTS, SLOT_COUNT, applyClubs, goalSequence, loadStore, newProfile, recordMatch, recordTrophy, saveStore, today, unlock, type Achievement, type GoalDetail, type MatchSummary, type Profile, type ProfileStore } from './profile';
+import { ACHIEVEMENTS, SLOT_COUNT, applyClubs, goalSequence, loadStore, newProfile, recordMatch, recordTrophy, saveStore, today, trophyName, unlock, type Achievement, type GoalDetail, type MatchSummary, type Profile, type ProfileStore } from './profile';
 import { badgeSvg, clubBadge } from './ui/badge';
 import { CHARGE_SCALE, COLOUR_VISION, applyTextSize, pickOppKit, type ChargeSpeed, type ColourVision, type TextSize } from './access';
 import { Coach } from './tutorial';
@@ -61,6 +66,10 @@ import { Announcer, lineupLines, welcomeLines, type AnnounceTeam } from './audio
 import { captainIndex } from './render/look';
 import { loadChoice, loadMenuOpen, saveChoice, saveMenuOpen, type MatchChoice } from './quickmatch';
 import { ModeScreens, type ModeMatch } from './modes/screens';
+import { TournamentScreens } from './modes/tournament';
+import { StreetScreens } from './modes/street';
+import { addResult, friendsListHtml, leagueHtml, loadLeagues, mergeLeague, missingChunks, placeIn, saveLeagues, type LocalLeague } from './modes/friends';
+import { LEAGUE_CODE_RE, newLeagueCode } from '../shared/friends';
 import { clearModes } from './modes/store';
 import { ClipTheatre, makeClip, saveClip, shareVideo, type GoalClip } from './modes/clips';
 import type { SwitchSens, SwitchStyle } from '../shared/types';
@@ -398,7 +407,9 @@ export class App {
     onServerState(() => { const el = this.ui.querySelector('.server-state'); if (el) el.innerHTML = this.serverStateText(); });
     setTimeout(() => void wakeServer(), 1500);
     const room = new URLSearchParams(location.search).get('room');
+    const league = (new URLSearchParams(location.search).get('league') ?? '').toUpperCase();
     if (room && ROOM_CODE_RE.test(room.toUpperCase())) this.showOnline(room.toUpperCase());
+    else if (LEAGUE_CODE_RE.test(league)) this.openLeague(league);
     else this.showMode();
     requestAnimationFrame((t) => this.frame(t));
     // The live stadium starts once the title is on screen (building it takes a moment).
@@ -408,6 +419,8 @@ export class App {
   // ------------------------------------------------------------- frame loop
 
   private frame(now: number) {
+    // Battery saver: 30 frames a second (on a 60 Hz or 120 Hz screen, skip the frames in between).
+    if (this.settings.graphics.batterySaver && now - this.last < 28) { requestAnimationFrame((t) => this.frame(t)); return; }
     const raw = Math.max(0, now - this.last);
     const dt = Math.min(0.1, raw / 1000);
     this.last = now;
@@ -512,6 +525,7 @@ export class App {
       else if (e.type === 'offside' && e.player !== undefined && e.team !== undefined && this.renderer) this.cine.offside(v, e.player, e.team, this.renderer);
     }
     this.noteMoments(s, v, evs);
+    this.analysis.frame(v, evs);
     this.trackEvents(s, v, evs);
     this.commentator.frame(v, evs, dt, this.overlay === 'none' && !this.cine.active);
     this.matchToasts(v, evs);
@@ -685,6 +699,9 @@ export class App {
   /** The ceremony's caption if this result wins the competition for the player's club, else null. */
   private trophyCaption(v: ViewState): string | null {
     const s = this.session;
+    if (s instanceof OfflineSession && this.modeMatch?.kind === 'tournament') {
+      return this.tour.winsFinal(v) ? `<b>World champions</b><span>🌍</span><b>${esc(teamById(s.cfg.teams[0]).name)}</b><small>World tournament winners</small>` : null;
+    }
     const c = this.comp;
     if (!(s instanceof OfflineSession) || !this.compMatch || !c || c.champion || opponentOf(c) !== s.cfg.teams[1]) return null;
     const so = v.shootout;
@@ -709,8 +726,85 @@ export class App {
     });
   }
 
+  /** Club level, weekly challenges and rewards for the active save slot (20 Nov 2026). */
+  private levels: LevelStore = loadLevels(0);
+  private levelSlot = -1;
+  /** Friends leagues this device belongs to (20 Nov 2026), and the screen's state. */
+  private leagues: LocalLeague[] = loadLeagues();
+  private lgOpen: string | null = null;
+  private lgStatus = '';
+  private lgError = '';
+  private lgLeaving = false;
+  /** The line on the full-time panel once the league result is in. */
+  private lgNote = '';
+  /** Results already handed to the server this connection (so a refused one isn't sent again and again). */
+  private lgPushed = new Set<string>();
+  /** World tournament (20 Nov 2026). */
+  private tour = new TournamentScreens({
+    set: (h, c) => this.set(h, c), on: (sel, fn) => this.on(sel, fn), seg: (n, v, c) => this.seg(n, v, c), bindSeg: (n, fn) => this.bindSeg(n, fn),
+    home: () => this.showMode(), play: (m) => this.playMode(m), slot: () => this.store.active, choice: () => this.choice,
+    trophy: (nation) => { this.profile.trophies.push({ kind: 'world', club: nation, clubName: teamById(nation).name, size: 16, date: today() }); this.saveProfile(); },
+  });
+  /** 5-a-side street matches (20 Nov 2026). */
+  private street = new StreetScreens({
+    set: (h, c) => this.set(h, c), on: (sel, fn) => this.on(sel, fn), seg: (n, v, c) => this.seg(n, v, c), bindSeg: (n, fn) => this.bindSeg(n, fn),
+    home: () => this.showMode(), play: (m) => this.playMode(m), slot: () => this.store.active, choice: () => this.choice,
+  });
+  /** What the last match did for the club level (shown on the full-time panel). */
+  private levelNote = '';
+
+  private syncLevels() {
+    if (this.levelSlot === this.store.active) return;
+    this.levelSlot = this.store.active;
+    this.levels = loadLevels(this.levelSlot);
+    applyAccent(equipped(this.levels, 'accent'));
+  }
+
+  /** The renderer wears your rewards: match ball, net and trail colours (your club's shirt for the club ones). */
+  private dressRenderer(r: GameRenderer, mine: TeamDef, kit: 'home' | 'away', side: 0 | 1) {
+    this.syncLevels();
+    const club = mine[kit].shirt;
+    r.cosmetics = { ball: equipped(this.levels, 'ball'), net: netColour(equipped(this.levels, 'net'), club), trail: trailColour(equipped(this.levels, 'trail'), club) };
+    this.cine.signature = this.levels.celebration && levelOf(this.levels.xp).level >= 13 ? { kind: this.levels.celebration as CelebKind, team: side } : null;
+  }
+
+  private openLevels() {
+    this.syncLevels();
+    this.screenName = 'levels';
+    showLevels({ set: (h, c) => this.set(h, c), on: (sel, fn) => this.on(sel, fn), back: () => this.showMode(), changed: () => saveLevels(this.levelSlot, this.levels) }, this.levels);
+  }
+
+  /** Match analysis (20 Nov 2026): shot map with xG, heat maps, pass map, momentum and a tip. */
+  private analysis = new MatchAnalysis();
+  private analysisTab: AnalysisTab = 'shots';
+  private heatTeam: 0 | 1 = 0;
+
+  private analysisButton() {
+    return this.analysis.active ? '<button class="btn" data-a="analysis">Match analysis</button>' : '';
+  }
+
+  private bindAnalysis(v: ViewState, back: (v: ViewState) => void) {
+    this.on('[data-a=analysis]', () => { this.heatTeam = (this.session?.localTeams[0] ?? 0) as 0 | 1; this.openAnalysis(v, back); });
+  }
+
+  private openAnalysis(v: ViewState, back: (v: ViewState) => void) {
+    const me = (this.session?.localTeams[0] ?? 0) as 0 | 1;
+    const tabs = this.seg('antab', [['shots', 'Shots'], ['heat', 'Heat map'], ['passes', 'Passes'], ['momentum', 'Momentum']], this.analysisTab);
+    this.ui.innerHTML = `<div class="screen translucent"><div class="panel narrow analysis">
+      <h3 style="text-align:center">Match analysis</h3>
+      ${tabs}
+      <div class="an-body">${analysisHtml(this.analysis, v, this.analysisTab, me, this.heatTeam)}</div>
+      <div class="row end"><button class="btn primary" data-a="anback" autofocus>Back</button></div>
+    </div></div>`;
+    this.bindSeg('antab', (t) => { this.analysisTab = t as AnalysisTab; this.openAnalysis(v, back); });
+    this.on('[data-heat]', (el) => { this.heatTeam = Number(el.dataset.heat) as 0 | 1; this.openAnalysis(v, back); });
+    this.on('[data-a=anback]', () => back(v));
+  }
+
   /** The last shot struck (for commentary on how good it was). */
   private lastShotCall = { t: -99, great: false };
+  /** Commentator bookkeeping: the restart already called, the late-on line, the last kick's kind. */
+  private talk = { restart: '', late: false, kick: '' };
 
   /** Rumble the controller if it is in use and rumble is on. */
   /** The match config's auto-switch style and sensitivity, from Settings (both sides; a computer side ignores them). */
@@ -762,6 +856,7 @@ export class App {
       switch (e.type) {
         case 'kick':
           this.audio.kick(e.power ?? 10, e.x ?? 0, e.text);
+          if (e.text !== 'touch') this.talk.kick = e.text ?? '';
           if (e.text === 'shot' || e.text === 'volley') {
             this.audio.anticipate();
             this.lastShotCall = { t: now, great: (e.power ?? 0) >= 24 || PITCH.halfLength - Math.abs(e.x ?? 0) >= 22 };
@@ -775,29 +870,48 @@ export class App {
             if (e.text !== 'manual') this.buzz(0.1, 0.3, 70);
           }
           break;
-        case 'post': case 'bar': this.audio.post(e.x ?? 0); this.audio.react('ooh'); if (greatShot() || Math.random() < 0.5) this.audio.call('shot', 0.6); break;
+        case 'post': case 'bar': this.audio.post(e.x ?? 0); this.audio.react('ooh'); if (greatShot() || Math.random() < 0.7) this.audio.say('woodwork', 0.5); break;
         case 'whistle':
           this.audio.whistle(e.text && e.text in WHISTLES ? (e.text as WhistleKind) : (e.power ?? 1));
           if (e.text === 'halftime' || e.text === 'fulltime' || (e.text === 'kickoff' && v.clock < 1 && v.half === 1)) this.audio.react('applause');
           // An away penalty (the home end is behind the goal in a shootout): boos and whistles.
           if (e.text === 'penalty' && v.restart?.team === 1) this.audio.penaltyWhistles(v.shootout ? 1.2 : 0.9);
+          if (e.text === 'kickoff' && v.clock < 1) this.audio.say('kickoff', 1.4);
+          else if (e.text === 'halftime') this.audio.say('halftime', 0.9);
+          else if (e.text === 'fulltime') this.audio.say('fulltime', 0.9);
+          else if (e.text === 'offside') this.audio.say('offside', 0.6);
+          else if (e.text === 'penalty' && !v.shootout) this.audio.say('penalty', 0.5);
+          else if (e.text === 'foul' && Math.random() < 0.3) this.audio.say('foul', 0.5);
           break;
         case 'goal':
           this.audio.net(e.x ?? 0); this.audio.react('goal');
-          if (e.text !== 'og') this.audio.call('goal', 0.5);
+          if (e.text !== 'og') this.audio.say(e.text === 'pen' || this.talk.restart.startsWith('penalty') ? 'pengoal' : v.score[0] === v.score[1] && v.score[0] > 0 ? 'equaliser' : this.talk.kick === 'header' ? 'header' : 'goal', 0.5);
           if (Math.random() < 0.5) this.audio.stomp(0.75, 4.5); // the stands keep it going
           break;
-        case 'save': this.audio.react('gasp'); if (greatShot()) this.audio.call('shot', 0.45); break;
-        case 'chance': this.audio.react('ooh'); break;
-        case 'tackle': this.audio.tackle(e.x ?? 0, false); break;
+        case 'save':
+          this.audio.react('gasp');
+          if (v.shootout || this.talk.restart.startsWith('penalty')) this.audio.say('pensave', 0.4);
+          else if (greatShot() || Math.random() < 0.4) this.audio.say('save', 0.45);
+          break;
+        case 'chance': this.audio.react('ooh'); if (Math.random() < 0.6) this.audio.say('miss', 0.5); break;
+        case 'tackle': this.audio.tackle(e.x ?? 0, false); if (Math.random() < 0.12) this.audio.say('tackle', 0.3); break;
         case 'call': if (e.text === 'bump' && Math.abs(e.power ?? 0) > 4) this.audio.bump(e.x ?? 0, (Math.abs(e.power ?? 0) - 4) / 4); break;
         case 'foul': this.audio.tackle(e.x ?? 0, true); if (Math.random() < 0.45) this.audio.react('boo'); break;
-        case 'card': this.audio.react('boo'); break;
+        case 'card': this.audio.react('boo'); this.audio.say(e.text === 'yellow' ? 'yellow' : 'red', 0.8); break;
         case 'bounce': if ((e.power ?? 0) > 5) this.audio.kick((e.power ?? 0) * 0.5, e.x ?? 0, 'touch'); break;
         default: break;
       }
     }
-    void v;
+    // Restarts worth a word (once each): corners, free kicks in shooting range; late in the game.
+    const r = v.restart;
+    const key = r ? `${r.type}:${r.team}:${Math.round(r.spot.x)}:${Math.round(r.spot.z)}` : '';
+    if (key && key !== this.talk.restart) {
+      this.talk.restart = key;
+      const goalX = (v.attackDir[r!.team] ?? 1) * PITCH.halfLength;
+      if (r!.type === 'corner' && Math.random() < 0.5) this.audio.say('corner', 0.8);
+      else if (r!.type === 'freekick' && Math.hypot(goalX - r!.spot.x, r!.spot.z) < 30) this.audio.say('freekick', 1);
+    } else if (!r && this.talk.restart && v.phase === 'play' && this.talk.restart !== 'done') this.talk.restart = this.talk.restart.startsWith('penalty') ? this.talk.restart : '';
+    if (!this.talk.late && v.half === 2 && v.realMinutes && v.clock >= 85 * 60 && v.phase === 'play') { this.talk.late = true; this.audio.say('late', 0.2); }
   }
 
   // ------------------------------------------------------------- screens
@@ -994,6 +1108,14 @@ export class App {
   /** Marker style (P number - 1) for each human, indexed team * 2 + slot; undefined outside local multiplayer. */
   private slotStyles(): number[] | undefined {
     const seats = this.localPlaying;
+    const os = this.session instanceof OnlineSession ? this.session.start : null;
+    if (!seats && os && os.format && os.format !== '1v1') {
+      // Online team rooms: you P1 yellow, your teammate the third colour, the other side the second and fourth.
+      const me = os.side, them = 1 - os.side;
+      const out = [-1, -1, -1, -1];
+      out[me * 2] = 0; out[me * 2 + 1] = 2; out[them * 2] = 1; out[them * 2 + 1] = 3;
+      return out;
+    }
     if (!seats) return undefined;
     const out = [-1, -1, -1, -1];
     for (const st of seats) out[st.team * 2 + st.slot] = st.player - 1;
@@ -1024,6 +1146,7 @@ export class App {
   private showMode() {
     this.screenName = 'mode';
     this.modes.syncSlot();
+    this.syncLevels();
     const p = this.profile;
     const fresh = !p.tutorialDone && p.stats.played === 0;
     const got = Object.keys(p.achievements).length;
@@ -1054,13 +1177,16 @@ export class App {
         ${open ? `<div class="more-modes">
           <button class="btn" data-a="local">Local multiplayer</button>
           <button class="btn" data-a="comp">Cup and league</button>
+          ${this.tour.menuButton()}
+          ${this.street.menuButton()}
           <button class="btn" data-a="practice">Practice and tutorial</button>
           <button class="btn" data-a="online">Online match</button>
           <button class="btn" data-a="clubs">Profile and clubs</button>
+          <button class="btn" data-a="levels">Club level and challenges<small>Level ${levelOf(this.levels.xp).level} · ${this.levels.done.length}/3 this week</small></button>
           ${this.modes.menuButtons()}
         </div>` : ''}
       </div>
-      <div class="row center home-row"><button class="btn" data-a="controls">Controls</button><button class="btn" data-a="settings">Settings</button><button class="profile-chip" data-a="profile" title="Profile and save slots"><b>${esc(p.name)}</b><span>${p.stats.played} played · ${p.trophies.length} ${p.trophies.length === 1 ? 'trophy' : 'trophies'} · ${got}/${ACHIEVEMENTS.length} achievements</span></button></div>`, 'home');
+      <div class="row center home-row"><button class="btn" data-a="controls">Controls</button><button class="btn" data-a="settings">Settings</button><button class="profile-chip" data-a="profile" title="Profile and save slots"><b>${esc(p.name)} <i class="lvl-chip">Lv ${levelOf(this.levels.xp).level} · ${esc(titleOf(this.levels))}</i></b><span>${p.stats.played} played · ${p.trophies.length} ${p.trophies.length === 1 ? 'trophy' : 'trophies'} · ${got}/${ACHIEVEMENTS.length} achievements</span></button></div>`, 'home');
     this.on('[data-a=quick]', () => this.quickMatch());
     this.modes.bindMenu();
     this.on('[data-a=compnext]', () => {
@@ -1082,6 +1208,9 @@ export class App {
     this.on('[data-a=profile]', () => { this.profileTab = 'slots'; this.showProfile(); });
     this.on('[data-a=clubs]', () => { this.profileTab = 'career'; this.showProfile(); });
     this.on('[data-a=online]', () => this.showOnline());
+    this.on('[data-a=levels]', () => this.openLevels());
+    this.on('[data-a=tour]', () => this.tour.show());
+    this.on('[data-a=street]', () => this.street.show());
     this.on('[data-a=controls]', () => this.showControls(() => this.showMode()));
     this.on('[data-a=settings]', () => this.showSettings(() => this.showMode()));
   }
@@ -1486,7 +1615,7 @@ export class App {
     try {
       const r = this.ensureRenderer();
       // Phones, tablets and Low quality draw the menus at 30 fps.
-      this.backdrop.halfRate = this.touchDevice || this.settings.graphics.preset === 'low';
+      this.backdrop.halfRate = (this.touchDevice || this.settings.graphics.preset === 'low') && !this.settings.graphics.batterySaver;
       this.backdrop.start(r, teams, kits);
     } catch (err) {
       console.warn('menu background unavailable', err);
@@ -1590,7 +1719,9 @@ export class App {
     this.loading(`Building ${groundInSentence(groundFor(teamById(cfg.teams[0])).name)}…`, () => {
       this.backdrop.stop(this.renderer, true);
       const r = this.ensureRenderer();
-      r.setupMatch([teamById(cfg.teams[0]), oppDef], cfg.kits, cfg.weather);
+      const side = cfg.humans[0] || !cfg.humans[1] ? 0 : 1;
+      this.dressRenderer(r, side ? oppDef : teamById(cfg.teams[0]), cfg.kits[side], side);
+      r.setupMatch([teamById(cfg.teams[0]), oppDef], cfg.kits, cfg.weather, !!cfg.street);
       this.lastTeams = { teams: [cfg.teams[0], cfg.teams[1]], kits: [cfg.kits[0], cfg.kits[1]] };
       this.kitOverride = oppDef !== teamById(opp) ? oppDef : null;
       const s = this.makeOffline(cfg);
@@ -1618,6 +1749,13 @@ export class App {
     // A change kit is only for looks: the score bug, radar and line-ups read it from the match's club (also on restarts and rematches).
     if (s instanceof OfflineSession && this.kitOverride && s.cfg.teams[1] === this.kitOverride.id) s.match.teams[1] = this.kitOverride;
     this.track = { restart: '', restartKick: '', lastKick: { text: '', x: 0, z: 0, player: -1, team: -1, from: '' }, goals: [] };
+    this.analysis.reset(!(s instanceof OfflineSession && s.cfg.practice));
+    this.audio.setVenue(s instanceof OfflineSession && !!s.cfg.street);
+    this.audio.loadCommentary();
+    this.talk = { restart: '', late: false, kick: '' };
+    this.levelNote = '';
+    // World tournament: both anthems before kick-off.
+    if (s instanceof OfflineSession && this.modeMatch?.kind === 'tournament') this.audio.anthems([...s.cfg.teams]);
     this.resultsNote = null;
     this.coach?.dispose();
     this.coach = null;
@@ -1661,6 +1799,9 @@ export class App {
     this.welcomed = false;
     this.commentator.reset();
     this.commentator.mode = s instanceof OfflineSession && s.cfg.practice ? 'off' : this.settings.commentator ?? 'captions';
+    this.audio.commentaryMuted = s instanceof OfflineSession && !!s.cfg.practice;
+    // The recorded commentator takes over from the device's speech voice; the captions still show.
+    if (this.commentator.mode === 'voice' && this.settings.audio.commentary !== false) this.commentator.mode = 'captions';
     this.commentator.volume = this.settings.audio.muted ? 0 : this.settings.audio.master;
     this.savedGoals.clear();
     if (s instanceof OfflineSession && !s.cfg.practice && this.settings.matchIntro && !this.cineOff && this.renderer && !(this.modeMatch && !this.modeMatch.intro)) {
@@ -2097,10 +2238,11 @@ export class App {
       <div class="final">${v.teams[0].abbr} ${v.score[0]} – ${v.score[1]} ${v.teams[1].abbr}</div>
       ${this.scorers(v)}${this.statsBlock(v)}
       <p class="note">${v.half === 2 ? 'Level after 90 minutes: two halves of 15 minutes, then penalties if it is still level.' : 'Teams change ends. The camera stays on the same side.'}</p>
-      ${offline ? `<div class="row end">${this.highlightsButton(v, 'half')}${this.ratingsButton(v)}<button class="btn primary" data-a="second">${v.half === 1 ? 'Start second half' : v.half === 2 ? 'Start extra time' : 'Start second half of extra time'}</button></div>` : '<p class="note ht-count"></p>'}
+      ${offline ? `<div class="row end">${this.highlightsButton(v, 'half')}${this.analysisButton()}${this.ratingsButton(v)}<button class="btn primary" data-a="second">${v.half === 1 ? 'Start second half' : v.half === 2 ? 'Start extra time' : 'Start second half of extra time'}</button></div>` : '<p class="note ht-count"></p>'}
     </div></div>`;
     this.on('[data-a=second]', () => { (this.session as OfflineSession).continueHalftime(); this.closeOverlay(); });
     this.bindHighlights(v, 'half', (w) => this.openHalftime(w));
+    this.bindAnalysis(v, (w) => this.openHalftime(w));
     this.bindStatsToggle();
   }
 
@@ -2118,7 +2260,7 @@ export class App {
     this.overlay = 'fulltime';
     if (first && mm.kind !== 'skill') this.recordForProfile(v);
     this.resultsNote = '';
-    const res = this.modes.finish(v, s.match);
+    const res = mm.kind === 'tournament' ? this.tour.finish(v) : mm.kind === 'street' ? this.street.finish(v) : this.modes.finish(v, s.match);
     const so = v.shootout;
     const pens = so && so.winner >= 0 ? [so.kicks[0].filter(Boolean).length, so.kicks[1].filter(Boolean).length] : null;
     const title = mm.kind === 'skill' ? ({ crossbar: 'Crossbar challenge', targets: 'Target practice' } as Record<string, string>)[mm.ref ?? ''] ?? 'Skill game'
@@ -2127,12 +2269,14 @@ export class App {
       <h3 style="text-align:center">${esc(title)}</h3>
       ${mm.kind === 'skill' ? '' : `<div class="final">${v.teams[0].abbr} ${v.score[0]} – ${v.score[1]} ${v.teams[1].abbr}</div>${pens ? `<div class="final small">Penalties ${pens[0]} – ${pens[1]}</div>` : ''}${this.motm(v)}${this.scorers(v)}`}
       ${res?.html ?? ''}
+      ${mm.kind === 'skill' ? '' : this.levelNote}
       ${mm.kind === 'skill' ? '' : this.statsBlock(v)}
       ${mm.kind === 'skill' ? '' : this.saveGoalsHtml(v)}
-      <div class="row end">${mm.kind === 'skill' ? '' : this.highlightsButton(v, 'match') + this.ratingsButton(v)}${mm.kind === 'skill' || mm.kind === 'scenario' ? '<button class="btn" data-a="again">Try again</button>' : ''}<button class="btn primary" data-a="mcont">${esc(res?.label ?? 'Continue')}</button></div>
+      <div class="row end">${mm.kind === 'skill' ? '' : this.highlightsButton(v, 'match') + this.analysisButton() + this.ratingsButton(v)}${mm.kind === 'skill' || mm.kind === 'scenario' ? '<button class="btn" data-a="again">Try again</button>' : ''}<button class="btn primary" data-a="mcont">${esc(res?.label ?? 'Continue')}</button></div>
     </div></div>`;
     this.bindSaveGoals(v);
     this.bindHighlights(v, 'match', (w) => this.openResults(w));
+    this.bindAnalysis(v, (w) => this.openModeResults(w, mm, false));
     this.bindStatsToggle();
     this.on('[data-a=mcont]', () => { const next = res?.next; this.endSession(); if (next) next(); else this.showMode(); });
     this.on('[data-a=again]', () => { this.endSession(); this.playMode(mm); });
@@ -2276,16 +2420,19 @@ export class App {
       ${pens ? `<div class="final small">Penalties ${pens[0]} – ${pens[1]}</div>` : ''}
       ${this.motm(v)}
       ${this.scorers(v)}${this.statsBlock(v)}
-      <p class="note rematch-note">${online && !this.room?.ranked ? 'A rematch starts when both players choose it.' : ''}</p>
+      <p class="note rematch-note">${online && !this.room?.ranked ? ((this.room?.format ?? '1v1') === '1v1' ? 'A rematch starts when both players choose it.' : 'A rematch starts when everyone chooses it.') : ''}</p>
+      ${online && this.room?.league ? `<p class="note lg-note">${esc(this.lgNote || 'Friends league match: the result goes into the table.')}</p>` : ''}
       ${online && this.room?.ranked ? `<div class="rank-note">${this.rankRes ? rankedResultHtml(this.rankRes) : '<p class="note">Updating your division…</p>'}</div>` : ''}
       ${compNote}
+      ${this.levelNote}
       ${online ? '' : this.saveGoalsHtml(v)}
-      <div class="row end">${online ? '' : this.highlightsButton(v, 'match')}${this.ratingsButton(v)}<button class="btn" data-a="menu">Main menu</button>${this.compMatch ? '<button class="btn primary" data-a="comp">Continue</button>' : online && this.room?.ranked ? '<button class="btn primary" data-a="rankmenu">Ranked menu</button>' : '<button class="btn primary" data-a="rematch">Rematch</button>'}</div>
+      <div class="row end">${online ? '' : this.highlightsButton(v, 'match')}${this.analysisButton()}${this.ratingsButton(v)}<button class="btn" data-a="menu">Main menu</button>${this.compMatch ? '<button class="btn primary" data-a="comp">Continue</button>' : online && this.room?.ranked ? '<button class="btn primary" data-a="rankmenu">Ranked menu</button>' : '<button class="btn primary" data-a="rematch">Rematch</button>'}</div>
     </div></div>`;
     this.on('[data-a=comp]', () => { this.endSession(); this.showCompHub(); });
     this.on('[data-a=rankmenu]', () => { this.endSession(); this.showRanked(); });
     this.bindSaveGoals(v);
     this.bindHighlights(v, 'match', (w) => this.openResults(w));
+    this.bindAnalysis(v, (w) => this.openResults(w));
     this.bindStatsToggle();
     this.on('[data-a=menu]', () => { this.endSession(); this.showMode(); });
     this.on('[data-a=rematch]', (el) => {
@@ -2367,6 +2514,17 @@ export class App {
     };
     this.announce(recordMatch(this.profile, m));
     this.saveProfile();
+    // Club level and weekly challenges.
+    this.syncLevels();
+    const mp = this.analysis.passes.filter((x) => x.team === me);
+    const facts: MatchFacts = { ...m, passPct: mp.length >= 10 ? mp.filter((x) => x.ok).length / mp.length : NaN, kind: this.modeMatch?.kind ?? (this.session instanceof OnlineSession && this.room?.league ? 'friends' : mode) };
+    const lr = recordLevels(this.levels, facts);
+    saveLevels(this.levelSlot, this.levels);
+    this.levelNote = levelNoteHtml(this.levels, lr);
+    this.announce([
+      ...(lr.after > lr.before ? [{ id: 'lvl', icon: '⬆️', name: `Club level ${lr.after}`, text: lr.unlocks.length ? `Unlocked ${lr.unlocks.map((u) => u.name).join(', ')}` : 'Keep going for the next reward.' }] : []),
+      ...lr.finished.map((c) => ({ id: 'wk-' + c.id, icon: '★', name: 'Weekly challenge done', text: c.text })),
+    ] as Achievement[]);
     // The club's history (Trophy cabinet and club history): offline matches against the computer.
     if (off) this.modes.recordClub({ club: m.club, opp: m.opp, oppName: m.oppName, gf: m.gf, ga: m.ga, pens, scorers: v.goals.filter((g) => g.team === me && !g.ownGoal).map((g) => v.players[g.player]?.def.short ?? '?'), mode: this.modeMatch?.kind ?? mode });
   }
@@ -2542,7 +2700,7 @@ export class App {
       </div>`;
     } else if (tab === 'awards') {
       body = `<h3>Trophy cabinet</h3>
-        ${p.trophies.length ? `<div class="trophies">${p.trophies.map((t) => `<div class="trophy"><span>${t.kind === 'cup' ? '🏆' : '🥇'}</span><b>${t.kind === 'cup' ? 'Elevens Cup' : 'Elevens League'}</b><small>${esc(t.clubName)} · ${t.size} clubs · ${t.date}</small></div>`).join('')}</div>` : '<p class="note">Empty for now: win the cup or the league to fill it.</p>'}
+        ${p.trophies.length ? `<div class="trophies">${p.trophies.map((t) => `<div class="trophy"><span>${t.kind === 'cup' ? '🏆' : t.kind === 'world' ? '🌍' : '🥇'}</span><b>${trophyName(t.kind)}</b><small>${esc(t.clubName)} · ${t.size} ${t.kind === 'world' ? 'nations' : 'clubs'} · ${t.date}</small></div>`).join('')}</div>` : '<p class="note">Empty for now: win the cup or the league to fill it.</p>'}
         <h3>Achievements · ${Object.keys(p.achievements).length} of ${ACHIEVEMENTS.length}</h3>
         <div class="achievements">${ACHIEVEMENTS.map((a) => { const d = p.achievements[a.id]; return `<div class="ach ${d ? 'got' : ''}"><span class="ic">${d ? a.icon : '🔒'}</span><div><b>${esc(a.name)}</b><span>${esc(a.text)}</span>${d ? `<small>${d}</small>` : ''}</div></div>`; }).join('')}</div>`;
     } else if (tab === 'clubs') {
@@ -2558,12 +2716,14 @@ export class App {
           return `<div class="slot ${on ? 'on' : ''}"><b>${esc(q.name)}</b><span class="note">Slot ${i + 1} · since ${q.created}</span><span>${q.stats.played} played · ${q.stats.won} won · ${q.trophies.length} trophies · ${Object.keys(q.achievements).length} achievements</span>
             <div class="row wrap">${on ? '<span class="badge ok">In use</span>' : `<button class="btn small primary" data-use="${i}">Use this slot</button>`}<button class="btn small" data-ren="${i}">Rename</button><button class="btn small danger" data-wipe="${i}">${this.slotConfirm === i ? 'Sure? Press again' : 'Delete'}</button></div></div>`;
         }).join('')}</div>
-        <div class="field" style="margin-top:14px"><label for="pname">Profile name</label><input id="pname" type="text" maxlength="18" value="${esc(p.name)}" autocomplete="nickname"></div>`;
+        <div class="field" style="margin-top:14px"><label for="pname">Profile name</label><input id="pname" type="text" maxlength="18" value="${esc(p.name)}" autocomplete="nickname"></div>
+        ${this.transfer.html()}`;
     }
     this.set(`<div class="panel"><h2>${esc(p.name)}</h2>${tabs}<div class="ptab-body">${body}</div>
       <div class="row end" style="margin-top:16px"><button class="btn" data-a="back">Back</button></div></div>`, 'scroll');
     this.bindSeg('ptab', (v) => { this.profileTab = v as typeof this.profileTab; this.slotConfirm = -1; this.showProfile(); });
     this.on('[data-a=back]', () => { this.slotConfirm = -1; this.showMode(); });
+    if (tab === 'slots') this.transfer.bind();
     this.on('[data-a=newclub]', () => this.openCreator(null));
     this.on('[data-edit]', (el) => this.openCreator(p.clubs.find((c) => c.id === el.dataset.edit) ?? null));
     this.on('[data-del]', (el) => {
@@ -2586,6 +2746,10 @@ export class App {
       this.store.slots[i] = null;
       // The slot's career, Be a Pro, cabinet and club history go with it.
       clearModes(i);
+      clearLevels(i);
+      TournamentScreens.clear(i);
+      StreetScreens.clear(i);
+      this.levelSlot = -1;
       this.modes.syncSlot(true);
       if (!this.store.slots.some(Boolean)) this.store.slots[i] = newProfile('Player 1');
       if (!this.store.slots[this.store.active]) this.store.active = this.store.slots.findIndex(Boolean);
@@ -2597,10 +2761,20 @@ export class App {
   }
 
   private delClub = '';
+  /** Profile > Save slots: move every save to another device with a code or a file (20 Nov 2026). */
+  private transfer = new TransferPanel({
+    on: (sel, fn) => this.on(sel, fn),
+    root: () => this.ui,
+    redraw: () => { if (this.screenName === 'profile' && this.profileTab === 'slots') this.showProfile(); },
+    serverUrl: () => serverUrl(),
+    wake: () => wakeServer(),
+    reload: () => location.reload(),
+  });
 
   private useSlot(i: number) {
     if (!this.store.slots[i]) return;
     this.store.active = i;
+    this.syncLevels();
     applyClubs(this.profile);
     this.saveProfile();
     this.compConfirm = false;
@@ -2960,8 +3134,9 @@ export class App {
         <div class="row between"><span class="lbl">Menu music</span>${range('music', s.audio.music)}</div>
         <div class="row between"><span class="lbl">Music</span>${this.seg('music', [['on', 'On'], ['off', 'Off']], s.audio.musicOn ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Commentary</span>${this.seg('commentator', [['voice', 'Voice and captions'], ['captions', 'Captions'], ['off', 'Off']], s.commentator ?? 'captions')}</div>
-        <p class="note">A commentator talks you through the whole match. The voice is your device's own speech voice.</p>
-        <div class="row between"><span class="lbl">Goal calls</span>${this.seg('commentary', [['on', 'On'], ['off', 'Off']], s.audio.commentary !== false ? 'on' : 'off')}</div>
+        <p class="note">Captions talk you through the whole match. With the commentator voice off, "Voice" reads them in your device's own speech voice.</p>
+        <div class="row between"><span class="lbl">Commentator voice</span>${this.seg('commentary', [['on', 'On'], ['off', 'Off']], s.audio.commentary !== false ? 'on' : 'off')}</div>
+        <p class="note">A recorded commentator calls goals, saves, cards, corners and more (${this.audio.commentaryStatus.loaded ? `${this.audio.commentaryStatus.loaded} of ${this.audio.commentaryStatus.total} lines ready` : 'lines load when a match starts'}).</p>
         <div class="row between"><span class="lbl">Stadium announcer</span>${this.seg('announcer', [['on', 'On'], ['off', 'Off']], s.audio.announcer === true ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Menu sounds</span>${this.seg('menusfx', [['on', 'On'], ['off', 'Off']], s.audio.menuSounds !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Announcer voice</span><button class="btn small" data-a="voicetest">Test voice</button></div>
@@ -2973,6 +3148,8 @@ export class App {
         <div class="row between"><span class="lbl">Quality</span>${this.seg('preset', [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['ultra', 'Ultra']], s.graphics.preset)}</div>
         <div class="row between"><span class="lbl">Render scale</span>${range('scale', s.graphics.renderScale, 0.5, 1.5, 0.05)}</div>
         <div class="row between"><span class="lbl">Auto resolution</span>${this.seg('autores', [['on', 'On'], ['off', 'Off']], s.graphics.autoRes !== false ? 'on' : 'off')}</div>
+        <div class="row between"><span class="lbl">Battery saver</span>${this.seg('battery', [['on', 'On'], ['off', 'Off']], s.graphics.batterySaver ? 'on' : 'off')}</div>
+        <p class="note">Battery saver plays at 30 frames a second with a little less detail, so phones and tablets stay cooler and last longer.</p>
         <div class="row between"><span class="lbl">Frame rate</span>${this.seg('showfps', [['on', 'Show'], ['off', 'Hide']], s.showFps ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Shadows</span>${this.seg('shadows', [['on', 'On'], ['off', 'Off']], s.graphics.shadows ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Players</span>${this.seg('players', [['realistic', 'Realistic'], ['classic', 'Classic']], s.graphics.players ?? 'realistic')}</div>
@@ -3090,6 +3267,7 @@ export class App {
     this.bindSeg('menusfx', (v) => { s.audio.menuSounds = v === 'on'; save(); redraw(); });
     this.bindSeg('preset', (v) => { s.graphics.preset = v as Settings['graphics']['preset']; save(); redraw(); });
     this.bindSeg('autores', (v) => { s.graphics.autoRes = v === 'on'; save(); redraw(); });
+    this.bindSeg('battery', (v) => { s.graphics.batterySaver = v === 'on'; save(); this.backdrop.halfRate = (this.touchDevice || s.graphics.preset === 'low') && v !== 'on'; redraw(); });
     this.bindSeg('showfps', (v) => { s.showFps = v === 'on'; save(); redraw(); });
     this.bindSeg('shadows', (v) => { s.graphics.shadows = v === 'on'; save(); redraw(); });
     this.bindSeg('players', (v) => { s.graphics.players = v as 'realistic' | 'classic'; save(); redraw(); });
@@ -3217,12 +3395,14 @@ export class App {
 
   private showOnline(code = '') {
     this.screenName = 'online';
+    this.lgOpen = null;
     const name = this.settings.name;
     this.set(`<div class="panel narrow">
       <h2>Online match</h2>
-      <p class="note">Play one other person. You each control one club; the computer runs your teammates.</p>
+      <p class="note">Play one other person, two against two, or team up with a friend against the computer. Each person controls one player at a time; the computer runs the rest of the team.</p>
       <p class="note server-state">${this.serverStateText()}</p>
       <button class="btn big" data-a="ranked">Ranked match<small class="note"> · climb the divisions</small></button>
+      <button class="btn big" data-a="friends">Friends league<small class="note"> · a table just for you and your friends</small></button>
       <div class="field"><label for="nm">Your name</label><input id="nm" type="text" maxlength="16" value="${esc(name)}" placeholder="Player" autocomplete="nickname"></div>
       <h3>Create</h3>
       <button class="btn primary" data-a="create">Create private room</button>
@@ -3237,6 +3417,7 @@ export class App {
     const getName = () => { this.settings.name = nameEl.value.trim().slice(0, 16); saveSettings(this.settings); return this.settings.name || 'Player'; };
     this.on('[data-a=create]', () => this.connectAnd(getName(), () => this.net!.send({ t: 'create', name: getName() })));
     this.on('[data-a=ranked]', () => { getName(); this.showRanked(); });
+    this.on('[data-a=friends]', () => { getName(); this.showFriends(); });
     this.on('[data-a=join]', () => {
       const c = codeEl.value.trim().toUpperCase();
       if (!ROOM_CODE_RE.test(c)) { this.onlineError = 'Room codes are 5 letters/numbers (no 0, O, 1, I or L).'; this.showOnline(c); return; }
@@ -3259,6 +3440,87 @@ export class App {
     if (st === 'blocked') return `<span class="badge bad">Can't go online from here</span> This page blocks connections to the match server.${link}`;
     if (st === 'unreachable') return `<span class="badge bad">Match server not answering</span> Check your connection, then try again.${link}`;
     return '<span class="badge">Checking the match server…</span>';
+  }
+
+  // ------------------------------------------------------------- friends league
+
+  private showFriends() {
+    this.screenName = 'friends';
+    this.lgOpen = null;
+    this.set(friendsListHtml(this.leagues, this.ranked.id, this.lgStatus, this.lgError), 'scroll');
+    this.on('[data-lg]', (el) => this.openLeague(el.dataset.lg!));
+    this.on('[data-a=lgmake]', () => {
+      const name = (this.ui.querySelector<HTMLInputElement>('#lgname')?.value ?? '').replace(/[^\p{L}\p{N} ._'&-]/gu, '').trim().slice(0, 24);
+      if (!name) { this.lgError = 'Give your league a name.'; this.showFriends(); return; }
+      let code = newLeagueCode();
+      while (this.leagues.some((l) => l.code === code)) code = newLeagueCode();
+      this.leagues = [...this.leagues, { code, name, members: [], results: [], synced: 0 }];
+      saveLeagues(this.leagues);
+      this.openLeague(code);
+    });
+    this.on('[data-a=lgjoin]', () => {
+      const code = (this.ui.querySelector<HTMLInputElement>('#lgcode')?.value ?? '').trim().toUpperCase();
+      if (!LEAGUE_CODE_RE.test(code)) { this.lgError = 'League codes are 6 letters/numbers (no 0, O, 1, I or L).'; this.showFriends(); return; }
+      this.openLeague(code);
+    });
+    this.on('[data-a=lgback]', () => { this.lgError = ''; this.lgStatus = ''; this.net?.close(); this.net = null; this.showOnline(); });
+  }
+
+  /** Open a league's screen (joining it if this device isn't a member yet) and bring it up to date. */
+  private openLeague(code: string) {
+    if (!this.leagues.some((l) => l.code === code)) {
+      this.leagues = [...this.leagues, { code, name: `League ${code}`, members: [], results: [], synced: 0 }];
+      saveLeagues(this.leagues);
+    }
+    this.lgOpen = code;
+    this.lgError = '';
+    this.lgLeaving = false;
+    history.replaceState(null, '', location.pathname + location.search.replace(/[?&]league=[^&]*/, '').replace(/^&/, '?'));
+    this.lgStatus = 'Bringing the league up to date…';
+    this.showLeague();
+    this.connectAnd(this.settings.name || 'Player', () => this.syncLeague(code, []));
+  }
+
+  private syncLeague(code: string, results: import('../shared/friends').LeagueResult[]) {
+    const l = this.leagues.find((x) => x.code === code);
+    if (!l || !this.net) return;
+    for (const r of results) this.lgPushed.add(r.id);
+    const named = l.name !== `League ${code}`;
+    this.net.send({ t: 'lg', code, id: this.ranked.id, key: this.ranked.key, me: this.settings.name || 'Player', results, ...(named ? { name: l.name } : {}) });
+  }
+
+  private showLeague() {
+    const l = this.leagues.find((x) => x.code === this.lgOpen);
+    if (!l) { this.showFriends(); return; }
+    this.screenName = 'league';
+    const q = new URLSearchParams(location.search);
+    q.delete('test'); q.delete('room');
+    q.set('league', l.code);
+    const link = `${location.origin}${location.pathname}?${q.toString()}`;
+    this.set(leagueHtml(l, this.ranked.id, link, this.lgStatus, this.lgError), 'scroll');
+    if (this.lgLeaving) { const b = this.ui.querySelector('[data-a=lgleave]'); if (b) b.textContent = 'Tap again to leave'; }
+    const name = () => this.settings.name || 'Player';
+    const tag = { code: l.code, id: this.ranked.id };
+    this.on('[data-a=lgcopy]', () => {
+      const el = this.ui.querySelector<HTMLInputElement>('#lglink')!;
+      el.select();
+      void navigator.clipboard?.writeText(link).then(() => this.hud.toast('Invite link copied'), () => {});
+    });
+    this.on('[data-a=lgplay]', () => this.connectAnd(name(), () => this.net!.send({ t: 'create', name: name(), lg: tag })));
+    this.on('[data-a=lgroomjoin]', () => {
+      const c = (this.ui.querySelector<HTMLInputElement>('#lgroom')?.value ?? '').trim().toUpperCase();
+      if (!ROOM_CODE_RE.test(c)) { this.lgError = 'Room codes are 5 letters/numbers.'; this.showLeague(); return; }
+      this.connectAnd(name(), () => this.net!.send({ t: 'join', code: c, name: name(), lg: tag }));
+    });
+    this.on('[data-a=lgleave]', () => {
+      if (!this.lgLeaving) { this.lgLeaving = true; this.showLeague(); return; }
+      // Leaving only forgets the league on this device; your results stay in the others' tables.
+      this.leagues = this.leagues.filter((x) => x.code !== l.code);
+      saveLeagues(this.leagues);
+      this.lgLeaving = false;
+      this.showFriends();
+    });
+    this.on('[data-a=lglist]', () => { this.lgError = ''; this.lgStatus = ''; this.showFriends(); });
   }
 
   /** Ranked online: division, record, club, the queue and the top players. */
@@ -3321,6 +3583,7 @@ export class App {
       }
     };
     net.onRoom = (r) => this.onRoom(r);
+    net.onPong = () => { const el = this.ui.querySelector('.lobby-sig'); if (el) el.innerHTML = this.signalHtml(); };
     net.onSnapshot = (s, at) => { if (this.session instanceof OnlineSession) this.session.push(s, at); };
     net.onMessage = (m) => this.onServerMsg(m);
     net.connect(name);
@@ -3352,6 +3615,35 @@ export class App {
         saveRanked(this.ranked);
         if (this.screenName === 'ranked') this.showRanked();
         break;
+      case 'lg': {
+        const mineBefore = this.leagues.find((l) => l.code === m.league.code)?.results ?? [];
+        this.leagues = mergeLeague(this.leagues, m.league);
+        saveLeagues(this.leagues);
+        // Hand over (a chunk at a time) the results the server didn't have: it restarted, or this
+        // device saw matches the others haven't brought back yet.
+        const next = missingChunks(mineBefore.filter((r) => !this.lgPushed.has(r.id)), m.league.results)[0];
+        if (next) this.syncLeague(m.league.code, next);
+        else if (this.lgOpen === m.league.code) this.lgStatus = '';
+        if (this.screenName === 'league' && this.lgOpen === m.league.code) this.showLeague();
+        break;
+      }
+      case 'lgerr':
+        if (this.lgOpen === m.code) { this.lgError = m.msg; this.lgStatus = ''; if (this.screenName === 'league') this.showLeague(); }
+        break;
+      case 'lgres': {
+        this.leagues = addResult(this.leagues, m.code, m.r);
+        saveLeagues(this.leagues);
+        const l = this.leagues.find((x) => x.code === m.code);
+        if (l) {
+          const pos = placeIn(l, this.ranked.id);
+          const text = `Friends league: result saved. You are ${ordinal(pos)} in ${l.name}.`;
+          this.hud.toast(text, 5000);
+          this.lgNote = text;
+          const note = this.ui.querySelector('.lg-note');
+          if (note) note.textContent = text;
+        }
+        break;
+      }
       case 'board':
         this.ranked.board = m.top;
         saveRanked(this.ranked);
@@ -3371,12 +3663,14 @@ export class App {
         break;
       }
       case 'start': {
-        this.onlineStart = { side: m.side, teams: m.teams, kits: m.kits, minutes: m.minutes, mentality: m.mentality, weather: m.weather };
+        this.lgNote = '';
+        this.onlineStart = { side: m.side, slot: m.slot, format: m.format, teams: m.teams, kits: m.kits, minutes: m.minutes, mentality: m.mentality, weather: m.weather };
         const info = this.onlineStart;
         if (this.session instanceof OnlineSession) this.session.dispose();
         this.loading(`Building ${groundInSentence(groundFor(teamById(info.teams[0])).name)}…`, () => {
           this.backdrop.stop(this.renderer, true);
           const r = this.ensureRenderer();
+          this.dressRenderer(r, teamById(info.teams[info.side]), info.kits[info.side], info.side as 0 | 1);
           r.setupMatch([teamById(info.teams[0]), teamById(info.teams[1])], info.kits, cleanWeather(info.weather));
           this.lastTeams = { teams: [info.teams[0], info.teams[1]], kits: [info.kits[0], info.kits[1]] };
           // Online the server is already counting: no minimum time on the card.
@@ -3386,8 +3680,14 @@ export class App {
       }
       case 'opp':
         if (this.session instanceof OnlineSession) {
-          this.session.oppStatus = m.status === 'disconnected' ? `Opponent reconnecting (${Math.round((m.graceMs ?? 0) / 1000)} s)` : '';
-          this.hud.toast(m.status === 'disconnected' ? 'Opponent lost connection. The computer controls their team while they reconnect.' : m.status === 'reconnected' ? 'Opponent reconnected' : 'Opponent left the match', 4000);
+          const who = m.who ? esc(m.who) : 'Opponent';
+          if (m.mate) {
+            // Two against two or together against the computer: play goes on, the computer covers.
+            this.hud.toast(m.status === 'disconnected' ? `${who} lost connection. The computer plays for them while they reconnect.` : m.status === 'reconnected' ? `${who} is back` : `${who} left. The computer plays for them.`, 4000);
+          } else {
+            this.session.oppStatus = m.status === 'disconnected' ? `Opponent reconnecting (${Math.round((m.graceMs ?? 0) / 1000)} s)` : '';
+            this.hud.toast(m.status === 'disconnected' ? 'Opponent lost connection. The computer controls their team while they reconnect.' : m.status === 'reconnected' ? 'Opponent reconnected' : 'Opponent left the match', 4000);
+          }
         } else if (m.status === 'left' && this.screenName === 'lobby') this.renderLobby();
         break;
       case 'end':
@@ -3432,10 +3732,23 @@ export class App {
       this.renderLobby();
     } else if (r.state === 'results' && this.overlay === 'fulltime') {
       const note = this.ui.querySelector('.rematch-note');
-      const other = r.seats[1 - r.you];
-      if (note && r.rematch[1 - r.you]) note.textContent = 'Your opponent wants a rematch.';
-      if (note && !other) note.textContent = 'Your opponent has left.';
+      const others = FORMAT_SEATS[r.format ?? '1v1'].filter((i) => i !== r.you);
+      const team = (r.format ?? '1v1') !== '1v1';
+      const keen = others.filter((i) => r.rematch[i] && r.seats[i]).map((i) => r.seats[i]!.name);
+      if (note && keen.length) note.textContent = team ? `${keen.join(' and ')} ${keen.length > 1 ? 'want' : 'wants'} a rematch.` : 'Your opponent wants a rematch.';
+      if (note && others.some((i) => !r.seats[i])) note.textContent = team ? 'A player has left, so there is no rematch in this room.' : 'Your opponent has left.';
+      if (others.some((i) => !r.seats[i])) this.ui.querySelector('[data-a=rematch]')?.setAttribute('disabled', '');
     }
+  }
+
+  /** Your connection to the match server as signal bars and the round trip (lobby). */
+  private signalHtml(): string {
+    const n = this.net;
+    if (!n || n.latency < 0) return 'Your connection: measuring…';
+    const bars = signalBars(n.latency, n.jitter, 0);
+    const colour = bars <= 1 ? '#ff5a5f' : bars === 2 ? '#ffb020' : '#3ee08f';
+    const word = ['No signal', 'Poor', 'Fair', 'Good', 'Great'][bars];
+    return `Your connection: <span class="sig-inline" data-bars="${bars}">${[0, 1, 2, 3].map((i) => `<i style="height:${4 + i * 3}px;${i < bars ? `background:${colour}` : ''}"></i>`).join('')}</span> ${word} · ${Math.round(n.latency)} ms`;
   }
 
   private renderLobby() {
@@ -3451,33 +3764,64 @@ export class App {
       this.on('[data-a=rleave]', () => { this.net?.send({ t: 'leave' }); this.room = null; this.showRanked(); });
       return;
     }
-    const me = r.seats[r.you]!, other = r.seats[1 - r.you];
+    const me = r.seats[r.you]!;
     const host = r.host === r.you;
+    const fmt: RoomFormat = r.format ?? '1v1';
+    const active = FORMAT_SEATS[fmt];
+    const mySide = r.you % 2;
+    const others = active.filter((i) => i !== r.you);
+    const missing = others.filter((i) => !r.seats[i]).length;
+    const clubOf = (side: number) => r.clubs?.[side] ?? r.seats[side]?.club ?? r.seats[side + 2]?.club ?? TEAMS[side].id;
+    const kitOf = (side: number) => r.kits?.[side] ?? r.seats[side]?.kit ?? r.seats[side + 2]?.kit ?? 'home';
     // Keep any ?server= override so the link works when the client and server are hosted apart.
     const q = new URLSearchParams(location.search);
     q.delete('test');
     q.set('room', r.code);
     const link = `${location.origin}${location.pathname}?${q.toString()}`;
-    const seat = (s: typeof me | null, label: string) => s
-      ? `<div class="club ${s === me ? 'on' : ''}"><span class="abbr">${label}</span><span class="name">${esc(s.name)}</span>
-         <span>${esc(teamById(s.club).name)} ${this.kitSwatch(s.club, s.kit)} · ${s.mentality}</span>
+    const label = (i: number) => i === r.you ? (i === r.host ? 'You (host)' : 'You')
+      : `${fmt === '1v1' ? (i === r.host ? 'Host' : 'Guest') : i % 2 === mySide ? 'Teammate' : 'Opponent'}${fmt !== '1v1' && i === r.host ? ' (host)' : ''}`;
+    const seat = (i: number) => {
+      const s = r.seats[i];
+      return s
+        ? `<div class="club ${i === r.you ? 'on' : ''}" data-seat="${i}"><span class="abbr">${label(i)}</span><span class="name">${esc(s.name)}</span>
+         ${fmt === '1v1' ? `<span>${esc(teamById(s.club).name)} ${this.kitSwatch(s.club, s.kit)} · ${s.mentality}</span>` : ''}
          <span>${s.connected ? '<span class="badge ok">Connected</span>' : '<span class="badge bad">Disconnected</span>'} ${s.ready ? '<span class="badge ok">Ready</span>' : '<span class="badge warn">Not ready</span>'}</span></div>`
-      : `<div class="club"><span class="abbr">${label}</span><span class="name">Waiting…</span><span class="note">Share the code or link below.</span></div>`;
+        : `<div class="club" data-seat="${i}"><span class="abbr">Free place</span><span class="name">Waiting…</span><span class="note">Share the code or link below.</span></div>`;
+    };
+    const DIFF_WORD: Record<AiDiff, string> = { casual: 'Casual', pro: 'Pro', elite: 'Elite' };
+    const sideCol = (side: number) => {
+      const club = clubOf(side), kit = kitOf(side);
+      const head = `<div class="side-head">${clubBadge(teamById(club), 20)} <b>${esc(teamById(club).name)}</b> ${this.kitSwatch(club, kit)}${side === mySide ? ' <span class="badge ok">Your team</span>' : ''}</div>`;
+      if (fmt === 'coop' && side === 1) return `<div class="lobby-side">${head}<div class="club cpu"><span class="abbr">Computer</span><span class="name">${DIFF_WORD[r.aiDiff ?? 'pro']}</span><span class="note">The computer runs the whole team.</span></div></div>`;
+      return `<div class="lobby-side">${head}${[side, side + 2].filter((i) => active.includes(i)).map(seat).join('')}</div>`;
+    };
+    const teamWord = fmt === '1v1' ? 'your opponent' : 'everyone';
+    const notReady = others.filter((i) => r.seats[i] && !r.seats[i]!.ready).map((i) => r.seats[i]!.name);
     const status = this.net?.status === 'reconnecting' ? 'Reconnecting to the server…'
-      : r.state === 'countdown' ? `Both ready. Kick-off in ${Math.ceil(r.countdown / 1000)}…`
-      : !other ? 'Waiting for an opponent to join.' : !other.connected ? 'Opponent disconnected.' : !me.ready ? 'Press Ready when you are happy with the settings.' : !other.ready ? 'Waiting for your opponent to get ready.' : '';
+      : r.state === 'countdown' ? `${fmt === '1v1' ? 'Both' : 'Everyone'} ready. Kick-off in ${Math.ceil(r.countdown / 1000)}…`
+      : missing ? (fmt === '1v1' ? 'Waiting for an opponent to join.' : `Waiting for ${missing} more ${missing > 1 ? 'players' : 'player'} to join.`)
+      : others.some((i) => !r.seats[i]!.connected) ? (fmt === '1v1' ? 'Opponent disconnected.' : 'A player has disconnected.')
+      : !me.ready ? 'Press Ready when you are happy with the settings.'
+      : notReady.length ? (fmt === '1v1' ? 'Waiting for your opponent to get ready.' : `Waiting for ${notReady.map(esc).join(' and ')} to get ready.`) : '';
+    const fmtWord = { '1v1': '1 v 1', '2v2': '2 v 2', coop: 'Together v computer' } as const;
+    const fmtNote = fmt === '1v1' ? 'One against one: you each control a club.' : fmt === '2v2' ? 'Two against two: you and a teammate share a club against two others. Each of you controls one player; the computer runs the rest.' : 'You and a friend share a club against the computer. Each of you controls one player; the computer runs the rest.';
     this.set(`<div class="panel">
       <div class="row between"><h2>Private room</h2><span class="bigcode">${r.code}</span></div>
       <div class="row"><input type="text" readonly value="${esc(link)}" style="flex:1;min-width:200px;font-size:14px" id="link"><button class="btn small" data-a="copy">Copy link</button></div>
-      <div class="grid2" style="margin-top:14px">${seat(r.seats[0], r.you === 0 ? 'You (host)' : 'Host')}${seat(r.seats[1], r.you === 1 ? 'You' : 'Guest')}</div>
+      <div class="row between" style="margin-top:12px"><span class="lbl">Format${host ? '' : ' (host chooses)'}</span>${host ? this.seg('fmt', (['1v1', '2v2', 'coop'] as RoomFormat[]).map((f) => [f, fmtWord[f]]), fmt) : `<span>${fmtWord[fmt]}</span>`}</div>
+      <p class="note">${fmtNote}</p>
+      ${r.league ? `<p class="note lobby-league"><span class="badge ok">Friends league</span> ${esc(this.leagues.find((l) => l.code === r.league)?.name ?? `League ${r.league}`)}: this match counts in the table.</p>` : ''}
+      <div class="grid2 lobby-sides" style="margin-top:10px">${sideCol(0)}${sideCol(1)}</div>
       <div class="stack" style="margin-top:14px">
-        <div class="row between"><span class="lbl">Club${host ? '' : ' (host chooses)'}</span>${host ? `<button class="btn small" data-a="swap">Swap clubs</button>` : `<span>${esc(teamById(me.club).name)}</span>`}</div>
-        <div class="row between"><span class="lbl">Your kit</span>${this.seg('kit', [['home', 'Home'], ['away', 'Away']], me.kit)}</div>
-        <div class="row between"><span class="lbl">Your tactics</span>${this.seg('ment', [['defensive', 'Defensive'], ['balanced', 'Balanced'], ['attacking', 'Attacking']], me.mentality)}</div>
+        <div class="row between"><span class="lbl">Clubs${host ? '' : ' (host chooses)'}</span>${host ? `<button class="btn small" data-a="swap">Swap clubs</button>` : `<span>${esc(teamById(clubOf(mySide)).name)}</span>`}</div>
+        ${fmt === 'coop' ? `<div class="row between"><span class="lbl">Computer${host ? '' : ' (host chooses)'}</span>${host ? this.seg('aidiff', [['casual', 'Casual'], ['pro', 'Pro'], ['elite', 'Elite']], r.aiDiff ?? 'pro') : `<span>${DIFF_WORD[r.aiDiff ?? 'pro']}</span>`}</div>` : ''}
+        <div class="row between"><span class="lbl">${fmt === '1v1' ? 'Your kit' : 'Team kit'}</span>${this.seg('kit', [['home', 'Home'], ['away', 'Away']], me.kit)}</div>
+        <div class="row between"><span class="lbl">${fmt === '1v1' ? 'Your tactics' : 'Team tactics'}</span>${this.seg('ment', [['defensive', 'Defensive'], ['balanced', 'Balanced'], ['attacking', 'Attacking']], me.mentality)}</div>
         <div class="row between"><span class="lbl">Match length${host ? '' : ' (host chooses)'}</span>${host ? this.seg('min', MATCH.allowedRealMinutes.map((m) => [String(m), `${m} min`]), String(r.minutes)) : `<span>${r.minutes} min</span>`}</div>
       </div>
-      <p class="note" style="margin-top:12px">${esc(status)}</p>
-      <div class="row end"><button class="btn" data-a="leave">Leave room</button><button class="btn ${me.ready ? '' : 'primary'}" data-a="ready" ${other ? '' : 'disabled'}>${me.ready ? 'Not ready' : 'Ready'}</button></div>
+      <p class="note lobby-sig">${this.signalHtml()}</p>
+      <p class="note lobby-status" style="margin-top:12px">${esc(status)}</p>
+      <div class="row end"><button class="btn" data-a="leave">Leave room</button><button class="btn ${me.ready ? '' : 'primary'}" data-a="ready" ${missing ? 'disabled' : ''} title="Ready when ${teamWord} has joined">${me.ready ? 'Not ready' : 'Ready'}</button></div>
     </div>`);
     const n = this.net!;
     this.on('[data-a=copy]', () => {
@@ -3489,8 +3833,14 @@ export class App {
     this.bindSeg('kit', (v) => n.send({ t: 'lobby', kit: v as 'home' | 'away' }));
     this.bindSeg('ment', (v) => n.send({ t: 'lobby', mentality: v as Mentality }));
     this.bindSeg('min', (v) => n.send({ t: 'lobby', minutes: Number(v) }));
+    this.bindSeg('fmt', (v) => n.send({ t: 'lobby', format: v as RoomFormat }));
+    this.bindSeg('aidiff', (v) => n.send({ t: 'lobby', aiDiff: v as AiDiff }));
     this.on('[data-a=ready]', () => n.send({ t: 'lobby', ready: !me.ready, sw: [this.settings.switchStyle ?? 'full', this.settings.switchSens ?? 'normal'] }));
-    this.on('[data-a=leave]', () => { this.net?.close(); this.net = null; this.room = null; history.replaceState(null, '', location.pathname); this.showOnline(); });
+    this.on('[data-a=leave]', () => {
+      const lg = this.lgOpen;
+      if (lg) { this.net?.send({ t: 'leave' }); this.room = null; this.openLeague(lg); return; }
+      this.net?.close(); this.net = null; this.room = null; history.replaceState(null, '', location.pathname); this.showOnline();
+    });
   }
 }
 

@@ -8,6 +8,17 @@ export interface ConnInfo {
   state: string;
   latency: number;
   colour: string;
+  /** Signal strength 0-4 (online): from the round trip, how steady it is and missing updates. */
+  bars?: number;
+}
+
+/** Signal bars for a connection: 4 is a quick, steady link; 1 is slow or patchy; 0 is no link. */
+export function signalBars(latency: number, jitter: number, late: number): number {
+  if (latency < 0) return 0;
+  let b = latency < 70 ? 4 : latency < 120 ? 3 : latency < 200 ? 2 : 1;
+  if (jitter > 30 || late > 0.15) b--;
+  if (jitter > 60 || late > 0.35) b--;
+  return Math.max(1, b);
 }
 
 /** A running match, local or online, as seen by the app shell. */

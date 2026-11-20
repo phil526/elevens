@@ -8,6 +8,22 @@ import * as THREE from 'three';
 /** Ball colours: white with deep navy swirls, a teal accent and a thin gold edge. */
 export const BALL_COLOURS = { base: [247, 247, 242], ink: [20, 28, 52], accent: [24, 201, 151], edge: [232, 186, 60], seam: [70, 74, 80] } as const;
 
+type RGB = readonly [number, number, number];
+export interface BallColours { base: RGB; ink: RGB; accent: RGB; edge: RGB; seam: RGB }
+
+/** Match balls unlocked with club levels (20 Nov 2026); 'ball-elevens' is the usual one. */
+export const BALL_DESIGNS: Record<string, BallColours> = {
+  'ball-elevens': BALL_COLOURS,
+  'ball-classic': { base: [246, 246, 244], ink: [18, 18, 20], accent: [18, 18, 20], edge: [120, 120, 124], seam: [60, 60, 62] },
+  'ball-winter': { base: [255, 168, 32], ink: [16, 24, 64], accent: [210, 30, 40], edge: [255, 236, 170], seam: [90, 60, 20] },
+  'ball-neon': { base: [236, 255, 60], ink: [255, 40, 150], accent: [30, 220, 255], edge: [20, 20, 30], seam: [70, 80, 30] },
+  'ball-night': { base: [26, 28, 34], ink: [60, 230, 140], accent: [120, 90, 255], edge: [230, 230, 230], seam: [10, 10, 12] },
+  'ball-gold': { base: [236, 196, 92], ink: [250, 248, 238], accent: [150, 100, 24], edge: [255, 244, 200], seam: [110, 80, 30] },
+};
+let design: BallColours = BALL_COLOURS;
+/** Chooses the ball design used by the next ballMaterial/ballTextures call. */
+export function setBallDesign(id: string) { design = BALL_DESIGNS[id] ?? BALL_COLOURS; }
+
 /**
  * The panel a direction on the ball belongs to (0..5) and how far it is from the nearest seam
  * (0 on the seam). Six cube-face panels whose seams are bent into S-curves.
@@ -29,7 +45,7 @@ export function ballPanel(x: number, y: number, z: number): { panel: number; sea
 /** RGB of the design at a direction (unit vector), and a height for the seam grooves (0 groove .. 1 panel). */
 export function ballColourAt(x: number, y: number, z: number): { rgb: [number, number, number]; h: number } {
   const { panel, seam, u, v } = ballPanel(x, y, z);
-  const C = BALL_COLOURS;
+  const C = design;
   let rgb: [number, number, number] = [...C.base];
   // A curved swoosh across each panel: navy on four panels, teal on two, edged in gold.
   const s = v - 0.55 * Math.sin(u * 2.1 + panel);

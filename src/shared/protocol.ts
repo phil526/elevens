@@ -7,14 +7,15 @@ import { cleanTactics, type Tactics } from './teams';
 import { SWITCH_SENS, SWITCH_STYLES, type InputEvent, type InputFrame, type SwitchSens, type SwitchStyle } from './types';
 import { ALL_CLUBS, TEAMS } from './teams';
 import type { RankedRecord } from './ranked';
+import { cleanLeagueName, cleanResult, LEAGUE, LEAGUE_CODE_RE, type LeagueInfo, type LeagueResult } from './friends';
 
-export const PROTOCOL_VERSION = 16; // 16: solid bodies, timed tackles (20 Nov 2026)
+export const PROTOCOL_VERSION = 18; // 16 solid bodies + timed tackles; 17 team rooms; 18 friends league (20 Nov 2026)
 
 export type ClientMsg =
   | { t: 'hello'; v: number; token?: string; name?: string }
-  | { t: 'create'; name: string }
-  | { t: 'join'; code: string; name: string }
-  | { t: 'lobby'; club?: string; kit?: 'home' | 'away'; mentality?: Mentality; minutes?: number; ready?: boolean; swap?: boolean; sw?: [SwitchStyle, SwitchSens] }
+  | { t: 'create'; name: string; lg?: LeagueTag }
+  | { t: 'join'; code: string; name: string; lg?: LeagueTag }
+  | { t: 'lobby'; club?: string; kit?: 'home' | 'away'; mentality?: Mentality; minutes?: number; ready?: boolean; swap?: boolean; sw?: [SwitchStyle, SwitchSens]; format?: RoomFormat; aiDiff?: AiDiff }
   | { t: 'in'; f: InputFrame[] }
   | { t: 'ping'; c: number }
   | { t: 'tactic'; mentality: Mentality; tac?: Tactics }
@@ -24,7 +25,26 @@ export type ClientMsg =
   /** Ranked (19 Nov 2026): join the queue with your device's id and key and your club; leave it; the top of the table. */
   | { t: 'ranked'; id: string; key: string; name: string; club: string; saved?: { rec: RankedRecord; sig: string } }
   | { t: 'unranked' }
-  | { t: 'board' };
+  | { t: 'board' }
+  /** Friends league (20 Nov 2026): open a league (made if new), hand over the results you keep, get the rest. */
+  | { t: 'lg'; code: string; name?: string; id: string; key: string; me: string; results: LeagueResult[] };
+
+/** A private room opened from a friends league: the league and your id in it. */
+export interface LeagueTag { code: string; id: string }
+
+/**
+ * Private room formats (20 Nov 2026): one against one; two against two (each side two people,
+ * the computer runs their other teammates); or two people together against the computer.
+ */
+export type RoomFormat = '1v1' | '2v2' | 'coop';
+export const ROOM_FORMATS: RoomFormat[] = ['1v1', '2v2', 'coop'];
+export type AiDiff = 'casual' | 'pro' | 'elite';
+export const AI_DIFFS: AiDiff[] = ['casual', 'pro', 'elite'];
+/**
+ * Seats by format. Seat i plays for side i % 2; seats 2 and 3 are each side's second player (the
+ * co-op mate). Seats 0 and 1 are the 1 v 1 seats, as before.
+ */
+export const FORMAT_SEATS: Record<RoomFormat, number[]> = { '1v1': [0, 1], '2v2': [0, 1, 2, 3], coop: [0, 2] };
 
 export interface LobbySeat {
   name: string;
@@ -38,30 +58,45 @@ export interface LobbySeat {
 export interface RoomState {
   t: 'room';
   code: string;
-  you: 0 | 1;
+  /** Your seat (0-3; your side is you % 2). */
+  you: number;
+  /** Four seats (unused ones null). */
   seats: (LobbySeat | null)[];
+  format?: RoomFormat;
+  /** Together against the computer: how good the computer side is. */
+  aiDiff?: AiDiff;
+  /** The two sides' clubs and kits (the computer side's too, which has no seat). */
+  clubs?: [string, string];
+  kits?: ['home' | 'away', 'home' | 'away'];
   minutes: number;
   state: 'lobby' | 'countdown' | 'match' | 'results';
   countdown: number;
-  rematch: [boolean, boolean];
-  host: 0 | 1;
+  rematch: boolean[];
+  host: number;
   /** A ranked match (no lobby settings; the result moves both players' division points). */
   ranked?: boolean;
+  /** Both players opened this room from the same friends league: the result counts there. */
+  league?: string;
 }
 
 export type ServerMsg =
   | { t: 'welcome'; token: string; resumed: boolean }
   | RoomState
   | { t: 'err'; code: ErrCode; msg: string }
-  | { t: 'start'; side: 0 | 1; teams: [string, string]; kits: ['home' | 'away', 'home' | 'away']; minutes: number; mentality: [Mentality, Mentality]; weather?: import('./weather').MatchWeather }
+  | { t: 'start'; side: 0 | 1; slot?: 0 | 1; format?: RoomFormat; teams: [string, string]; kits: ['home' | 'away', 'home' | 'away']; minutes: number; mentality: [Mentality, Mentality]; weather?: import('./weather').MatchWeather }
   | { t: 'pong'; c: number; s: number }
-  | { t: 'opp'; status: 'disconnected' | 'reconnected' | 'left'; graceMs?: number }
+  | { t: 'opp'; status: 'disconnected' | 'reconnected' | 'left'; graceMs?: number; who?: string; mate?: boolean }
   | { t: 'end'; reason: 'fulltime' | 'abandoned' | 'opponent_left' }
   /** Ranked: your record (and whether you are queued, and how many are waiting). */
   | { t: 'rank'; rec: RankedRecord; queued: boolean; waiting: number; sig?: string }
   /** Ranked: a match result, your record before and after. */
   | { t: 'rankres'; before: RankedRecord; after: RankedRecord; delta: number; opp: string; sig?: string }
-  | { t: 'board'; top: RankedRecord[] };
+  | { t: 'board'; top: RankedRecord[] }
+  /** Friends league: the league as the server now knows it (or why it can't be opened). */
+  | { t: 'lg'; league: LeagueInfo }
+  | { t: 'lgerr'; code: string; msg: string }
+  /** Friends league: the result of the match just played (signed). */
+  | { t: 'lgres'; code: string; r: LeagueResult };
 
 export type ErrCode = 'bad_code' | 'not_found' | 'room_full' | 'bad_msg' | 'rate_limited' | 'version' | 'not_in_room' | 'server';
 
@@ -80,6 +115,11 @@ function cleanSaved(x: unknown, id: string): { rec: RankedRecord; sig: string } 
   const elo = n(r.elo, 5000), points = n(r.points, 100000), w = n(r.w, 1e6), d = n(r.d, 1e6), l = n(r.l, 1e6), best = n(r.best, 100000);
   if (r.id !== id || typeof r.name !== 'string' || elo === null || points === null || w === null || d === null || l === null || best === null) return undefined;
   return { rec: { id, name: cleanName(r.name), elo, points, w, d, l, best }, sig: x.sig };
+}
+
+function cleanTag(x: unknown): LeagueTag | undefined {
+  if (!isObj(x) || typeof x.code !== 'string' || typeof x.id !== 'string') return undefined;
+  return LEAGUE_CODE_RE.test(x.code) && /^[a-f0-9]{32}$/.test(x.id) ? { code: x.code, id: x.id } : undefined;
 }
 
 export const cleanName = (x: unknown) => (typeof x === 'string' ? x.replace(/[^\p{L}\p{N} ._-]/gu, '').trim().slice(0, 16) : '') || 'Player';
@@ -135,11 +175,23 @@ export function parseClientMsg(raw: string): ClientMsg | null {
       const token = typeof x.token === 'string' && /^[a-f0-9]{32}$/.test(x.token) ? x.token : undefined;
       return { t: 'hello', v, token, name: cleanName(x.name) };
     }
-    case 'create':
-      return { t: 'create', name: cleanName(x.name) };
+    case 'create': {
+      const lg = cleanTag(x.lg);
+      return lg ? { t: 'create', name: cleanName(x.name), lg } : { t: 'create', name: cleanName(x.name) };
+    }
     case 'join': {
       const code = typeof x.code === 'string' ? x.code.toUpperCase().trim() : '';
-      return { t: 'join', code, name: cleanName(x.name) };
+      const lg = cleanTag(x.lg);
+      return lg ? { t: 'join', code, name: cleanName(x.name), lg } : { t: 'join', code, name: cleanName(x.name) };
+    }
+    case 'lg': {
+      const code = typeof x.code === 'string' ? x.code.toUpperCase().trim() : '';
+      const id = typeof x.id === 'string' && /^[a-f0-9]{32}$/.test(x.id) ? x.id : null;
+      const key = typeof x.key === 'string' && /^[a-f0-9]{32}$/.test(x.key) ? x.key : null;
+      if (!LEAGUE_CODE_RE.test(code) || !id || !key || !Array.isArray(x.results) || x.results.length > LEAGUE.chunk) return null;
+      const results = x.results.map(cleanResult).filter((r): r is LeagueResult => !!r);
+      const name = cleanLeagueName(x.name);
+      return { t: 'lg', code, id, key, me: cleanName(x.me), results, ...(name ? { name } : {}) };
     }
     case 'lobby': {
       const out: Extract<ClientMsg, { t: 'lobby' }> = { t: 'lobby' };
@@ -151,6 +203,8 @@ export function parseClientMsg(raw: string): ClientMsg | null {
       if (x.swap !== undefined) out.swap = x.swap === true;
       // Your auto-switch style and sensitivity (20 Nov 2026); anything else is ignored.
       if (Array.isArray(x.sw) && SWITCH_STYLES.includes(x.sw[0]) && SWITCH_SENS.includes(x.sw[1])) out.sw = [x.sw[0], x.sw[1]];
+      if (x.format !== undefined) { if (!ROOM_FORMATS.includes(x.format as RoomFormat)) return null; out.format = x.format as RoomFormat; }
+      if (x.aiDiff !== undefined) { if (!AI_DIFFS.includes(x.aiDiff as AiDiff)) return null; out.aiDiff = x.aiDiff as AiDiff; }
       return out;
     }
     case 'in': {

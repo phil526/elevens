@@ -1,7 +1,7 @@
 // Ball-carrier decisions: each option gets an understandable score
 // (DESIGN §8) and the best one (plus difficulty noise) is executed.
 
-import { PITCH } from '../config';
+import { FULL_PITCH, PITCH, pitchScale } from '../config';
 import { inCrossZone, laneBlock, leadTarget, pressureOn } from '../kick';
 import { angleOf, clamp, dist, norm, wrapAngle } from '../math';
 import type { Match, KickRequest } from '../match';
@@ -80,7 +80,7 @@ function kickAndMove(m: Match, p: Player, req: KickRequest) {
   if (p.role === 'GK' || p.role === 'LCB' || p.role === 'RCB') return;
   const dir = m.attackDir(p.team);
   const d = dist(p.pos, req.target);
-  const fx = p.pos.x * dir;
+  const fx = (p.pos.x * dir) / pitchScale(); // in full-pitch metres (a street cage is smaller)
   if (d > 22 || fx < -20 || fx > 40) return;
   if (m.rng.chance(GIVE_GO_CHANCE)) p.giveGoUntil = m.time + 2.4;
 }
@@ -129,7 +129,7 @@ export function decide(m: Match, p: Player): Option {
   const dir = m.attackDir(p.team);
   const opp = m.teamPlayers(1 - p.team);
   const mates = m.teamPlayers(p.team).filter((t) => t.id !== p.id);
-  const fx = p.pos.x * dir;
+  const fx = (p.pos.x * dir) / pitchScale(); // in full-pitch metres (a street cage is smaller)
   const pressure = pressureOn(p, m.players);
   const goal = { x: dir * PITCH.halfLength, z: 0 };
   const dGoal = dist(p.pos, goal);
@@ -157,7 +157,7 @@ export function decide(m: Match, p: Player): Option {
     const gk = m.keeper(1 - p.team);
     const side = Math.abs(gk.pos.z) < 0.4 ? (m.rng.chance(0.5) ? 1 : -1) : gk.pos.z > 0 ? -1 : 1;
     // Aim inside the posts and avoid over-hitting: better finishers aim closer to the corners.
-    const aimZ = side * m.rng.range(1.1, 1.9 + 0.8 * p.a.shooting);
+    const aimZ = side * m.rng.range(1.1, 1.9 + 0.8 * p.a.shooting) * (PITCH.goalHalfWidth / FULL_PITCH.goalHalfWidth);
     let power = dGoal > 18 ? m.rng.range(0.66, 0.84) : m.rng.range(0.5, 0.74);
     // Keeper well off their line: chip it. Close in: often drive it low.
     const gkOff = Math.abs(goal.x - gk.pos.x);
@@ -174,7 +174,7 @@ export function decide(m: Match, p: Player): Option {
 
   // Patience: in the middle third with few teammates ahead of the ball, keep possession while
   // the attacking shape forms instead of forcing the play forward.
-  const ahead = mates.filter((t) => t.pos.x * dir > fx + 4).length;
+  const ahead = mates.filter((t) => (t.pos.x * dir) / pitchScale() > fx + 4).length;
   const wait = fx > -10 && fx < 30 && ahead < 3 && pressure < 0.7 && chase < 0.35;
   // Passes (ground, lofted, through).
   for (const t of mates) {
@@ -189,16 +189,16 @@ export function decide(m: Match, p: Player): Option {
     // A long-ball side goes over the top sooner.
     const lob = playStyle === 'longball' && progress > 0.4 ? d > 22 || (lane > 0.4 && d > 12) : d > 30 || (lane > 0.6 && d > 14);
     let s = 0.8 + 0.9 * progress - (lob ? 0.3 : 1.2 * lane) - 0.8 * clamp((5 - space) / 5, 0, 1) - (d > 30 ? (d - 30) / 25 : 0);
-    if (t.pos.x * dir > 36 && Math.abs(t.pos.z) < 14) s += 0.4;
-    else if (t.pos.x * dir > 22 && Math.abs(t.pos.z) < 20) s += 0.2;
+    if ((t.pos.x * dir) / pitchScale() > 36 && Math.abs(t.pos.z) < 14) s += 0.4;
+    else if ((t.pos.x * dir) / pitchScale() > 22 && Math.abs(t.pos.z) < 20) s += 0.2;
     if (progress < -0.3 && pressure < 0.3 && !wait) s -= 0.2; // don't recycle backwards without reason
     if (wait && progress > -0.6 && progress < 0.3 && lane < 0.3 && space > 5) s += 0.3; // keep it while the attack forms
-    if (t.pos.x * dir > 20 && space > 4 && progress > 0.2) s += 0.6; // find a free attacker
+    if ((t.pos.x * dir) / pitchScale() > 20 && space > 4 && progress > 0.2) s += 0.6; // find a free attacker
     if (pressure > 0.3 && lane < 0.3 && space > 4 && !lob) s += 0.45 * pressure; // pressed: keep it simple
     if (chase > 0) s += chase * (0.35 * progress + (lob && progress > 0.6 ? 0.25 : 0)); // chasing: get it forward
     if (protect > 0) s += protect * ((lane < 0.3 && space > 5 && !lob ? 0.3 : 0) - 0.3 * Math.max(0, progress) - (lob ? 0.2 : 0)); // protecting: keep it
     // Cut-back: from near the byline, a ground pass back to a teammate arriving around the penalty spot.
-    const tfx = t.pos.x * dir;
+    const tfx = (t.pos.x * dir) / pitchScale();
     if (fx > 38 && Math.abs(p.pos.z) > 7 && tfx > 31 && tfx < 46 && Math.abs(t.pos.z) < 11 && lane < 0.35 && !lob) s += 0.9;
     s += onBallBias(m, p, lob ? 'lob' : 'pass', { progress, lane, space });
     s += styleBias(playStyle, lob ? 'lob' : 'pass', progress, d, fresh);
@@ -206,7 +206,7 @@ export function decide(m: Match, p: Player): Option {
     opts.push({ score: s, label: lob ? 'lob' : 'pass', req: { kind: lob ? 'lob' : 'pass', receiver: t.id, target: { x: P.x, y: 0, z: P.z } } });
     const goer = t.giveGoUntil > m.time;
     const running = t.aiRunUntil > m.time || goer;
-    if (running && t.pos.x * dir > fx + (goer ? 0 : 3)) {
+    if (running && (t.pos.x * dir) / pitchScale() > fx + (goer ? 0 : 3)) {
       const T = leadTarget(p, t, 'through', dir);
       let tspace = 99;
       for (const o of opp) tspace = Math.min(tspace, dist(o.pos, T));
@@ -220,8 +220,8 @@ export function decide(m: Match, p: Player): Option {
   // runner (also early, from deeper), or driven low across the six-yard box from near the byline.
   if (inCrossZone(p.pos, dir, true)) {
     const early = !inCrossZone(p.pos, dir);
-    const inBox = mates.filter((t) => t.pos.x * dir > 33 && Math.abs(t.pos.z) < 16);
-    const runners = mates.filter((t) => t.pos.x * dir > 24 && Math.abs(t.pos.z) < 18 && t.vel.x * dir > 3);
+    const inBox = mates.filter((t) => (t.pos.x * dir) / pitchScale() > 33 && Math.abs(t.pos.z) < 16);
+    const runners = mates.filter((t) => (t.pos.x * dir) / pitchScale() > 24 && Math.abs(t.pos.z) < 18 && t.vel.x * dir > 3);
     const pool = early ? runners : inBox;
     if (pool.length) {
       const side = Math.sign(p.pos.z) || 1;

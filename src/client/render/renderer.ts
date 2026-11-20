@@ -8,7 +8,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { BALL } from '../../shared/config';
+import { BALL, FULL_PITCH, STREET_PITCH, setPitch } from '../../shared/config';
 import type { Kit, PlayerDef, TeamDef } from '../../shared/teams';
 import { bootColour, captainIndex, playerBuild } from './look';
 import { hairStyleFor } from './hair';
@@ -44,7 +44,7 @@ import { GrassBlades } from './grassblades';
 import { updateCrowd } from './crowd';
 import type { Arena } from './arena';
 import { canvasTex } from './textures';
-import { ballMaterial, BallSpin } from './ball';
+import { ballMaterial, BallSpin, setBallDesign } from './ball';
 import { ReactionDirector } from './reactions';
 import { GlCheck } from './glcheck';
 import { INJURY } from '../../shared/injury';
@@ -110,6 +110,8 @@ export interface GraphicsSettings {
   tvGrade?: boolean;
   /** Big screens: live pictures and goal replays (Medium and up), or the score pages only. */
   bigScreen?: 'live' | 'scores';
+  /** Battery saver: 30 frames a second, at most 1.5x pixel density, big screens show scores only. */
+  batterySaver?: boolean;
   /** Big moments: camera shake, a moment of slow motion on goals and the woodwork, and depth of field in replays and celebrations (default on). */
   bigMoments?: boolean;
   /** Celebration camera: a handheld pitchside camera for goal celebrations (default), or steady shots. */
@@ -437,7 +439,7 @@ export class GameRenderer {
     this.wantPlayers();
     const q = QUALITY[gfx.preset];
     const scale = q >= 3 ? gfx.renderScale : Math.min(1, gfx.renderScale);
-    this.baseDpr = Math.min(MAX_DPR, Math.min(window.devicePixelRatio || 1, DPR_CAP[gfx.preset]) * scale);
+    this.baseDpr = Math.min(gfx.batterySaver ? 1.5 : MAX_DPR, Math.min(window.devicePixelRatio || 1, DPR_CAP[gfx.preset]) * scale);
     if (gfx.autoRes === false) this.dyn.reset();
     this.renderer.setPixelRatio(this.baseDpr * this.dyn.scale);
     // Safe level 1 and up: no shadows (the graphics check saw this browser refuse draws).
@@ -684,7 +686,8 @@ export class GameRenderer {
   /** Auto resolution (render/autores.ts), fed each match frame's real duration. */
   autoResolution(frameMs: number) {
     if (this.gfx.autoRes === false) return;
-    if (this.dyn.feed(frameMs, performance.now()) === null) return;
+    // Battery saver draws every other frame on purpose: judge the speed against 30 fps, not 60.
+    if (this.dyn.feed(this.gfx.batterySaver ? frameMs / 2 : frameMs, performance.now()) === null) return;
     this.renderer.setPixelRatio(this.baseDpr * this.dyn.scale);
     this.resize();
   }
@@ -966,7 +969,13 @@ export class GameRenderer {
   }
 
   /** Build (or rebuild) the scene for a match between these teams/kits. */
-  setupMatch(teams: [TeamDef, TeamDef], kits: ['home' | 'away', 'home' | 'away'], weather?: MatchWeather) {
+  /** A 5-a-side street cage is set up (no stadium, staff or assistants). */
+  cage = false;
+
+  setupMatch(teams: [TeamDef, TeamDef], kits: ['home' | 'away', 'home' | 'away'], weather?: MatchWeather, street = false) {
+    // The pitch the ground is built for (the match sets the same when it starts).
+    setPitch(street ? STREET_PITCH : FULL_PITCH);
+    this.cage = street;
     this.wantPlayers();
     this.glCheck.rearm();
     this.chooseWeather(weather);
@@ -979,14 +988,14 @@ export class GameRenderer {
     this.kitWear.reset();
     this.marks.reset(this.weather === 'snow');
     this.tifo.reset();
-    const key = `${teams[0].id}:${kits[0]}|${teams[1].id}:${kits[1]}|${this.gfx.preset}|${realisticPlayers(this.gfx) && !!this.playerAssets}`;
+    const key = `${teams[0].id}:${kits[0]}|${teams[1].id}:${kits[1]}|${this.gfx.preset}|${realisticPlayers(this.gfx) && !!this.playerAssets}|${street ? 'cage' : 'ground'}`;
     if (key === this.builtFor) { this.weatherTints(); this.smoke.setup(this.flarePos, QUALITY[this.gfx.preset]); return; }
     this.builtFor = key;
     for (const m of this.markers) this.scene.remove(m.ring, m.arrow, m.sprite);
     this.markers = [];
     if (this.stadium) this.scene.remove(this.stadium);
     const k0 = teams[0][kits[0]], k1 = teams[1][kits[1]];
-    this.stadium = buildStadium({ quality: QUALITY[this.gfx.preset], homeColour: k0.shirt, awayColour: k1.shirt, homeName: teams[0].name, awayName: teams[1].name, homeShort: teams[0].abbr, awayShort: teams[1].abbr, ground: groundFor(groundTeam(teams[0])) });
+    this.stadium = buildStadium({ quality: QUALITY[this.gfx.preset], homeColour: k0.shirt, awayColour: k1.shirt, homeName: teams[0].name, awayName: teams[1].name, homeShort: teams[0].abbr, awayShort: teams[1].abbr, ground: groundFor(groundTeam(teams[0])), street });
     this.scene.add(this.stadium);
     const arenaObj = this.stadium.userData.arena as Arena | undefined;
     this.pitchside = arenaObj ? new Pitchside(arenaObj.staff, QUALITY[this.gfx.preset]) : null;
@@ -995,7 +1004,7 @@ export class GameRenderer {
     if (arenaObj && QUALITY[this.gfx.preset] >= 1) { this.blimp = new Blimp(arenaObj.roofHeight + 3.5); this.scene.add(this.blimp.group); }
     if (this.clubFlags) this.stadium.add(this.clubFlags.group);
     this.cornerFlags = new CornerFlags(teams[0].home);
-    this.stadium.add(this.cornerFlags.group);
+    if (!street) this.stadium.add(this.cornerFlags.group);
     if (this.pitchside) this.stadium.add(this.pitchside.group);
     if (arenaObj && QUALITY[this.gfx.preset] >= 1) { this.tifo.build(teams[0], k0, arenaObj.tiers.low, arenaObj.tiers.upr); this.stadium.add(this.tifo.group); }
     else this.tifo.dispose();
@@ -1004,6 +1013,7 @@ export class GameRenderer {
     this.tunnelSet.build(this.scene, tunnelOf(this.stadium), k0.shirt);
     this.scene.add(this.varLines.group);
     this.collectEffects(this.stadium);
+    this.applyCosmetics();
     const aniso = QUALITY[this.gfx.preset] > 1 ? this.renderer.capabilities.getMaxAnisotropy() : 4;
     this.stadium.traverse((o) => {
       const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
@@ -1016,6 +1026,7 @@ export class GameRenderer {
     // Ball and its shadow (always shown: it is what makes height readable).
     // Drawn larger than life (as broadcast games do) so it reads at camera distance; physics uses BALL.radius.
     const bq = QUALITY[this.gfx.preset];
+    setBallDesign(this.cosmetics.ball);
     this.ball = new THREE.Mesh(new THREE.SphereGeometry(BALL.radius * BALL_DRAW_SCALE, bq > 0 ? 40 : 24, bq > 0 ? 28 : 16), ballMaterial(bq));
     this.ballSpinner.reset();
     this.ball.castShadow = this.renderer.shadowMap.enabled;
@@ -1102,6 +1113,21 @@ export class GameRenderer {
     this.mowPattern = (MOW_PATTERNS as readonly string[]).includes(forced ?? '') ? forced as MowPattern
       : set !== 'random' ? set : test ? 'stripes' : MOW_PATTERNS[Math.floor(Math.random() * MOW_PATTERNS.length)];
     if (this.grassU?.uMow) this.grassU.uMow.value = MOW_PATTERNS.indexOf(this.mowPattern);
+  }
+
+  /** Club-level rewards (20 Nov 2026): the match ball, net colour and ball trail colour. */
+  cosmetics: { ball: string; net: number | null; trail: number | null } = { ball: 'ball-elevens', net: null, trail: null };
+
+  /** Applies cosmetics now (nets and trail at once; the ball from the next match set-up). */
+  applyCosmetics() {
+    const seen = new Set<THREE.Material>();
+    for (const n of this.nets) {
+      const m = n.mesh.material as THREE.MeshBasicMaterial;
+      if (seen.has(m)) continue;
+      seen.add(m);
+      m.color.set(this.cosmetics.net ?? 0xffffff);
+    }
+    this.trail.tint(this.cosmetics.trail);
   }
 
   /** Find the stadium's nets, floodlights and grass, and set up the per-match effects. */
@@ -1303,7 +1329,7 @@ export class GameRenderer {
     const b = view.ball;
     const ballV = new THREE.Vector3(b.pos.x, b.pos.y, b.pos.z);
     // Wear builds from live play only (not while a cinematic replays recorded play).
-    const wearOn = this.gfx.wear !== false;
+    const wearOn = this.gfx.wear !== false && !this.cage; // a street cage is artificial turf
     const wet = this.weather === 'rain' ? this.weatherFx.cover : 0;
     if (wearOn && !this.cine) {
       this.pitchWear.update(view, dt, wet);
@@ -1525,6 +1551,12 @@ export class GameRenderer {
     this.managers?.update(view, dt, this.time);
     this.touchline?.update(view, dt, this.time);
     this.officials?.update(view, dt, this.time, this.officialStage);
+    if (this.cage) {
+      // Street: a referee only; no assistants, managers or touchline staff around the cage.
+      this.officials?.models.forEach((m, i) => { if (i > 0) m.root.visible = false; });
+      if (this.managers) this.managers.group.visible = false;
+      if (this.touchline) this.touchline.group.visible = false;
+    }
     this.blimp?.update(this.time, this.matchTime() === 'night');
     this.breath.update(view, dt, this.time, this.mouthY, wd ? { x: wd.wind * Math.cos(wd.windDir), z: wd.wind * Math.sin(wd.windDir) } : { x: 0, z: 0 }, this.managers?.mouths());
     this.blades?.update(this.camera.cam, this.time, b.pos, wd ? { x: wd.wind * Math.cos(wd.windDir), z: wd.wind * Math.sin(wd.windDir) } : { x: 0, z: 0 }, this.weather === 'snow' ? this.weatherFx.cover : 0);
@@ -1611,7 +1643,7 @@ export class GameRenderer {
   private updateFeed(view: ViewState, dt: number) {
     const q = QUALITY[this.gfx.preset];
     const arena = this.stadium?.userData.arena as Arena | undefined;
-    if (q === 0 || this.gfx.bigScreen === 'scores' || !arena || this.glCheck.level >= 2) {
+    if (q === 0 || this.gfx.bigScreen === 'scores' || this.gfx.batterySaver || !arena || this.glCheck.level >= 2) {
       if (this.feed) { this.feed.dispose(); this.feed = null; }
       return;
     }

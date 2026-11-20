@@ -7,7 +7,9 @@
 // the recorded sounds are still loading (slow phone connections used to hear a hiss of white noise
 // for the first seconds of a match): the noise fallbacks only take over if the files failed to load.
 
+import { playAnthem } from './anthem';
 import { MenuSfx, type MenuSound } from './menusfx';
+import { COMMENTARY, COMMENT_KINDS, COMMENT_PRIORITY, commentFile, type CommentKind } from './commentary';
 
 export type WhistleKind = 'out' | 'restart' | 'kickoff' | 'penalty' | 'foul' | 'offside' | 'stop' | 'goal' | 'halftime' | 'fulltime';
 
@@ -97,6 +99,16 @@ export class GameAudio {
   private voiceBus!: GainNode;
   private lastCall = -99;
   private lastLine: SampleName | null = null;
+  /** Recorded commentator lines (audio/commentary.ts), loaded once commentary is wanted. */
+  private lines = new Map<string, AudioBuffer>();
+  private linesLoading = false;
+  /** The line playing now: when it ends, its priority, and its source (a goal may cut in). */
+  private speaking: { until: number; prio: number; src: AudioBufferSourceNode; gain: GainNode } | null = null;
+  private lastSaid = new Map<CommentKind, number>();
+  /** Lines loaded and the total (Settings > Audio). */
+  /** Practice sessions keep the commentator quiet. */
+  commentaryMuted = false;
+  commentaryStatus = { loaded: 0, total: COMMENT_KINDS.reduce((n, k) => n + COMMENTARY[k].length, 0) };
   private nextStomp = 0;
   private musicFade: GainNode | null = null;
   musicEl: HTMLAudioElement | null = null;
@@ -205,6 +217,66 @@ export class GameAudio {
     if (st.failed) console.warn(`[audio] ${st.failed} of ${st.total} sounds could not load (${st.error})`);
   }
 
+  /** Fetch the recorded commentator lines in the background (a few at a time; missing ones are skipped). */
+  loadCommentary() {
+    const ctx = this.ctx;
+    if (!ctx || this.linesLoading || this.settings.commentary === false) return;
+    this.linesLoading = true;
+    const todo: string[] = [];
+    for (const k of COMMENT_KINDS) COMMENTARY[k].forEach((_, i) => todo.push(commentFile(k, i)));
+    const worker = async () => {
+      for (let f = todo.shift(); f; f = todo.shift()) {
+        try {
+          const r = await fetch(this.sfxBase + f);
+          if (!r.ok) continue;
+          this.lines.set(f, await decode(ctx, await r.arrayBuffer()));
+          this.commentaryStatus.loaded++;
+        } catch { /* skipped: the line just isn't said */ }
+      }
+    };
+    void Promise.all([worker(), worker(), worker()]);
+  }
+
+  /**
+   * Say a commentary line of this kind. Lines never talk over each other: a big moment (goal,
+   * red card, penalty) may cut a smaller line short; otherwise the line is skipped if one is
+   * playing or one ended too recently (the gap depends on how big the moment is). The same line
+   * is not repeated twice running. Returns true when a line plays.
+   */
+  say(kind: CommentKind, delay = 0.3): boolean {
+    const ctx = this.ctx;
+    if (!ctx || this.settings.commentary === false || this.commentaryMuted) return false;
+    const files = COMMENTARY[kind].map((_, i) => commentFile(kind, i)).filter((f) => this.lines.has(f));
+    if (!files.length) {
+      // No recorded pack (yet): the older calls cover goals, saves and the woodwork.
+      if (kind === 'goal' || kind === 'equaliser' || kind === 'header' || kind === 'pengoal') return !!this.call('goal', delay);
+      if (kind === 'save' || kind === 'woodwork' || kind === 'pensave') return !!this.call('shot', delay);
+      return false;
+    }
+    const prio = COMMENT_PRIORITY[kind];
+    const now = ctx.currentTime;
+    const sp = this.speaking;
+    if (sp && now < sp.until) {
+      if (prio < 3 || sp.prio >= 3) return false;
+      sp.gain.gain.setTargetAtTime(0.0001, now, 0.05);
+      try { sp.src.stop(now + 0.2); } catch { /* already stopped */ }
+    } else if (sp && now - sp.until < [0, 9, 4, 1.5][prio]) return false;
+    const last = this.lastSaid.get(kind) ?? -1;
+    const pool = files.length > 1 ? files.filter((_, i) => i !== last) : files;
+    const f = pool[Math.floor(Math.random() * pool.length)];
+    this.lastSaid.set(kind, files.indexOf(f));
+    const buf = this.lines.get(f)!;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const g = ctx.createGain();
+    g.gain.value = 1;
+    src.connect(g).connect(this.voiceBus);
+    src.start(now + delay);
+    this.speaking = { until: now + delay + buf.duration, prio, src, gain: g };
+    this.lastCall = now + delay + buf.duration;
+    return true;
+  }
+
   /** True once a recorded sound has loaded (tests and the settings screen use it). */
   has(k: SampleName) { return !!this.samples[k]; }
 
@@ -265,7 +337,7 @@ export class GameAudio {
     const t = this.ctx.currentTime;
     this.master.gain.setTargetAtTime(s.muted ? 0 : s.master, t, 0.05);
     this.fx.gain.setTargetAtTime(s.effects, t, 0.05);
-    this.crowdBus.gain.setTargetAtTime(s.crowd, t, 0.05);
+    this.crowdBus.gain.setTargetAtTime(s.crowd * this.venueK, t, 0.05);
     this.musicBus.gain.setTargetAtTime(s.musicOn === false ? 0 : (s.music ?? 0.5), t, 0.05);
     this.voiceBus.gain.setTargetAtTime(s.commentary === false ? 0 : 0.95, t, 0.05);
   }
@@ -278,6 +350,13 @@ export class GameAudio {
     this.crowdLevel = ctx.createGain();
     this.crowdLevel.gain.value = 0;
     this.crowdLevel.gain.setTargetAtTime(this.crowdTarget, ctx.currentTime, 1.5);
+  }
+
+  /** How loud the crowd is for the venue: a full stadium, or a few onlookers at a street cage. */
+  private venueK = 1;
+  setVenue(street: boolean) {
+    this.venueK = street ? 0.16 : 1;
+    if (this.settings) this.apply(this.settings);
   }
 
   /** Fade the crowd out (back to menus / lobby). */
@@ -680,6 +759,13 @@ export class GameAudio {
 
   private menuSfx: MenuSfx | null = null;
   /** A menu sound (Settings > Audio > Menu sounds), on the effects level. */
+  /** Both nations' anthems, one after the other (World tournament, before kick-off). */
+  anthems(ids: string[]) {
+    if (!this.ctx || !this.fx) return;
+    let at = this.ctx.currentTime + 0.4;
+    for (const id of ids) at = playAnthem(this.ctx, this.fx, id, at) + 0.8;
+  }
+
   ui(kind: MenuSound) {
     const ctx = this.ctx;
     if (!ctx || this.settings.menuSounds === false) return;

@@ -2,7 +2,7 @@
 // on the multiplayer server and in headless tests. Clients only ever feed it
 // InputFrames (intentions); everything else is decided here.
 
-import { ADAPTIVE, BALL, BALLCTL, DIFFICULTY, GAME_PLANS, MATCH, PITCH, PLAYER, SIM, adaptiveParams, halfLength, halfStart, type DifficultyParams, type GamePlan, type Half } from './config';
+import { ADAPTIVE, BALL, BALLCTL, DIFFICULTY, FULL_PITCH, GAME_PLANS, MATCH, PITCH, PLAYER, SIM, STREET_PITCH, setPitch, adaptiveParams, halfLength, halfStart, type DifficultyParams, type GamePlan, type Half, type PitchSpec } from './config';
 import { predictGoalLine, setBallEnv, stepBall, type BallEnv } from './ball';
 import { cleanWeather, weatherEnv, weatherPlay, type MatchWeather, type WeatherPlay } from './weather';
 import type { Crossing } from './ball';
@@ -11,7 +11,7 @@ import { humanHelp, type KickContext, type StridePlan } from './kick';
 import { angleOf, clamp, dist, dirOf, norm, turnTowards, wrapAngle } from './math';
 import { carrierMove, jogSpeed, stepMovement } from './movement';
 import { Rng } from './rng';
-import { benchFor, footProfile, teamById, TEAMS } from './teams';
+import { benchFor, footProfile, STREET_ROLES, teamById, TEAMS } from './teams';
 import type { PlayerDef, TeamDef } from './teams';
 import type {
   Ball, GoalRecord, InputEvent, InputFrame, SwitchStyle, SwitchSens, KickKind, KickVariant, MatchConfig, MatchEvent, MatchEventType, Phase, Player, Restart,
@@ -315,8 +315,13 @@ export class Match {
   env: BallEnv;
   wplay: WeatherPlay;
 
+  /** The pitch this match is played on (a street cage or a full pitch); set before every step. */
+  readonly pitch: Readonly<PitchSpec>;
+
   constructor(cfg: MatchConfig) {
     this.cfg = { ...cfg };
+    this.pitch = cfg.street ? STREET_PITCH : FULL_PITCH;
+    setPitch(this.pitch);
     this.weather = cleanWeather(cfg.weather);
     this.env = weatherEnv(this.weather);
     this.wplay = weatherPlay(this.weather);
@@ -338,6 +343,8 @@ export class Match {
         });
       });
     }
+    // 5-a-side street: keeper, two at the back, one in midfield and the striker; the rest sit out.
+    if (cfg.street) for (const p of this.players) if (!STREET_ROLES.includes(p.role)) { p.off = true; p.pos = { x: 0, z: (p.team ? 1 : -1) * 60 }; }
     this.pstats = this.players.map((p) => newPlayerStats(p.id, p.team, p.def, p.role));
     this.ball = {
       pos: { x: 0, y: BALL.radius, z: 0 }, vel: { x: 0, y: 0, z: 0 }, spin: 0,
@@ -529,6 +536,30 @@ export class Match {
     c.input = emptyInput();
     this.pendingEvents[team] = [];
     for (const p of this.teamPlayers(team)) p.queued = null;
+  }
+
+  /**
+   * Online team rooms: a seat's human drops (the computer takes that control) or comes back.
+   * Slot 1 is the co-op mate. When the main control's human drops while the mate's is still
+   * there, or the mate comes back to a side the computer runs, the two controls swap so the side
+   * keeps its main human; returns true when they swapped (the room swaps the seats' slots).
+   */
+  setSeatHuman(team: TeamIndex, slot: 0 | 1, human: boolean): boolean {
+    const mt = this.mates[team];
+    if (slot === 1) {
+      if (!mt) return false;
+      if (human && !this.ctrl[team].human) { this.swapMate(team); this.setHuman(team, true); return true; }
+      mt.human = human; mt.input = emptyInput(); this.matePending[team] = [];
+      return false;
+    }
+    if (!human && mt?.human) {
+      this.swapMate(team);
+      const m = this.mates[team]!;
+      m.human = false; m.input = emptyInput(); this.matePending[team] = [];
+      return true;
+    }
+    this.setHuman(team, human);
+    return false;
   }
 
   /** Apply one input frame for a team. Validated and clamped; events are queued in order. */
@@ -749,6 +780,7 @@ export class Match {
 
   step() {
     const dt = SIM.dt;
+    setPitch(this.pitch);
     setBallEnv(this.env);
     this.tick++;
     this.time += dt;
@@ -903,7 +935,7 @@ export class Match {
 
   // ---------------------------------------------------------------- substitutions
 
-  get maxSubs() { return this.cfg.practice ? 0 : this.cfg.maxSubs ?? 5; }
+  get maxSubs() { return this.cfg.practice || this.cfg.street ? 0 : this.cfg.maxSubs ?? 5; }
   subsUsed(team: number) { return this.subsLog.filter((s) => s[0] === team).length; }
   /** Bench players still available (index into bench[team]). */
   benchFree(team: number) { return this.bench[team].map((_, i) => i).filter((i) => !this.subsLog.some((s) => s[0] === team && s[2] === i)); }
@@ -1201,6 +1233,7 @@ export class Match {
     const rs = r.type === 'freekick' ? r.runStyle ?? 0 : 0;
     const runD = this.phase === 'kickoff' ? 0 : r.type === 'freekick' && rs ? [3.0, 4.6, 1.8, 3.2][rs] : runupDistance(r.type);
     if (runD > 0) targets[r.taker] = runupStart(kickPos, r.spot, runD, rs === 3 ? 0 : footProfile(this.players[r.taker].def).foot);
+    if (runD > 0 && PITCH.walls) targets[r.taker] = clampToPitch(targets[r.taker], 0.4); // the run-up starts inside the cage
     if (r.type === 'freekick') this.freeKickExtras(r, targets, dt);
     // Ball is retrieved to the spot after a short pause (instantly for kick-offs).
     if (r.t > 0.6 || this.phase === 'kickoff') {
@@ -1233,7 +1266,7 @@ export class Match {
         let snapped = 0;
         // Kick-offs line everyone up. Otherwise stragglers keep running into position after the
         // whistle; only the taker, and opponents still inside the required distance, are placed.
-        const minDist = r.type === 'throwin' ? 2 : r.type === 'dropball' ? 0 : 9.15;
+        const minDist = r.type === 'throwin' ? 2 : r.type === 'dropball' ? 0 : PITCH.restartDistance;
         for (const p of this.players) {
           if (p.off || dist(p.pos, targets[p.id]) <= 1.2) continue;
           // Goal kicks: opponents must also be outside the penalty area until the ball is in play.
@@ -2898,7 +2931,7 @@ export class Match {
       // A low drive is kept under the wall's jump rather than lifted over it.
       // A knuckleball still has to get over the wall: it is solved with its late dip and no curl.
       const knuckle = !!a.knuckle && !!wall;
-      const clear = wall && style !== 'low' ? { d: MATCH.freeKickDistance + 0.4 - (r!.wall?.creep ?? 0), h: 2.3 } : undefined;
+      const clear = wall && style !== 'low' ? { d: PITCH.restartDistance + 0.4 - (r!.wall?.creep ?? 0), h: 2.3 } : undefined;
       res = solveShot(ctx, { side: dir, aimZ, power, placed: style === 'finesse', style, clear, curve: knuckle ? 0 : curve, dip: knuckle ? 3.5 / 9 : a.dip });
       if (knuckle) {
         res = { ...res, spin: 0, dip: 3.5 };
@@ -3079,7 +3112,7 @@ export class Match {
   private evaluateOffside(passer: Player, exempt: boolean) {
     this.offside.flagged.clear();
     this.offside.team = passer.team;
-    if (exempt) return;
+    if (exempt || this.cfg.street) return; // no offside in the street
     const dir = this.attackDir(passer.team);
     const fx = (p: { x: number }) => p.x * dir;
     const opp = this.players.filter((o) => o.team !== passer.team && !o.off).map((o) => fx(o.pos)).sort((a, b) => b - a);
@@ -3381,8 +3414,10 @@ export class Match {
         const f = dirOf(p.facing);
         const sp = Math.max(PLAYER.slideSpeed * this.wplay.slide * clamp(1 - p.action.t / 0.5, 0, 1), 0);
         p.vel = { x: f.x * sp, z: f.z * sp };
-        p.pos.x = clamp(p.pos.x + p.vel.x * dt, -PITCH.halfLength - 4, PITCH.halfLength + 4);
-        p.pos.z = clamp(p.pos.z + p.vel.z * dt, -PITCH.halfWidth - 3, PITCH.halfWidth + 3);
+        // Run-off around a pitch; a street cage's walls stop players at the boards.
+        const ox = PITCH.walls ? -0.35 : 4, oz = PITCH.walls ? -0.35 : 3;
+        p.pos.x = clamp(p.pos.x + p.vel.x * dt, -PITCH.halfLength - ox, PITCH.halfLength + ox);
+        p.pos.z = clamp(p.pos.z + p.vel.z * dt, -PITCH.halfWidth - oz, PITCH.halfWidth + oz);
         continue;
       }
       // An AI ball carrier starting a sprint gets the same burst a human gets by pressing sprint.

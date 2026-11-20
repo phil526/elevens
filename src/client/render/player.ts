@@ -6,7 +6,7 @@
 
 import { classicShirtTexture } from './kitstyle';
 import * as THREE from 'three';
-import { PLAYER } from '../../shared/config';
+import { PITCH, PLAYER } from '../../shared/config';
 import type { Kit } from '../../shared/teams';
 import type { ViewPlayer } from '../view';
 import { numberTexture } from './textures';
@@ -60,7 +60,6 @@ export function headerStyleFor(p: ViewPlayer, ball: THREE.Vector3, vel: THREE.Ve
   return { kind, flick: clamp01((-along - 0.1) / 0.5), turn: Math.max(-1, Math.min(1, lat * 1.4)) };
 }
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-const PITCH_HALF = 52.5;
 const clamp01 = (t: number) => (t < 0 ? 0 : t > 1 ? 1 : t);
 
 export interface KitMaterials {
@@ -765,7 +764,7 @@ export class PlayerModel {
     // Off the ground: an overhead kick or a scissor volley (render/moves7.ts); the body falls away from the ball's way.
     const air = airKickFor(ballPos.y, angle);
     if (air) return { flavour: air, side: angle > 0 ? 1 : -1 };
-    const gx = Math.sign(p.pos.x || 1) * PITCH_HALF;
+    const gx = Math.sign(p.pos.x || 1) * PITCH.halfLength;
     return kickFlavourFor({
       kind: a.kind, angle, strong: footProfile(p.def).foot === 1 ? 1 : -1,
       reach: Math.hypot(ballPos.x - p.pos.x, ballPos.z - p.pos.z), goalDist: Math.hypot(gx - p.pos.x, p.pos.z), ballY: ballPos.y,

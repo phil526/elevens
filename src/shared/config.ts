@@ -1,6 +1,18 @@
 // Shared tuning constants. All distances are metres, times seconds, speeds m/s.
 
-export const PITCH = {
+/** Pitch dimensions. `walls`: a street cage, where the ball bounces back off the sides and ends. */
+export interface PitchSpec {
+  length: number; width: number; halfLength: number; halfWidth: number;
+  goalWidth: number; goalHalfWidth: number; goalHeight: number; goalDepth: number; postRadius: number;
+  penaltyAreaDepth: number; penaltyAreaHalfWidth: number; goalAreaDepth: number; goalAreaHalfWidth: number;
+  penaltySpot: number; centreCircleRadius: number; cornerArcRadius: number;
+  walls: boolean;
+  /** Free kick wall and restart distance. */
+  restartDistance: number;
+}
+
+/** A full-size pitch (every normal match). */
+export const FULL_PITCH: Readonly<PitchSpec> = Object.freeze({
   length: 105,
   width: 68,
   halfLength: 52.5,
@@ -17,7 +29,47 @@ export const PITCH = {
   penaltySpot: 11,
   centreCircleRadius: 9.15,
   cornerArcRadius: 1,
-} as const;
+  walls: false,
+  restartDistance: 9.15,
+});
+
+/** 5-a-side street cage (20 Nov 2026): 40 x 24 m, walls all round, 4 x 2 m goals set into the end walls. */
+export const STREET_PITCH: Readonly<PitchSpec> = Object.freeze({
+  length: 40,
+  width: 24,
+  halfLength: 20,
+  halfWidth: 12,
+  goalWidth: 4,
+  goalHalfWidth: 2,
+  goalHeight: 2,
+  goalDepth: 1.2,
+  postRadius: 0.05,
+  penaltyAreaDepth: 6,
+  penaltyAreaHalfWidth: 6,
+  goalAreaDepth: 2,
+  goalAreaHalfWidth: 3,
+  penaltySpot: 6,
+  centreCircleRadius: 3,
+  cornerArcRadius: 0.5,
+  walls: true,
+  restartDistance: 5,
+});
+
+/**
+ * The pitch in use. Every match sets it when it starts (Match constructor), so it is the full pitch
+ * except during a street match on this device. Read its fields at the time of use, never copy them
+ * into module constants (or register with onPitchChange).
+ */
+export const PITCH: PitchSpec = { ...FULL_PITCH };
+const pitchListeners: (() => void)[] = [];
+export function setPitch(p: Readonly<PitchSpec>) {
+  if (PITCH.length === p.length && PITCH.walls === p.walls && PITCH.goalHalfWidth === p.goalHalfWidth) return;
+  Object.assign(PITCH, p);
+  for (const f of pitchListeners) f();
+}
+export function onPitchChange(f: () => void) { pitchListeners.push(f); }
+/** Length of the pitch in use against a full-size one (1 on a full pitch): the AI reads how far up the pitch it is in full-pitch metres. */
+export const pitchScale = () => PITCH.halfLength / FULL_PITCH.halfLength;
 
 export const BALL = {
   radius: 0.11,

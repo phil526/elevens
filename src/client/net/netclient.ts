@@ -22,6 +22,8 @@ export class NetClient {
   ws: WebSocket | null = null;
   status: NetStatus = 'idle';
   latency = -1;
+  /** How much the round trip varies from ping to ping (ms, smoothed). */
+  jitter = 0;
   token: string | undefined = storedToken();
   inRoom = false;
   private retry = 0;
@@ -37,6 +39,8 @@ export class NetClient {
   onSnapshot: (s: Snapshot, recvAt: number) => void = () => {};
   onMessage: (m: ServerMsg) => void = () => {};
   onWelcome: (resumed: boolean) => void = () => {};
+  /** A ping came back (latency and jitter updated). */
+  onPong: () => void = () => {};
 
   constructor(public url = serverUrl()) {}
 
@@ -85,7 +89,9 @@ export class NetClient {
         this.onWelcome(sm.resumed);
       } else if (sm.t === 'pong') {
         const rtt = now - sm.c;
+        if (this.latency >= 0) this.jitter = this.jitter * 0.8 + Math.abs(rtt - this.latency) * 0.2;
         this.latency = this.latency < 0 ? rtt : this.latency * 0.8 + rtt * 0.2;
+        this.onPong();
       } else if (sm.t === 'room') {
         this.inRoom = true;
         this.onRoom(sm);

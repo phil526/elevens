@@ -1,0 +1,337 @@
+[
+ {
+  "n": 0,
+  "lines": [
+   {
+    "k": "kickoff",
+    "i": 0,
+    "t": "And we're under way."
+   },
+   {
+    "k": "kickoff",
+    "i": 1,
+    "t": "Here we go. The referee gets us started."
+   },
+   {
+    "k": "kickoff",
+    "i": 2,
+    "t": "Kick-off, and the crowd are right behind them."
+   },
+   {
+    "k": "goal",
+    "i": 0,
+    "t": "And it's in! What a finish!"
+   },
+   {
+    "k": "goal",
+    "i": 1,
+    "t": "Goal! The keeper had no chance!"
+   }
+  ]
+ },
+ {
+  "n": 1,
+  "lines": [
+   {
+    "k": "goal",
+    "i": 2,
+    "t": "He's scored! Right into the corner!"
+   },
+   {
+    "k": "goal",
+    "i": 3,
+    "t": "It's in the back of the net!"
+   },
+   {
+    "k": "goal",
+    "i": 4,
+    "t": "What a strike! That's a goal of real quality!"
+   },
+   {
+    "k": "goal",
+    "i": 5,
+    "t": "Goal! Cool as you like."
+   },
+   {
+    "k": "goal",
+    "i": 6,
+    "t": "Oh, that's a beauty! Top corner!"
+   }
+  ]
+ },
+ {
+  "n": 2,
+  "lines": [
+   {
+    "k": "goal",
+    "i": 7,
+    "t": "He's done it! Listen to this crowd!"
+   },
+   {
+    "k": "equaliser",
+    "i": 0,
+    "t": "And they're level! Game on!"
+   },
+   {
+    "k": "equaliser",
+    "i": 1,
+    "t": "The equaliser! We're all square!"
+   },
+   {
+    "k": "header",
+    "i": 0,
+    "t": "A brilliant header, and it's in!"
+   },
+   {
+    "k": "header",
+    "i": 1,
+    "t": "Up he goes, and he's headed it home!"
+   }
+  ]
+ },
+ {
+  "n": 3,
+  "lines": [
+   {
+    "k": "pengoal",
+    "i": 0,
+    "t": "He sends the keeper the wrong way!"
+   },
+   {
+    "k": "pengoal",
+    "i": 1,
+    "t": "Penalty scored. No mistake."
+   },
+   {
+    "k": "save",
+    "i": 0,
+    "t": "What a save!"
+   },
+   {
+    "k": "save",
+    "i": 1,
+    "t": "Brilliant stop from the keeper!"
+   },
+   {
+    "k": "save",
+    "i": 2,
+    "t": "Fingertips! He's kept that out!"
+   }
+  ]
+ },
+ {
+  "n": 4,
+  "lines": [
+   {
+    "k": "save",
+    "i": 3,
+    "t": "The keeper's equal to it!"
+   },
+   {
+    "k": "save",
+    "i": 4,
+    "t": "Saved! Great reactions!"
+   },
+   {
+    "k": "pensave",
+    "i": 0,
+    "t": "Saved! The keeper's guessed right!"
+   },
+   {
+    "k": "pensave",
+    "i": 1,
+    "t": "He's saved the penalty!"
+   },
+   {
+    "k": "woodwork",
+    "i": 0,
+    "t": "Off the post!"
+   }
+  ]
+ },
+ {
+  "n": 5,
+  "lines": [
+   {
+    "k": "woodwork",
+    "i": 1,
+    "t": "Off the bar! So close!"
+   },
+   {
+    "k": "woodwork",
+    "i": 2,
+    "t": "It's hit the woodwork!"
+   },
+   {
+    "k": "woodwork",
+    "i": 3,
+    "t": "The frame of the goal comes to the rescue!"
+   },
+   {
+    "k": "miss",
+    "i": 0,
+    "t": "Just wide!"
+   },
+   {
+    "k": "miss",
+    "i": 1,
+    "t": "Over the bar."
+   }
+  ]
+ },
+ {
+  "n": 6,
+  "lines": [
+   {
+    "k": "miss",
+    "i": 2,
+    "t": "He should have done better there."
+   },
+   {
+    "k": "miss",
+    "i": 3,
+    "t": "Inches away!"
+   },
+   {
+    "k": "tackle",
+    "i": 0,
+    "t": "Great tackle!"
+   },
+   {
+    "k": "tackle",
+    "i": 1,
+    "t": "Superb challenge. He's won it clean."
+   },
+   {
+    "k": "tackle",
+    "i": 2,
+    "t": "Well defended."
+   }
+  ]
+ },
+ {
+  "n": 7,
+  "lines": [
+   {
+    "k": "foul",
+    "i": 0,
+    "t": "That's a foul."
+   },
+   {
+    "k": "foul",
+    "i": 1,
+    "t": "The referee blows. Free kick."
+   },
+   {
+    "k": "yellow",
+    "i": 0,
+    "t": "That's a yellow card."
+   },
+   {
+    "k": "yellow",
+    "i": 1,
+    "t": "He's in the book."
+   },
+   {
+    "k": "yellow",
+    "i": 2,
+    "t": "The referee reaches for his pocket. Yellow."
+   }
+  ]
+ },
+ {
+  "n": 8,
+  "lines": [
+   {
+    "k": "red",
+    "i": 0,
+    "t": "Red card! He's off!"
+   },
+   {
+    "k": "red",
+    "i": 1,
+    "t": "Straight red! They're down to ten!"
+   },
+   {
+    "k": "penalty",
+    "i": 0,
+    "t": "Penalty! The referee points to the spot!"
+   },
+   {
+    "k": "penalty",
+    "i": 1,
+    "t": "It's a penalty!"
+   },
+   {
+    "k": "corner",
+    "i": 0,
+    "t": "Corner kick."
+   }
+  ]
+ },
+ {
+  "n": 9,
+  "lines": [
+   {
+    "k": "corner",
+    "i": 1,
+    "t": "They'll have a corner here."
+   },
+   {
+    "k": "freekick",
+    "i": 0,
+    "t": "Free kick, in a dangerous position."
+   },
+   {
+    "k": "freekick",
+    "i": 1,
+    "t": "This is well within range."
+   },
+   {
+    "k": "offside",
+    "i": 0,
+    "t": "The flag's up. Offside."
+   },
+   {
+    "k": "offside",
+    "i": 1,
+    "t": "Offside. He went too early."
+   }
+  ]
+ },
+ {
+  "n": 10,
+  "lines": [
+   {
+    "k": "halftime",
+    "i": 0,
+    "t": "That's half-time."
+   },
+   {
+    "k": "halftime",
+    "i": 1,
+    "t": "The referee blows for the break."
+   },
+   {
+    "k": "fulltime",
+    "i": 0,
+    "t": "And that's full time!"
+   },
+   {
+    "k": "fulltime",
+    "i": 1,
+    "t": "It's all over!"
+   },
+   {
+    "k": "fulltime",
+    "i": 2,
+    "t": "The final whistle goes!"
+   },
+   {
+    "k": "late",
+    "i": 0,
+    "t": "Into the final minutes now."
+   }
+  ]
+ }
+]
