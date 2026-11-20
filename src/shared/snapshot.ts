@@ -28,7 +28,7 @@ export interface Snapshot {
   c: number; // display clock seconds
   ex?: number; // added time this half, whole minutes (0 until announced)
   sc: [number, number];
-  b: number[]; // x,y,z,vx,vy,vz,state,owner,flight,lastTouchTeam
+  b: number[]; // x,y,z,vx,vy,vz,state,owner,flight,lastTouchTeam,receiver (receiver from 20 Nov 2026; older servers send 10)
   p: number[]; // PLAYER_STRIDE per player
   dv: number[][]; // [id, tx, ty, tz] for diving keepers
   r: number[] | 0; // restart: type, team, taker, ready, x, z, readyT, aimX, aimZ
@@ -65,7 +65,7 @@ export function encodeSnapshot(m: Match, ack: number, events: MatchEvent[], with
     k: 's', t: m.tick, ph: PHASES.indexOf(m.phase), pt: r2(m.phaseT), h: m.half, c: Math.round(m.displayClock * 10) / 10, sc: [...m.score] as [number, number], ex: m.addedTime,
     sb: m.subsLog.length ? m.subsLog.map((x) => [...x] as [number, number, number]) : undefined,
     so: m.shootout ? [m.shootout.kicks[0].map((k: boolean) => (k ? 1 : 0)), m.shootout.kicks[1].map((k: boolean) => (k ? 1 : 0)), m.shootout.team, m.shootout.winner] : undefined,
-    b: [r2(b.pos.x), r2(b.pos.y), r2(b.pos.z), r2(b.vel.x), r2(b.vel.y), r2(b.vel.z), BALL_STATES.indexOf(b.state), b.owner, FLIGHTS.indexOf(b.flight), b.lastTouchTeam],
+    b: [r2(b.pos.x), r2(b.pos.y), r2(b.pos.z), r2(b.vel.x), r2(b.vel.y), r2(b.vel.z), BALL_STATES.indexOf(b.state), b.owner, FLIGHTS.indexOf(b.flight), b.lastTouchTeam, b.receiver],
     p, dv,
     r: r ? [RESTARTS.indexOf(r.type), r.team, r.taker, r.ready ? 1 : 0, r2(r.spot.x), r2(r.spot.z), r2(r.readyT), r2(r.aim.x), r2(r.aim.z), r.quick ? 1 : 0, r2(r.curve ?? 0), r2(r.dip ?? 0)] : 0,
     ctl: [m.ctrl[0].pid, m.ctrl[1].pid], nx: [m.ctrl[0].next, m.ctrl[1].next], hu: [m.ctrl[0].human ? 1 : 0, m.ctrl[1].human ? 1 : 0],

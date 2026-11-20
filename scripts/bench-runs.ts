@@ -17,14 +17,17 @@ for (let seed = 1; seed <= 40; seed++) {
   const dir = m.attackDir(0);
   const p = m.teamPlayers(0).find((x) => x.role === 'RCM' || x.role === 'LCM')!;
   m.ctrl[0].pid = p.id; m.ctrl[0].autoSwitch = false;
-  p.pos = { x: -12 * dir, z: (seed % 5) * 3 - 6 }; p.vel = { x: 0, z: 0 }; p.facing = dir > 0 ? 0 : Math.PI;
+  p.pos = { x: Number(process.env.START ?? -12) * dir, z: (seed % 5) * 3 - 6 }; p.vel = { x: 0, z: 0 }; p.facing = dir > 0 ? 0 : Math.PI;
   m.takePossession(p, true);
   m.ball.pos = { x: p.pos.x + 0.45 * dir, y: 0.11, z: p.pos.z }; m.ball.vel = { x: 0, y: 0, z: 0 };
   const wasFwd: Record<number, boolean> = {};
   let ok = true;
   for (let i = 0; i < 60 * 7; i++) {
     const z = Math.sin(i / 90) * 0.4;
-    m.applyInput(0, { seq: seq++, mx: dir, mz: z, sprint: false, jockey: false, contain: false, ev: [] });
+    const mode = process.env.MODE ?? 'fwd';
+    const sx = mode === 'still' ? 0 : mode === 'side' ? 0.15 * dir : dir;
+    const sz = mode === 'still' ? 0 : mode === 'side' ? Math.sign(Math.sin(i / 120)) || 1 : z;
+    m.applyInput(0, { seq: seq++, mx: sx, mz: sz, sprint: false, jockey: false, contain: false, ev: [] });
     m.step(); m.drainEvents();
     if (m.ball.owner !== p.id || m.phase !== 'play') { ok = false; break; }
     if (i % 6) continue;

@@ -106,7 +106,10 @@ export class OnlineSession implements Session {
     const action = ACTIONS[s.p[o + 6]];
     const phase = PHASES[s.ph];
     const ownsBall = s.b[7] === pid;
-    const canPredict = this.predictionEnabled && phase === 'play' && action === 'none' && !(BALL_STATES[s.b[6]] === 'held');
+    // A pass on its way to this player: the server steers him onto the ball (receive assist, or the
+    // stick still held from the pass being ignored), so follow it rather than predict from the stick.
+    const receiving = BALL_STATES[s.b[6]] === 'flight' && s.b[10] === pid;
+    const canPredict = this.predictionEnabled && phase === 'play' && action === 'none' && !(BALL_STATES[s.b[6]] === 'held') && !receiving;
     if (!canPredict) { this.dropPrediction(); return; }
     const m: MoverState = {
       pos: { x: s.p[o], z: s.p[o + 1] }, vel: { x: s.p[o + 2], z: s.p[o + 3] }, facing: s.p[o + 4], stamina: s.p[o + 5] / 100,
