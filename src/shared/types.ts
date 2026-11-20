@@ -184,6 +184,17 @@ export interface InputEvent {
 }
 
 /** One 60 Hz frame of player intention. This is all a client may send. */
+/**
+ * Auto-switch styles (20 Nov 2026): 'off' never switches for you; 'air' only for high balls and
+ * crosses; 'assisted' for high balls and when the ball has gone past your man; 'full' whenever a
+ * clearly better-placed defender exists.
+ */
+export type SwitchStyle = 'off' | 'air' | 'assisted' | 'full';
+export const SWITCH_STYLES: SwitchStyle[] = ['off', 'air', 'assisted', 'full'];
+/** Auto-switch sensitivity: Calm waits for a clearer case, Eager moves you sooner. */
+export type SwitchSens = 'calm' | 'normal' | 'eager';
+export const SWITCH_SENS: SwitchSens[] = ['calm', 'normal', 'eager'];
+
 export interface InputFrame {
   seq: number;
   mx: number; // movement, world axes, magnitude <= 1
@@ -205,6 +216,10 @@ export interface MatchConfig {
   difficulty: [Difficulty, Difficulty]; // decision quality of each team's AI
   mentality: [Mentality, Mentality];
   autoSwitch: [boolean, boolean];
+  /** Auto-switch style per side (20 Nov 2026; default 'full'). 'off' is the same as autoSwitch false. */
+  switchStyle?: [SwitchStyle, SwitchStyle];
+  /** How readily the auto-switch moves you (default 'normal'). */
+  switchSens?: [SwitchSens, SwitchSens];
   quickRestarts?: [boolean, boolean]; // humans may take throw-ins, corners and free kicks before everyone is set (default on)
   seed: number;
   /** Practice: no clock. 'free' is open play; 'freekick' and 'penalty' repeat that set piece for team 0. */

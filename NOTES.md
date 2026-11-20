@@ -102,6 +102,21 @@ Philip: "Optimize the game for mobile phone. Ensure all the character models loa
 - Benches: AI v AI byte-identical (bench-features 1000 10). Scripted human, Pro, 12 matches seeds 1-12: new `HOLD=1` (stick kept on the pass through wind-up and flight, like a pad player): my pass completion 40.3 -> 78.9%, team 24.8 -> 68.9%, pass-to-reception 3.37 -> 1.39 s, goals 7 -> 20. Stick let go (`HOLD=0`): 72.4 -> 72.2%, open forward options while the human has the ball 0.54 -> 0.63. bench-runs `START=-25`: wingers running forward 38/43% -> 43/50%. bench-runs takes `START` and `MODE=fwd|still|side`.
 - tests/runtopass.test.ts (7, four fail on the old build). Tests 612.
 
+## 20 Nov: better automatic player switching (thread "Improve automatic player switching")
+- Philip: "i want to make the auto selecting players better list some improvements" -> 10 ideas -> "add them all". Human control only; switches in shared/switches.ts `SW` (`SW_OFF=carry,guard,...`) with tuning `SWITCH`.
+- 1 carry: `Control.carryKind` 'switch' (switchPlayer, switchTowards stick flick, leaveKeeper; not a mouse click): the held stick is ignored and the man runs at `engageSpot(engagePoint)` until the stick is let go / moved > CARRY_ANGLE / 1.4 s / your team has the ball. Snapshot `ca` tells online prediction to follow the server meanwhile.
+- 2 guard: no auto-switch 0.8 s after pass/lob/through pressed while defending (`lastChallenge`); +0.8 s margin while jockey or contain held (not when beaten); +0.5 while sprinting at the ball.
+- 3 steady: `pend` - a better man must stay better 0.25 s (0.05 when beaten or a cross; 0 for a pass just played); `bestEngager(keep)` keeps the marker unless another is 0.2 s better. A single manual press takes `c.next`.
+- 4 cycle: presses within 0.8 s skip the players this run visited (`chain`).
+- 5 set pieces: `defendSetPiece` when their corner / free kick (< 38 m) / throw-in (< 35 m from goal) is ready: the defender nearest the danger (not in the wall); a switch press during their set-up cycles (free kicks with a wall keep switch for wall size). Event text 'setpiece'.
+- 6 read: `passWindup` (opponent `action.kind` pass/through/lob/cross, not released, receiver set) makes `engagePoint` the receiver; no auto-switch while you are within 6 m of the passer during his wind-up.
+- 7 on screen: candidates > 30 m from the ball along the pitch cost +0.5 s. Client: `.edgearrow` in the HUD (renderer.edgePoint) when your man is off the screen.
+- 8 cue: switch events carry text auto / manual / setpiece / pass / ball / keeper; client flashes `renderer.flashSwitch`, `audio.switchCue`, light buzz for automatic ones. Settings.switchCue.
+- 9 styles: `Settings.switchStyle` off/air/assisted/full + `switchSens` calm/normal/eager (margins and cool-downs x1.45 / 1 / 0.7); MatchConfig `switchStyle`/`switchSens`; old `autoSwitch:false` migrates to 'off'. Online: lobby `sw` sent with Ready, server room `Seat.sw`.
+- 10 crosses: `crossOnUs` (cross/lob/clear from them, engage point < 26 m from goal): cool-down 0.3 s, margin 0.45 s; a cross's receiver is met at head height (meetPoint maxY 2.6).
+- Benches: AI v AI byte-identical (bench-features 160 matches, seeds 1000-1159). Scripted human (bench-human 1 12 pro): switches 2177 -> 1961, flick-backs 203 -> 182, computer shots against 40 -> 23 (goals 4 -> 8, small numbers); HOLD=1: shots against 67 -> 42, goals against 10 -> 8.
+- tests/autoswitch.test.ts (23). `npm run e2e:switch` 12/12.
+
 ## 20 Nov: free kicks and penalties (thread "Improve free kicks and penalties")
 - Philip asked for 10 ideas, then "add all the free kicks and penalties improvements": all 10 built. Switches in `src/shared/setpieces.ts` `SP_ON` (ratings, takers, pressure, techniques, duel, habits, knuckle, routines, wall, referee, shootout), tuning in `SETPIECE`.
 - Ratings: `setPieceRatings(def)` pen/fk/comp (25-96, from attrs + a name hash; keepers poor; `def.setPieces` overrides). `ratingError`, `nerveError` (computer takers only), `ringShake` (human ring wobble, only from pressure 0.45). `matchPressure` / `matchPressureView` (client).

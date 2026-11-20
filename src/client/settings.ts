@@ -5,12 +5,19 @@ import type { AudioSettings } from './audio/audio';
 import { cleanBindings, defaultBindings, type ControlBindings } from './input/bindings';
 import type { CameraSettings } from './render/camera';
 import type { GraphicsSettings } from './render/renderer';
+import type { SwitchSens, SwitchStyle } from '../shared/types';
 
 export interface Settings {
   audio: AudioSettings;
   graphics: GraphicsSettings;
   camera: CameraSettings;
   autoSwitch: boolean;
+  /** Auto-switch style (20 Nov 2026): Off, High balls, Assisted (only when beaten) or Full. autoSwitch follows it. */
+  switchStyle?: SwitchStyle;
+  /** How readily the auto-switch moves you: Calm, Normal or Eager. */
+  switchSens?: SwitchSens;
+  /** A flash on the new player, a soft click and a light buzz whenever control switches while defending. */
+  switchCue?: boolean;
   quickRestarts: boolean;
   /** Pass receiver: 'late' picks on release (charge = distance), 'early' locks on press (charge = pace). */
   receiver: 'early' | 'late';
@@ -106,6 +113,9 @@ export function defaultSettings(): Settings {
     // Phones and tablets: commentary off (its captions cover the middle of a small screen).
     commentator: mobile ? 'off' : 'captions',
     autoSwitch: true,
+    switchStyle: 'full',
+    switchSens: 'normal',
+    switchCue: true,
     quickRestarts: true,
     receiver: 'late',
     passAssist: 'assisted',
@@ -154,6 +164,9 @@ export function loadSettings(): Settings {
     if (!raw) return d;
     const s = JSON.parse(raw);
     const out: Settings = { ...d, ...s, audio: { ...d.audio, ...s.audio }, graphics: { ...d.graphics, ...s.graphics }, camera: { ...d.camera, ...s.camera }, tactics: cleanTactics(s.tactics), controls: cleanBindings(s.controls) };
+    // Auto-switch styles (20 Nov 2026): an older On/Off setting becomes Full or Off.
+    if (!s.switchStyle) out.switchStyle = out.autoSwitch === false ? 'off' : 'full';
+    out.autoSwitch = out.switchStyle !== 'off';
     // One-time moves to newer defaults (not on ?test pages, whose scripts set settings exactly).
     const test = typeof location !== 'undefined' && new URLSearchParams(location.search).has('test');
     if (test) return out;

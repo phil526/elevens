@@ -63,6 +63,12 @@ import { loadChoice, loadMenuOpen, saveChoice, saveMenuOpen, type MatchChoice } 
 import { ModeScreens, type ModeMatch } from './modes/screens';
 import { clearModes } from './modes/store';
 import { ClipTheatre, makeClip, saveClip, shareVideo, type GoalClip } from './modes/clips';
+import type { SwitchSens, SwitchStyle } from '../shared/types';
+
+/** Auto-switch style and sensitivity choices (20 Nov 2026). */
+const SWITCH_STYLE_SEG: [string, string][] = [['off', 'Off'], ['air', 'High balls'], ['assisted', 'Assisted'], ['full', 'Full']];
+const SWITCH_SENS_SEG: [string, string][] = [['calm', 'Calm'], ['normal', 'Normal'], ['eager', 'Eager']];
+const SWITCH_STYLE_NAME: Record<string, string> = { off: 'off', air: 'high balls', assisted: 'assisted', full: 'full' };
 import { Commentator } from './commentator';
 import { loadRanked, rankedHtml, rankedResultHtml, saveRanked } from './modes/ranked';
 import { clearSquadOverrides, setSquadOverrides } from '../shared/teams';
@@ -596,8 +602,12 @@ export class App {
       return { ...this.renderer.project(p.pos.x, 2.3, p.pos.z), charge: ch.power, label: `P${seat.player} ${ch.label}` };
     });
     const info = this.renderer!.info();
+    // Your man off the screen (open play): an arrow at the edge points to him.
+    const edgeP = ctl >= 0 && v.phase === 'play' && !this.cine.active && this.overlay === 'none' ? v.players[ctl] : null;
+    const edgeAt = edgeP ? this.renderer!.edgePoint(edgeP.pos.x, edgeP.pos.z) : null;
+    const edge = edgeAt && edgeP ? { ...edgeAt, label: `${edgeP.def.number}` } : null;
     this.hud.update(v, {
-      localTeams: s.localTeams, charge, chargeLabel, chargeTicks, powerAt, ringAt, conn: s.conn(), extraPower,
+      localTeams: s.localTeams, charge, chargeLabel, chargeTicks, powerAt, ringAt, conn: s.conn(), extraPower, edge,
       guide: this.settings.controlHints !== false && (this.settings.highContrast || !this.touchMode) ? guideLine(this.actions.lastDevice === 'keyboard' && this.mouseMode ? 'mouse' : this.actions.lastDevice, this.gamepad.style, attacking, this.settings.controls) : '',
       fps: this.settings.showFps ? this.fpsReadout(now) : null,
       debug: this.debugOverlay ? `fps ${this.fps.toFixed(0)}  frame ${this.frameMs.toFixed(1)} ms  res ${Math.round(this.renderer!.resolutionScale * 100)}%  draw calls ${info.calls}  tris ${info.tris}\n${s.debugText()}` : null,
@@ -695,6 +705,12 @@ export class App {
   private lastShotCall = { t: -99, great: false };
 
   /** Rumble the controller if it is in use and rumble is on. */
+  /** The match config's auto-switch style and sensitivity, from Settings (both sides; a computer side ignores them). */
+  private switchCfg(): { switchStyle: [SwitchStyle, SwitchStyle]; switchSens: [SwitchSens, SwitchSens] } {
+    const st = this.settings.switchStyle ?? (this.settings.autoSwitch ? 'full' : 'off'), se = this.settings.switchSens ?? 'normal';
+    return { switchStyle: [st, st], switchSens: [se, se] };
+  }
+
   private buzz(strong: number, weak: number, ms: number) {
     if (this.settings.rumble && this.gamepad.index >= 0) this.gamepad.rumble(strong, weak, ms);
   }
@@ -739,6 +755,14 @@ export class App {
           if (e.text === 'shot' || e.text === 'volley') {
             this.audio.anticipate();
             this.lastShotCall = { t: now, great: (e.power ?? 0) >= 24 || PITCH.halfLength - Math.abs(e.x ?? 0) >= 22 };
+          }
+          break;
+        case 'switch':
+          // Switch flash and sound: your marker bursts out from the new man, a soft blip, a light buzz for automatic switches.
+          if (this.settings.switchCue !== false && (e.text === 'auto' || e.text === 'manual' || e.text === 'setpiece') && e.player !== undefined && e.team !== undefined && (this.session?.localTeams ?? [0]).includes(e.team) && v.humans[e.team]) {
+            this.renderer?.flashSwitch(e.player);
+            this.audio.switchCue(e.text === 'manual');
+            if (e.text !== 'manual') this.buzz(0.1, 0.3, 70);
           }
           break;
         case 'post': case 'bar': this.audio.post(e.x ?? 0); this.audio.react('ooh'); if (greatShot() || Math.random() < 0.5) this.audio.call('shot', 0.6); break;
@@ -1278,7 +1302,7 @@ export class App {
     saveChoice(c);
     const open = this.menuOpen.options;
     const t = this.settings.tactics;
-    const summary = `${({ defensive: 'Defensive', balanced: 'Balanced', attacking: 'Attacking' } as Record<string, string>)[c.mentality] ?? c.mentality} · ${FORMATION_NAMES[t.formation] ?? t.formation} · auto-switch ${this.settings.autoSwitch ? 'on' : 'off'} · quick restarts ${this.settings.quickRestarts ? 'on' : 'off'}`;
+    const summary = `${({ defensive: 'Defensive', balanced: 'Balanced', attacking: 'Attacking' } as Record<string, string>)[c.mentality] ?? c.mentality} · ${FORMATION_NAMES[t.formation] ?? t.formation} · auto-switch ${SWITCH_STYLE_NAME[this.settings.switchStyle ?? 'full'] ?? 'full'} · quick restarts ${this.settings.quickRestarts ? 'on' : 'off'}`;
     this.set(`<div class="panel narrow">
       <h2>Match settings</h2>
       <div class="stack">
@@ -1292,7 +1316,7 @@ export class App {
         <div class="field"><span class="lbl">Your tactics</span>${this.seg('ment', [['defensive', 'Defensive'], ['balanced', 'Balanced'], ['attacking', 'Attacking']], c.mentality)}</div>
         ${this.tacticsHtml(t)}
         <button class="btn" data-a="takers">Set-piece takers</button>
-        <div class="field"><span class="lbl">Auto-switch when defending</span>${this.seg('auto', [['on', 'On'], ['off', 'Off']], this.settings.autoSwitch ? 'on' : 'off')}</div>
+        <div class="field"><span class="lbl">Auto-switch when defending</span>${this.seg('auto', SWITCH_STYLE_SEG, this.settings.switchStyle ?? 'full')}</div>
         <div class="field"><span class="lbl">Quick restarts</span>${this.seg('quick', [['on', 'On'], ['off', 'Off']], this.settings.quickRestarts ? 'on' : 'off')}
           <span class="note">Take throw-ins, corners and free kicks the moment your taker reaches the ball, before the other side is set.</span></div>
         </div>` : `<p class="note more-sum">${esc(summary)}</p>`}
@@ -1304,7 +1328,7 @@ export class App {
     this.bindTactics(this.settings.tactics, () => saveSettings(this.settings), () => this.showMatchSettings());
     this.bindSeg('min', (v) => { c.minutes = Number(v); this.showMatchSettings(); });
     this.bindSeg('draw', (v) => { c.draw = v as 'stand' | 'extra' | 'pens'; this.showMatchSettings(); });
-    this.bindSeg('auto', (v) => { this.settings.autoSwitch = v === 'on'; saveSettings(this.settings); this.showMatchSettings(); });
+    this.bindSeg('auto', (v) => { this.settings.switchStyle = v as SwitchStyle; this.settings.autoSwitch = v !== 'off'; saveSettings(this.settings); this.showMatchSettings(); });
     this.bindSeg('quick', (v) => { this.settings.quickRestarts = v === 'on'; saveSettings(this.settings); this.showMatchSettings(); });
     this.on('[data-a=moreopts]', () => {
       this.menuOpen.options = !this.menuOpen.options;
@@ -1508,7 +1532,7 @@ export class App {
       teams: [c.club, opp], kits: [c.kit, oppKit], realMinutes: c.minutes, humans: [true, false], difficulty: ['pro', tutorial ? 'casual' : c.difficulty], adaptiveStart: this.settings.adaptiveLevel,
       tactics: [{ ...this.settings.tactics }, { ...defaultTactics(), formation: practice ? '433' : FORMATIONS[(Math.random() * FORMATIONS.length) | 0] }],
       draw: practice ? 'stand' : c.draw,
-      mentality: [c.mentality, 'balanced'], autoSwitch: [this.settings.autoSwitch, false], quickRestarts: [this.settings.quickRestarts, true], seed: (Math.random() * 2 ** 31) | 0, practice, challenge,
+      mentality: [c.mentality, 'balanced'], autoSwitch: [this.settings.autoSwitch, false], ...this.switchCfg(), quickRestarts: [this.settings.quickRestarts, true], seed: (Math.random() * 2 ** 31) | 0, practice, challenge,
       momentum: this.settings.momentum !== false,
       weather: this.matchWeather(!!practice),
     });
@@ -2976,7 +3000,10 @@ export class App {
       <div class="stack">
         <div class="row between"><span class="lbl">Mouse control</span>${this.seg('mctl', [['off', 'Off'], ['on', 'On']], s.mouseControl ? 'on' : 'off')}</div>
         <p class="note">Mouse control (PC): your player runs towards the mouse pointer. Left click passes, right click shoots (hold to power up), A plays a long ball, S a through ball, Shift sprints and Space switches player. Change them in Controls, Mouse.</p>
-        <div class="row between"><span class="lbl">Auto-switch</span>${this.seg('auto', [['on', 'On'], ['off', 'Off']], s.autoSwitch ? 'on' : 'off')}</div>
+        <div class="row between"><span class="lbl">Auto-switch</span>${this.seg('auto', SWITCH_STYLE_SEG, s.switchStyle ?? (s.autoSwitch ? 'full' : 'off'))}</div>
+        <div class="row between"><span class="lbl">Auto-switch speed</span>${this.seg('swsens', SWITCH_SENS_SEG, s.switchSens ?? 'normal')}</div>
+        <div class="row between"><span class="lbl">Switch flash and sound</span>${this.seg('swcue', [['on', 'On'], ['off', 'Off']], s.switchCue !== false ? 'on' : 'off')}</div>
+        <p class="note">Auto-switch moves you to the defender best placed for the ball when the other side has it. High balls: only for crosses and balls in the air. Assisted: also when the ball has gone past your man. Full: whenever a clearly better-placed defender exists. Calm waits for a clearer case, Eager moves you sooner. It never switches just after you tackle, slide or contain, or while you hold jockey or contain. After a switch your new man closes down the ball until you let go of the stick or push it a new way. Press switch twice quickly to go on to the next player. At their corners, free kicks and throw-ins near your goal you start on the defender nearest the danger (switch picks another). Switch flash and sound: the new player's marker flashes, with a soft click and a light buzz on a controller.</p>
         <div class="row between"><span class="lbl">Quick restarts</span>${this.seg('quick', [['on', 'On'], ['off', 'Off']], s.quickRestarts ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Pass receiver</span>${this.seg('recv', [['late', 'Late'], ['early', 'Early']], s.receiver)}</div>
         <div class="row between"><span class="lbl">Pass assistance</span>${this.seg('assist', [['assisted', 'Assisted'], ['semi', 'Semi'], ['manual', 'Manual']], s.passAssist ?? 'assisted')}</div>
@@ -3013,7 +3040,11 @@ export class App {
       this.audio.apply(s.audio);
       this.renderer?.applyGraphics(s.graphics);
       this.hud.setHighContrast(s.highContrast);
-      if (this.session instanceof OfflineSession) { this.session.match.ctrl[0].autoSwitch = s.autoSwitch; this.session.match.ctrl[0].quickRestarts = s.quickRestarts; }
+      if (this.session instanceof OfflineSession) {
+        const c0 = this.session.match.ctrl[0];
+        c0.autoSwitch = s.autoSwitch; c0.quickRestarts = s.quickRestarts;
+        c0.style = s.switchStyle ?? 'full'; c0.sens = s.switchSens ?? 'normal';
+      }
     };
     this.ui.querySelectorAll<HTMLInputElement>('input[type=range]').forEach((r) => r.addEventListener('input', () => {
       const v = Number(r.value);
@@ -3075,7 +3106,9 @@ export class App {
     this.bindSeg('aerials', (v) => { s.aerials = v === 'on'; save(); redraw(); });
     this.bindSeg('hlights', (v) => { s.highlights = v === 'on'; save(); redraw(); });
     this.bindSeg('reduced', (v) => { s.camera.reducedMotion = v === 'on'; save(); redraw(); });
-    this.bindSeg('auto', (v) => { s.autoSwitch = v === 'on'; save(); redraw(); });
+    this.bindSeg('auto', (v) => { s.switchStyle = v as SwitchStyle; s.autoSwitch = v !== 'off'; save(); redraw(); });
+    this.bindSeg('swsens', (v) => { s.switchSens = v as SwitchSens; save(); redraw(); });
+    this.bindSeg('swcue', (v) => { s.switchCue = v === 'on'; save(); redraw(); });
     this.bindSeg('mctl', (v) => { this.setMouseControl(v === 'on'); redraw(); });
     this.bindSeg('quick', (v) => { s.quickRestarts = v === 'on'; save(); redraw(); });
     this.bindSeg('assist', (v) => { s.passAssist = v as 'assisted' | 'semi' | 'manual'; this.actions.passAssist = s.passAssist; save(); redraw(); });
@@ -3340,6 +3373,16 @@ export class App {
         break;
       case 'end':
         this.endReason = m.reason;
+        if (m.reason === 'fulltime' && this.session instanceof OnlineSession) {
+          // The final whistle normally arrives in the last snapshot; if it never shows (an older
+          // server, a lost frame), open the full-time panel anyway rather than leave play frozen.
+          const s = this.session;
+          setTimeout(() => {
+            if (this.session !== s || this.overlay === 'fulltime') return;
+            const v = s.view();
+            if (v) { this.lastPhase = 'fulltime'; this.openResults(v); }
+          }, 2500);
+        }
         if (m.reason !== 'fulltime' && this.session) {
           const v = this.session.view();
           if (v) {
@@ -3427,7 +3470,7 @@ export class App {
     this.bindSeg('kit', (v) => n.send({ t: 'lobby', kit: v as 'home' | 'away' }));
     this.bindSeg('ment', (v) => n.send({ t: 'lobby', mentality: v as Mentality }));
     this.bindSeg('min', (v) => n.send({ t: 'lobby', minutes: Number(v) }));
-    this.on('[data-a=ready]', () => n.send({ t: 'lobby', ready: !me.ready }));
+    this.on('[data-a=ready]', () => n.send({ t: 'lobby', ready: !me.ready, sw: [this.settings.switchStyle ?? 'full', this.settings.switchSens ?? 'normal'] }));
     this.on('[data-a=leave]', () => { this.net?.close(); this.net = null; this.room = null; history.replaceState(null, '', location.pathname); this.showOnline(); });
   }
 }

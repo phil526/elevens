@@ -52,7 +52,7 @@ The game opens on the main menu. **Kick off** (already highlighted: Enter, A or 
 | Aimed header | J, I or L (pass buttons) or K as a high ball arrives | A pass button nods it to the teammate the stick points at (short and looping); shoot heads for goal towards the stick |
 | Volley | K/Space as a ball drops to knee or waist height | Struck first time in the air: the ball's pace adds power, but a higher or faster ball is harder to keep on target |
 | Set-piece routine (your corner or free kick) | Q before the kick | Cycles the routine; teammates move and the target moves with them. Corners: standard, near post, far post, short corner, edge of the box. Free kicks: standard, lay-off, far post |
-| Switch player | Q | Switches to the highlighted teammate (white ring), usually the best-placed defender |
+| Switch player | Q | Switches to the highlighted teammate (white ring), usually the best-placed defender. Press twice quickly to go on to the next player instead of back. At their corners, free kicks and throw-ins it picks another defender |
 | Call a run (with the ball) | Q | The teammate best placed to go in behind (the one the stick points towards, if it does) sprints past the defensive line for about 2.5 s. Pass soon, or they will be offside |
 | Take your keeper (defending) | U or G | You control the goalkeeper: the stick moves him, K/Space dives the way the stick points, J (or I/L) comes off the line at the ball for about 2.5 s (inside the area he dives at a striker's feet). U or G again hands him back; he is also handed back when the ball goes far away |
 | Defending a free kick in range | Stick · Q · K | The stick slides the wall across, Q sets 2 to 5 men in it, K/Space makes it jump |
@@ -354,3 +354,16 @@ Casual, Pro and Elite are fixed. **Adaptive** starts at Elite and, every five mi
 ## Player instructions (pause menu)
 
 Pause → **Player instructions** sets each outfield player to Stay back, Normal or Get forward for the rest of the match. Stay back: no forward runs, overlaps or box runs, sits deeper when you attack. Get forward: joins attacks, makes runs beyond the striker (midfielders and full-backs too) and stays up when you defend. **All normal** clears them. Teammates who are free and have a clear lane put an arm up and show a small "!" over their heads: they are calling for the ball.
+
+## Auto-switching (20 Nov 2026)
+
+Settings → Auto-switch: **Off**, **High balls** (only crosses and balls in the air), **Assisted** (high balls, and when the ball has gone past your man) or **Full** (default: whenever a clearly better-placed defender exists). **Auto-switch speed**: Calm, Normal (default) or Eager. Online, your choice is sent when you press Ready.
+
+- It never switches you for a moment after you press tackle, slide or contain, or while you hold jockey or contain, or while you sprint at the ball.
+- A better defender has to stay better for a quarter of a second, and the white next-switch ring stays on its man unless another is clearly better, so control doesn't flick about. A single switch press takes the man under the ring.
+- After any switch while defending, the stick you were holding for the old player is ignored: the new man closes down the ball until you let go of the stick or push it a new way (at most 1.4 s).
+- While an opponent winds up a pass, the ring moves to the defender nearest the receiver. If you are pressing the passer, you keep him until the ball is struck.
+- Crosses and long balls coming down near your goal switch early to the defender who meets them.
+- Players far up the pitch from the ball (probably off the screen) are picked only when clearly better. If your man is off the screen, a yellow arrow at the edge points to him, with his number.
+- At their corners, free kicks and throw-ins near your goal you start on the defender nearest the danger (not one in the wall); switch picks another.
+- **Switch flash and sound** (default On): your marker bursts out from the new man, with a soft click and, for automatic switches, a light buzz on a controller.

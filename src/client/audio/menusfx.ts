@@ -68,6 +68,15 @@ export class MenuSfx {
    * A floodlight bank switching on before the match: a heavy contactor clunk echoing round the
    * bowl and the lamps' hum swelling and dying away. `pan` -1 (left) .. 1 (right).
    */
+  /** Control switched to another player (20 Nov 2026): a soft, quick two-step blip, quieter than the menu sounds. */
+  switchCue(manual: boolean) {
+    const now = this.ctx.currentTime;
+    if (now - (this.lastAt.move ?? -1) < 0.08) return;
+    this.lastAt.move = now;
+    this.tone(now, manual ? 1100 : 900, manual ? 1500 : 1250, 0.05, 0.035, 'sine', 3200);
+    this.tick(now, 3800, 0.015, 0.025);
+  }
+
   clunk(pan = 0) {
     const ctx = this.ctx;
     const now = ctx.currentTime;

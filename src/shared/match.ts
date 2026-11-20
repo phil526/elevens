@@ -14,7 +14,7 @@ import { Rng } from './rng';
 import { benchFor, footProfile, teamById, TEAMS } from './teams';
 import type { PlayerDef, TeamDef } from './teams';
 import type {
-  Ball, GoalRecord, InputEvent, InputFrame, KickKind, KickVariant, MatchConfig, MatchEvent, MatchEventType, Phase, Player, Restart,
+  Ball, GoalRecord, InputEvent, InputFrame, SwitchStyle, SwitchSens, KickKind, KickVariant, MatchConfig, MatchEvent, MatchEventType, Phase, Player, Restart,
   RestartType, Shootout, SkillMove, TeamIndex, TeamStats, V2, V3,
 } from './types';
 import { emptyStats } from './types';
@@ -35,7 +35,7 @@ import { aerialWin, holdOffChance, strengthOf, DUEL } from './physical';
 import { Momentum, MOMENTUM } from './momentum';
 import { habitStreak, SETPIECE, SP_ON, bestBy, ratingError, chosenTaker, danceError, directFreeKick, matchPressure, nerveError, readEarlyKeeper, ringShake, setPieceRatings, shakyRing, shootoutWinnerOf, variantTech, type PenTech } from './setpieces';
 import { manualShotAim } from './kick';
-import { BC, G6 } from './switches';
+import { BC, G6, SW, SWITCH } from './switches';
 import { closeDribble, heavyChance, humanCarrierInput, isJuggle, placeBallForSkill, startFlick, stepBallSkill, touchAway } from './ballcontrol';
 
 export interface Control {
@@ -56,6 +56,23 @@ export interface Control {
    * is let go or pushed a new way, the receiver ignores it and attacks the ball (20 Nov 2026).
    */
   carry?: number;
+  /**
+   * What the carried stick came from: 'pass' (the receiver of your pass attacks the ball) or
+   * 'switch' (any other switch while defending: the new man closes down the ball, for at most
+   * `carryUntil`). Undefined is 'pass' (20 Nov 2026).
+   */
+  carryKind?: 'pass' | 'switch';
+  carryUntil?: number;
+  /** Auto-switch style and sensitivity (20 Nov 2026; default 'full' / 'normal'). */
+  style?: SwitchStyle;
+  sens?: SwitchSens;
+  /** When a challenge (tackle, slide, contain) was last pressed while defending. */
+  lastChallenge?: number;
+  /** Steadier switching: the defender who has been clearly better, and since when. */
+  pend?: { id: number; since: number };
+  /** Quick repeated switch presses: the players this run of presses has visited, and the last press. */
+  chain?: number[];
+  lastManual?: number;
 }
 
 /** How far (radians) the stick can move from the carried-over pass direction and still be ignored. */
@@ -323,11 +340,12 @@ export class Match {
       state: 'dead', owner: -1, lastTouch: -1, lastTouchTeam: -1, flight: 'none', receiver: -1, kicker: -1, kickLock: 0, stillTime: 0,
     };
     this.ctrl = [0, 1].map((t) => ({
-      human: cfg.humans[t], pid: t * 11 + 9, input: emptyInput(), next: -1, autoSwitch: cfg.autoSwitch[t], quickRestarts: cfg.quickRestarts?.[t] ?? true, lastAutoSwitch: -10, lastSeq: 0, prevSprint: false,
+      human: cfg.humans[t], pid: t * 11 + 9, input: emptyInput(), next: -1, autoSwitch: cfg.autoSwitch[t] && cfg.switchStyle?.[t] !== 'off', quickRestarts: cfg.quickRestarts?.[t] ?? true, lastAutoSwitch: -10, lastSeq: 0, prevSprint: false,
+      style: cfg.switchStyle?.[t] ?? 'full', sens: cfg.switchSens?.[t] ?? 'normal',
       lock: cfg.lock && cfg.lock[t] >= 0 && cfg.lock[t] < 11 && cfg.humans[t] ? t * 11 + cfg.lock[t] : -1,
     })) as [Control, Control];
     this.mates = [0, 1].map((t) => (cfg.mates?.[t] && cfg.humans[t] ? {
-      human: true, pid: t * 11 + 10, input: emptyInput(), next: -1, autoSwitch: cfg.autoSwitch[t], quickRestarts: cfg.quickRestarts?.[t] ?? true, lastAutoSwitch: -10, lastSeq: 0, prevSprint: false,
+      human: true, pid: t * 11 + 10, input: emptyInput(), next: -1, autoSwitch: cfg.autoSwitch[t] && cfg.switchStyle?.[t] !== 'off', style: cfg.switchStyle?.[t] ?? 'full', sens: cfg.switchSens?.[t] ?? 'normal', quickRestarts: cfg.quickRestarts?.[t] ?? true, lastAutoSwitch: -10, lastSeq: 0, prevSprint: false,
     } : null)) as [Control | null, Control | null];
     this.bench = [benchFor(this.teams[0]), benchFor(this.teams[1])];
     if (cfg.practice === 'crossbar' || cfg.practice === 'targets' || cfg.practice === 'control') this.skill = newSkillState(cfg.practice);
@@ -1164,6 +1182,12 @@ export class Match {
     this.stepWallJumps(dt);
     this.stepBodyActions(dt, this.restart?.taker ?? -1);
     if (r.type === 'freekick') this.humanWall(r, dt);
+    // Their set piece: the switch button cycles your defender (a free-kick wall uses it for its size).
+    const dteam = (1 - r.team) as TeamIndex;
+    if (SW.setpiece && this.phase === 'restart' && this.ctrl[dteam].human && this.pendingEvents[dteam].some((e) => e.k === 'switch' && e.x === undefined)) {
+      this.pendingEvents[dteam] = this.pendingEvents[dteam].filter((e) => !(e.k === 'switch' && e.x === undefined));
+      this.defendSetPiece(r, true);
+    }
     if (r.type === 'penalty') this.humanPenaltyKeeper(r, dt);
     const targets = restartTargets(this, r);
     if (r.type === 'penalty') this.penaltyKeeperSpot(r, targets);
@@ -1220,6 +1244,8 @@ export class Match {
         // The computer varies its corners.
         if (r.type === 'corner' && !this.ctrl[r.team].human) r.routine = Math.floor(this.rng.next() * ROUTINES.corner.length);
         r.aim = this.defaultAim(r);
+        // Their set piece near your goal: you start on the defender nearest the danger.
+        if (this.phase === 'restart') this.defendSetPiece(r, false);
         // The referee whistles for kick-offs, free kicks, penalties and corners to be taken.
         if (r.type !== 'throwin' && r.type !== 'goalkick' && r.type !== 'dropball') this.emit('whistle', { power: 1, text: this.phase === 'kickoff' ? 'kickoff' : r.type === 'penalty' ? 'penalty' : 'restart' });
       }
@@ -1447,7 +1473,8 @@ export class Match {
     c.pid = next;
     c.lastAutoSwitch = this.time;
     this.players[next].queued = null;
-    this.emit('switch', { team, player: next });
+    this.carryOver(c, team);
+    this.emit('switch', { team, player: next, text: 'auto' });
   }
 
   /** Manual keeper rush: the keeper comes off the line to the ball for a couple of seconds. */
@@ -1868,17 +1895,31 @@ export class Match {
         p = this.players[c.pid];
         continue;
       }
+      // A challenge pressed while defending (tackle, slide, contain): no auto-switch for a moment.
+      if ((e.k === 'pass' || e.k === 'lob' || e.k === 'through') && this.ball.owner !== p.id && this.possessionTeam() !== team) c.lastChallenge = this.time;
       this.humanAction(p, e, c);
     }
     // Movement intention.
     let inp = c.input;
     if (c.carry !== undefined) {
-      // The stick still held from the pass is not a request to run that way: attack the ball.
       const b = this.ball;
-      const toMe = b.state === 'flight' && b.receiver === p.id && b.owner < 0;
       const m0 = Math.hypot(inp.mx, inp.mz);
-      if (!toMe || m0 < 0.25 || Math.abs(wrapAngle(angleOf(inp.mx, inp.mz) - c.carry)) > CARRY_ANGLE) c.carry = undefined;
-      else inp = { ...inp, mx: 0, mz: 0 };
+      const moved = m0 < 0.25 || Math.abs(wrapAngle(angleOf(inp.mx, inp.mz) - c.carry)) > CARRY_ANGLE;
+      if (c.carryKind === 'switch') {
+        // The stick held for the player you had is not a request to run that way: the new man closes
+        // down the ball until you let go of the stick or push it a new way (20 Nov 2026).
+        if (moved || this.time > (c.carryUntil ?? 0) || this.possessionTeam() === team || b.owner === p.id || p.role === 'GK') c.carry = undefined;
+        else {
+          const S = this.engageSpot(team, this.engagePoint(team));
+          const dx = S.x - p.pos.x, dz = S.z - p.pos.z, d = Math.hypot(dx, dz);
+          inp = d > 0.8 ? { ...inp, mx: dx / d, mz: dz / d } : { ...inp, mx: 0, mz: 0 };
+        }
+      } else {
+        // The stick still held from the pass is not a request to run that way: attack the ball.
+        const toMe = b.state === 'flight' && b.receiver === p.id && b.owner < 0;
+        if (!toMe || moved) c.carry = undefined;
+        else inp = { ...inp, mx: 0, mz: 0 };
+      }
     }
     const m = Math.hypot(inp.mx, inp.mz);
     const ownsBall = this.ball.owner === p.id;
@@ -1919,7 +1960,7 @@ export class Match {
         this.ball.receiver = q.id;
         this.dummy = { pid: p.id, until: this.time + 0.8 };
         c.pid = q.id;
-        this.emit('switch', { team, player: q.id });
+        this.emit('switch', { team, player: q.id, text: 'pass' });
         this.emit('call', { team, player: p.id, text: 'dummy' });
         return;
       }
@@ -3023,7 +3064,9 @@ export class Match {
     c.pid = receiver;
     const m = Math.hypot(c.input.mx, c.input.mz);
     c.carry = m > 0.3 ? angleOf(c.input.mx, c.input.mz) : undefined;
-    this.emit('switch', { team, player: receiver });
+    c.carryKind = 'pass';
+    c.pend = undefined;
+    this.emit('switch', { team, player: receiver, text: 'pass' });
   }
 
   private evaluateOffside(passer: Player, exempt: boolean) {
@@ -3954,7 +3997,8 @@ export class Match {
     const c = p.role !== 'GK' ? this.receivingControl(p.team, b.kicker, p.id) : null;
     if (c && c.pid !== p.id) {
       c.pid = p.id;
-      this.emit('switch', { team: p.team, player: p.id });
+      c.carry = undefined;
+      this.emit('switch', { team: p.team, player: p.id, text: 'ball' });
     }
     // First-time action pressed just before the ball arrived.
     if (p.queued && !gkHands) {
@@ -4296,18 +4340,46 @@ export class Match {
   // ---------------------------------------------------------------- switching
 
   /**
+   * The opponents' pass being wound up right now (20 Nov 2026): the passer and the teammate it is
+   * meant for, before the ball is struck. Null when nobody is about to pass.
+   */
+  passWindup(team: number): { passer: Player; receiver: Player } | null {
+    const b = this.ball;
+    if (b.owner < 0 || b.state !== 'dribble') return null;
+    const c = this.players[b.owner];
+    const a = c.action;
+    if (c.team === team || a.type !== 'kick' || a.released || a.receiver === undefined || a.receiver < 0) return null;
+    if (a.kind !== 'pass' && a.kind !== 'through' && a.kind !== 'lob' && a.kind !== 'cross') return null;
+    const r = this.players[a.receiver];
+    return r && r.team === c.team && r.id !== c.id && !r.off ? { passer: c, receiver: r } : null;
+  }
+
+  /** A cross or long ball coming down near this team's goal (20 Nov 2026). */
+  crossOnUs(team: number, E: V2): boolean {
+    const b = this.ball;
+    if (b.state !== 'flight' || b.lastTouchTeam === team || b.lastTouchTeam < 0) return false;
+    if (b.flight !== 'cross' && b.flight !== 'lob' && b.flight !== 'clear') return false;
+    return dist(E, { x: this.ownGoalX(team), z: 0 }) < SWITCH.crossRange;
+  }
+
+  /**
    * Where the human's defender will have to engage the ball next: a dribbler a stride ahead, the
-   * receiver of the opponents' pass where he meets it, or where a high ball comes down.
+   * receiver of the opponents' pass where he meets it, or where a high ball comes down. While a pass
+   * is being wound up, its receiver (20 Nov 2026).
    */
   engagePoint(team: number): V2 {
     const b = this.ball;
     if (b.owner >= 0 && b.state === 'dribble') {
+      const w = SW.read ? this.passWindup(team) : null;
+      if (w) return { x: w.receiver.pos.x + w.receiver.vel.x * 0.5, z: w.receiver.pos.z + w.receiver.vel.z * 0.5 };
       const c = this.players[b.owner];
       return { x: c.pos.x + c.vel.x * 0.6, z: c.pos.z + c.vel.z * 0.6 };
     }
     if (b.state === 'flight' && b.receiver >= 0 && this.players[b.receiver].team !== team) {
       const r = this.players[b.receiver];
-      return this.meetPoint(r, 3) ?? { ...r.pos };
+      // A cross is met in the air (head height), not where it would roll to.
+      const high = SW.crosses && (b.flight === 'cross' || b.flight === 'lob');
+      return this.meetPoint(r, 3, high ? 2.6 : 1.5) ?? { ...r.pos };
     }
     if ((b.state === 'flight' || b.state === 'free') && (b.pos.y > 1 || b.vel.y > 2)) {
       const L = landingPoint(b.pos, b.vel, b.spin);
@@ -4316,14 +4388,20 @@ export class Match {
     return { x: b.pos.x + b.vel.x * 0.5, z: b.pos.z + b.vel.z * 0.5 };
   }
 
+  /** The spot just goal-side of an engagement point, where a defender wants to be. */
+  engageSpot(team: number, E: V2): V2 {
+    const goal = { x: this.ownGoalX(team), z: 0 };
+    const g = norm(goal.x - E.x, goal.z - E.z);
+    return { x: E.x + g.x * 1.2, z: E.z + g.z * 1.2 };
+  }
+
   /**
    * How long `p` needs to engage at E (seconds at jog speed): to a spot just goal-side of it. A
    * player the ball has already gone past (E between him and our goal) has to get back round it.
    */
   engageTime(p: Player, E: V2): number {
     const goal = { x: this.ownGoalX(p.team), z: 0 };
-    const g = norm(goal.x - E.x, goal.z - E.z);
-    const S = { x: E.x + g.x * 1.2, z: E.z + g.z * 1.2 };
+    const S = this.engageSpot(p.team, E);
     let t = dist(p.pos, S) / jogSpeed(p.a);
     const behind = dist(p.pos, goal) - dist(E, goal);
     if (behind > 2) t += 0.5 + behind / 10;
@@ -4332,9 +4410,9 @@ export class Match {
   }
 
   /** Pick the outfield player best placed to influence the ball. */
-  bestSwitchCandidate(team: number, exclude: number, inputX = 0, inputZ = 0): number {
+  bestSwitchCandidate(team: number, exclude: number, inputX = 0, inputZ = 0, keep = -1): number {
     const b = this.ball;
-    if (this.ctrl[team].human && TEAMMATE_ON.switching && !this.mates[team]) return this.bestEngager(team, exclude, inputX, inputZ);
+    if (this.ctrl[team].human && TEAMMATE_ON.switching && !this.mates[team]) return this.bestEngager(team, exclude, inputX, inputZ, keep);
     const fut = { x: b.pos.x + b.vel.x * 0.5, z: b.pos.z + b.vel.z * 0.5 };
     const cur = this.players[exclude];
     const ownGoal = { x: this.ownGoalX(team), z: 0 };
@@ -4356,6 +4434,11 @@ export class Match {
     return best;
   }
 
+  /** The stick to bias a switch with: none while it is still the stick carried over from before a switch. */
+  private switchStick(c: Control): [number, number] {
+    return c.carry !== undefined ? [0, 0] : [c.input.mx, c.input.mz];
+  }
+
   switchPlayer(team: TeamIndex, manual: boolean) {
     const c = this.ctrl[team];
     if (isLocked(c)) return;
@@ -4363,12 +4446,40 @@ export class Match {
     if (this.ball.owner === cur.id) return; // never switch away from the ball carrier
     // Not during a committed action (but a beaten man on the floor can be switched away from).
     if (!manual && cur.action.type !== 'none' && !(cur.action.type === 'stumble' && this.ctrl[team].human && TEAMMATE_ON.switching)) return;
-    const next = this.bestSwitchCandidate(team, c.pid, c.input.mx, c.input.mz);
+    const [sx, sz] = this.switchStick(c);
+    let next: number;
+    if (manual && c.human && TEAMMATE_ON.switching && !this.mates[team]) {
+      // Quick presses cycle on through the next-best players instead of flicking back (20 Nov 2026);
+      // a single press takes the man under the next-switch marker.
+      const quick = SW.cycle && c.lastManual !== undefined && this.time - c.lastManual < SWITCH.cycleWindow;
+      c.chain = quick ? [...(c.chain ?? []), c.pid] : [c.pid];
+      c.lastManual = this.time;
+      if (quick) {
+        next = this.bestEngager(team, c.pid, sx, sz, -1, c.chain);
+        if (next < 0) { c.chain = [c.pid]; next = this.bestEngager(team, c.pid, sx, sz); }
+      } else {
+        next = c.next >= 0 && c.next !== c.pid && !this.players[c.next].off && this.players[c.next].role !== 'GK' && c.next !== this.otherHuman(team) ? c.next : this.bestEngager(team, c.pid, sx, sz);
+      }
+    } else next = this.bestSwitchCandidate(team, c.pid, sx, sz);
     if (next < 0) return;
     c.pid = next;
     c.lastAutoSwitch = this.time;
+    c.pend = undefined;
     this.players[next].queued = null;
-    this.emit('switch', { team, player: next });
+    this.carryOver(c, team);
+    this.emit('switch', { team, player: next, text: manual ? 'manual' : 'auto' });
+  }
+
+  /**
+   * After a switch while defending, the stick held for the old player is carried over: the new man
+   * closes down the ball until it is let go or pushed a new way (SWITCH.carryMax at most).
+   */
+  private carryOver(c: Control, team: number) {
+    if (!SW.carry || !c.human || this.possessionTeam() === team) { if (c.carryKind === 'switch') c.carry = undefined; return; }
+    const m = Math.hypot(c.input.mx, c.input.mz);
+    c.carry = m > 0.3 ? angleOf(c.input.mx, c.input.mz) : undefined;
+    c.carryKind = 'switch';
+    c.carryUntil = this.time + SWITCH.carryMax;
   }
 
   /**
@@ -4384,12 +4495,16 @@ export class Match {
     if (best < 0) return;
     c.pid = best;
     c.lastAutoSwitch = this.time;
+    c.pend = undefined;
     this.players[best].queued = null;
-    this.emit('switch', { team, player: best });
+    // A mouse click points the new man by itself; a right-stick flick leaves the left stick to carry over.
+    if (!at) this.carryOver(c, team);
+    else if (c.carryKind === 'switch') c.carry = undefined;
+    this.emit('switch', { team, player: best, text: 'manual' });
   }
 
   /** Outfield teammate (not `exclude`) nearest a point, within `within` metres, or -1. */
-  private nearestTeammateTo(team: TeamIndex, exclude: number, at: V2, within: number): number {
+  private nearestTeammateTo(team: number, exclude: number, at: V2, within: number): number {
     let best = -1, bs = within;
     const other = this.otherHuman(team);
     for (const p of this.teamPlayers(team)) {
@@ -4405,7 +4520,7 @@ export class Match {
    * ball): the nearest one close to the line of the flick, preferring players nearer the ball. If
    * nobody is within about 50 degrees, the cone widens to about 75 degrees. -1 when nobody fits.
    */
-  flickTarget(team: TeamIndex, exclude: number, from: V2, x: number, z: number): number {
+  flickTarget(team: number, exclude: number, from: V2, x: number, z: number): number {
     const u = norm(x, z);
     for (const minCos of [0.64, 0.26]) {
       let best = -1, bs = Infinity;
@@ -4424,23 +4539,33 @@ export class Match {
     return -1;
   }
 
-  /** Smarter auto-switching (19 Nov): the defender who will get to the next engagement first, goal-side. */
-  private bestEngager(team: number, exclude: number, inputX: number, inputZ: number): number {
+  /**
+   * Smarter auto-switching (19 Nov): the defender who will get to the next engagement first, goal-side.
+   * 20 Nov 2026: players far from the ball (likely off screen) count as a little slower; `keep` (the
+   * marked man) stays the pick unless another is clearly better; `skip` leaves out players already
+   * visited by a run of quick switch presses.
+   */
+  private bestEngager(team: number, exclude: number, inputX: number, inputZ: number, keep = -1, skip?: number[]): number {
     const E = this.engagePoint(team);
     const cur = this.players[exclude];
     const other = this.otherHuman(team);
     const hasInput = Math.hypot(inputX, inputZ) > 0.4;
-    let best = -1, bs = Infinity;
+    const bx = this.ball.pos.x;
+    let best = -1, bs = Infinity, ks = Infinity;
     for (const p of this.teamPlayers(team)) {
       if (p.id === exclude || p.id === other || p.role === 'GK' || p.off) continue;
+      if (skip && skip.includes(p.id)) continue;
       let t = this.engageTime(p, E);
       if (hasInput && cur) {
         const v = norm(p.pos.x - cur.pos.x, p.pos.z - cur.pos.z);
         const mv = norm(inputX, inputZ);
         if (v.x * mv.x + v.z * mv.z > 0.5) t -= 0.4;
       }
+      if (SW.onscreen && Math.abs(p.pos.x - bx) > SWITCH.offscreen) t += SWITCH.offscreenCost;
+      if (p.id === keep) ks = t;
       if (t < bs) { bs = t; best = p.id; }
     }
+    if (SW.steady && keep >= 0 && keep !== best && ks < bs + SWITCH.nextKeep) return keep;
     return best;
   }
 
@@ -4454,8 +4579,9 @@ export class Match {
   private autoSwitchFor(team: TeamIndex) {
     const c = this.ctrl[team];
     if (isLocked(c)) { c.next = -1; return; }
-    c.next = this.bestSwitchCandidate(team, c.pid, c.input.mx, c.input.mz);
-    if (!c.autoSwitch) return;
+    const [sx, sz] = this.switchStick(c);
+    c.next = this.bestSwitchCandidate(team, c.pid, sx, sz, c.next);
+    if (!c.autoSwitch || c.style === 'off') return;
     const pt = this.possessionTeam();
     const cur = this.players[c.pid];
     // On the keeper: stay there while the danger lasts; once the ball is well away, back to an outfield player.
@@ -4463,7 +4589,7 @@ export class Match {
       if (this.ball.owner !== cur.id && dist(this.ball.pos, { x: this.ownGoalX(team), z: 0 }) > 40 && this.time - c.lastAutoSwitch > 1) this.leaveKeeper(team);
       return;
     }
-    if (pt === team) return;
+    if (pt === team) { c.pend = undefined; return; }
     // Two humans on one side (local co-op) keep the calmer classic auto-switch.
     if (TEAMMATE_ON.switching && !this.mates[team]) { this.smartAutoSwitch(team); return; }
     if (this.time - c.lastAutoSwitch < 1.5) return;
@@ -4476,7 +4602,8 @@ export class Match {
     if (!cand) return;
     const tn = dist(cand.pos, fut) / jogSpeed(cand.a);
     const airborne = b.pos.y > 1.5 && b.state === 'flight';
-    if (tc - tn > (airborne ? 0.8 : 1.6)) this.switchPlayer(team, false);
+    if (c.style === 'air' && !airborne) return;
+    if (tc - tn > (airborne ? 0.8 : 1.6) * SWITCH.sens[c.sens ?? 'normal']) this.switchPlayer(team, false);
   }
 
   /**
@@ -4484,37 +4611,103 @@ export class Match {
    * for the next engagement (their pass's receiver, where a high ball drops, the dribbler's next
    * stride). Quicker when the ball has gone past the human's man; slower while he is in the duel
    * or chasing it down with the stick, so a switch never steals a challenge.
+   * 20 Nov 2026: style (off / high balls / assisted / full) and sensitivity; no switch just after a
+   * challenge or while holding jockey or contain; a better man must stay better for a moment; crosses
+   * near goal switch early to the man under them; never while you are on the passer as he winds up.
    */
   private smartAutoSwitch(team: TeamIndex) {
     const c = this.ctrl[team];
     const cur = this.players[c.pid];
     const b = this.ball;
+    const k = SWITCH.sens[c.sens ?? 'normal'];
+    const E = this.engagePoint(team);
+    const cross = SW.crosses && this.crossOnUs(team, E);
     const newPass = b.state === 'flight' && b.receiver >= 0 && this.players[b.receiver].team !== team && this.time - this.lastKickTime < 0.4;
-    if (this.time - c.lastAutoSwitch < (newPass ? 0.6 : 1.0)) return;
-    if (cur.action.type !== 'none' && cur.action.type !== 'stumble') return;
+    if (this.time - c.lastAutoSwitch < (cross ? SWITCH.crossCool : newPass ? 0.6 : 1.0) * k) { c.pend = undefined; return; }
+    if (cur.action.type !== 'none' && cur.action.type !== 'stumble') { c.pend = undefined; return; }
+    if (SW.guard && c.lastChallenge !== undefined && this.time - c.lastChallenge < SWITCH.guardAfter) { c.pend = undefined; return; }
     const cand = this.players[c.next];
     if (!cand) return;
-    const E = this.engagePoint(team);
     const tc = this.engageTime(cur, E), tn = this.engageTime(cand, E);
     const goal = { x: this.ownGoalX(team), z: 0 };
     const beaten = dist(cur.pos, goal) > dist(E, goal) + 2;
     const dE = dist(cur.pos, E);
     const mv = Math.hypot(c.input.mx, c.input.mz);
-    const chasing = mv > 0.4 && ((E.x - cur.pos.x) * c.input.mx + (E.z - cur.pos.z) * c.input.mz) / (Math.max(0.5, dE) * mv) > 0.8 && dE < 14;
-    const airborne = b.pos.y > 1.5 && b.state === 'flight';
+    const chasing = c.carry === undefined && mv > 0.4 && ((E.x - cur.pos.x) * c.input.mx + (E.z - cur.pos.z) * c.input.mz) / (Math.max(0.5, dE) * mv) > 0.8 && dE < 14;
+    const airborne = (b.pos.y > 1.5 && b.state === 'flight') || cross;
+    const style = c.style ?? 'full';
+    if ((style === 'air' && !airborne) || (style === 'assisted' && !airborne && !beaten)) { c.pend = undefined; return; }
+    // Pressing the passer as he winds up: the marker reads the pass, but control stays with you.
+    const w = SW.read ? this.passWindup(team) : null;
+    if (w && dist(cur.pos, w.passer.pos) < 6) { c.pend = undefined; return; }
     let thr = airborne ? 0.8 : 1.1;
     if (beaten) thr = 0.5;
     else if (dE < 5) thr += 1.0; // in the duel
-    else if (chasing) thr += 0.5;
+    else if (chasing) thr += 0.5 + (SW.guard && c.input.sprint ? SWITCH.sprintChase : 0);
+    if (cross) thr = Math.min(thr, dE < 5 ? thr : SWITCH.crossThr);
+    if (SW.guard && !beaten && !cross && (c.input.jockey || c.input.contain)) thr += SWITCH.guardHold;
     // Don't flick straight back to the man we just left.
     if (cand.id === this.switchedFrom[team] && this.time - c.lastAutoSwitch < 2.5) thr += 0.6;
+    thr *= k;
     if (tc - tn > thr) {
+      if (SW.steady) {
+        // A better man must stay better for a moment, so close calls don't flick control about.
+        // (Not for a pass just played: the marker read it while it was wound up.)
+        const hold = newPass ? 0 : beaten || cross ? SWITCH.steadyQuick : SWITCH.steady;
+        if (hold > 0) {
+          if (!c.pend || c.pend.id !== cand.id) { c.pend = { id: cand.id, since: this.time }; return; }
+          if (this.time - c.pend.since < hold - 1e-6) return;
+        }
+      }
       const from = c.pid;
       this.switchPlayer(team, false);
       if (c.pid !== from) this.switchedFrom[team] = from;
-    }
+    } else c.pend = undefined;
   }
   private switchedFrom: [number, number] = [-1, -1];
+
+  /**
+   * Their set piece near your goal (20 Nov 2026): the defender to start on, nearest the danger (the
+   * six-yard box at a corner, the edge of the area at a free kick, the thrower's short options at a
+   * throw-in), not in the wall; `skip` cycles on. -1 when it doesn't apply.
+   */
+  setPieceDefender(r: Restart, skip: number[] = []): number {
+    const team = 1 - r.team;
+    const gx = this.ownGoalX(team), sg = Math.sign(gx);
+    const goal = { x: gx, z: 0 };
+    let danger: V2 | null = null;
+    if (r.type === 'corner') danger = { x: gx - sg * 6.5, z: Math.sign(r.spot.z) * 1.5 };
+    else if (r.type === 'freekick' && dist(r.spot, goal) < 38) danger = { x: gx - sg * 11, z: r.spot.z * 0.3 };
+    else if (r.type === 'throwin' && Math.abs(r.spot.x - gx) < 35) danger = { x: r.spot.x - sg * 3, z: r.spot.z * 0.75 };
+    if (!danger) return -1;
+    const wall = r.type === 'freekick' ? wallFor(this, r) : null;
+    const other = this.otherHuman(team);
+    let best = -1, bd = Infinity;
+    for (const p of this.teamPlayers(team)) {
+      if (p.off || p.role === 'GK' || p.id === other || skip.includes(p.id) || wall?.ids.includes(p.id)) continue;
+      const d = dist(p.pos, danger);
+      if (d < bd) { bd = d; best = p.id; }
+    }
+    return best;
+  }
+
+  /** At their set piece: put the defending human on the right man once everyone is set; the switch button cycles. */
+  private defendSetPiece(r: Restart, cycle: boolean) {
+    const team = (1 - r.team) as TeamIndex;
+    const c = this.ctrl[team];
+    if (!SW.setpiece || !c.human || isLocked(c) || this.players[c.pid].role === 'GK') return;
+    if (!cycle && (!c.autoSwitch || c.style === 'off')) return;
+    const quick = cycle && c.lastManual !== undefined && this.time - c.lastManual < 6;
+    const skip = cycle ? (quick ? [...(c.chain ?? []), c.pid] : [c.pid]) : [];
+    let next = this.setPieceDefender(r, skip);
+    if (next < 0 && cycle) next = this.setPieceDefender(r, [c.pid]);
+    if (next < 0 || next === c.pid) return;
+    if (cycle) { c.chain = skip; c.lastManual = this.time; }
+    c.pid = next;
+    c.lastAutoSwitch = this.time;
+    c.carry = undefined;
+    this.emit('switch', { team, player: next, text: cycle ? 'manual' : 'setpiece' });
+  }
 
   /** Where a player can meet the moving ball (used by receivers and interceptors). */
   meetPoint(p: Player, maxT = 2.5, maxY = 1.5): V2 | null {

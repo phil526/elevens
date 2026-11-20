@@ -229,6 +229,9 @@ export class GameRenderer {
   private sun!: THREE.DirectionalLight;
   private markers: { ring: THREE.Mesh; arrow: THREE.Mesh; sprite: THREE.Sprite }[] = [];
   private nextRing!: THREE.Mesh;
+  /** A ring that bursts out from the player you have just switched to (20 Nov 2026). */
+  private flashRing!: THREE.Mesh;
+  private flash = { id: -1, t: 99 };
   /** Bubbles over teammates calling for the ball. */
   private callBubbles: THREE.Sprite[] = [];
   private recvRing!: THREE.Mesh;
@@ -1023,6 +1026,9 @@ export class GameRenderer {
     for (const s of this.callBubbles) this.scene.remove(s);
     this.callBubbles = [0, 1, 2].map(() => { const s = callSprite(); s.visible = false; this.scene.add(s); return s; });
     this.nextRing = ring(0.55, 0.64, 0xffffff, 0.45);
+    this.flashRing = ring(0.62, 0.86, 0xffffff, 0.9);
+    this.flashRing.visible = false;
+    this.scene.add(this.flashRing);
     this.recvRing = ring(0.7, 0.82, 0xffffff, 0.7);
     this.holdRing = ring(0.95, 1.08, 0xffd60a, 0.85);
     // Set-piece target: a ring on the grass (or on the goal line for penalties) with a centre dot.
@@ -1427,6 +1433,16 @@ export class GameRenderer {
     const nxt = lt !== undefined ? view.next[lt] : -1;
     this.nextRing.visible = live && mk.showNext && nxt >= 0 && view.ball.owner !== view.ctl[lt];
     if (this.nextRing.visible) { const p = view.players[nxt]; this.nextRing.position.set(p.pos.x, 0.025, p.pos.z); }
+    // Switch flash: a ring bursting out from the new man and fading (0.45 s).
+    this.flash.t += dt;
+    const fl = this.flash.t < 0.45 && this.flash.id >= 0 && live && !mk.hideMarkers;
+    this.flashRing.visible = fl;
+    if (fl) {
+      const p = view.players[this.flash.id], k = this.flash.t / 0.45;
+      this.flashRing.position.set(p.pos.x, 0.03, p.pos.z);
+      this.flashRing.scale.setScalar(1 + k * 1.8);
+      (this.flashRing.material as THREE.MeshBasicMaterial).opacity = 0.9 * (1 - k) * (1 - k);
+    }
     this.recvRing.visible = live && mk.receiver >= 0;
     if (this.recvRing.visible) {
       const p = view.players[mk.receiver];
@@ -1666,6 +1682,30 @@ export class GameRenderer {
       const wm = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true });
       for (const p of this.players) { const m = new THREE.Mesh(cyl, wm); m.position.set(p.root.position.x, 0.91, p.root.position.z); this.debugGroup.add(m); }
     }
+  }
+
+  /**
+   * Where to draw an arrow at the screen edge pointing at a pitch point that is off the screen (CSS
+   * pixels, angle in radians, 0 = pointing right), or null while it is on the screen.
+   */
+  edgePoint(x: number, z: number, margin = 30): { x: number; y: number; angle: number } | null {
+    const v = new THREE.Vector3(x, 1, z).project(this.camera.cam);
+    const behind = v.z > 1;
+    if (!behind && Math.abs(v.x) <= 0.98 && Math.abs(v.y) <= 0.96) return null;
+    const w = this.canvas.clientWidth, h = this.canvas.clientHeight;
+    let dx = v.x, dy = -v.y;
+    if (behind) { dx = -dx; dy = -dy; }
+    if (Math.abs(dx) < 1e-4 && Math.abs(dy) < 1e-4) dy = 1;
+    const hw = w / 2 - margin, hh = h / 2 - margin;
+    // From the centre along (dx, dy) in pixels, to the first border it meets.
+    const px = dx * (w / 2), py = dy * (h / 2);
+    const k = Math.min(hw / Math.max(1e-6, Math.abs(px)), hh / Math.max(1e-6, Math.abs(py)));
+    return { x: w / 2 + px * k, y: h / 2 + py * k, angle: Math.atan2(py, px) };
+  }
+
+  /** Flash the marker of the player control has just switched to. */
+  flashSwitch(id: number) {
+    this.flash = { id, t: 0 };
   }
 
   /** Project a world point to CSS pixels (for HUD elements such as the shot-power bar). */

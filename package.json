@@ -36,7 +36,8 @@
     "e2e:pad": "node scripts/e2e-padmatch.mjs",
     "e2e:ballcontrol": "node scripts/e2e-ballcontrol.mjs",
     "e2e:setpieces": "node scripts/e2e-setpieces.mjs",
-    "e2e:hosted": "node scripts/e2e-hosted.mjs"
+    "e2e:hosted": "node scripts/e2e-hosted.mjs",
+    "e2e:switch": "node scripts/e2e-switch.mjs"
   },
   "dependencies": {
     "three": "0.186.1",

@@ -8,7 +8,7 @@ import { rollWeatherKind, rollWind } from '../shared/weather';
 import { ROOM_CODE_ALPHABET, type ClientMsg, type LobbySeat, type RoomState, type ServerMsg } from '../shared/protocol';
 import { encodeSnapshot } from '../shared/snapshot';
 import { TEAMS, defaultTactics, teamById, type Tactics } from '../shared/teams';
-import type { InputFrame, MatchEvent, TeamIndex } from '../shared/types';
+import type { InputFrame, MatchEvent, SwitchSens, SwitchStyle, TeamIndex } from '../shared/types';
 
 export interface Conn {
   send(msg: ServerMsg | object): void;
@@ -25,6 +25,8 @@ export interface Seat {
   kit: 'home' | 'away';
   mentality: Mentality;
   tactics?: Tactics;
+  /** Auto-switch style and sensitivity this player chose (default full / normal). */
+  sw?: [SwitchStyle, SwitchSens];
   queue: InputFrame[];
   held: InputFrame;
   lastInputAt: number;
@@ -202,6 +204,7 @@ export class Room {
         }
         if (msg.kit) s.kit = msg.kit;
         if (msg.mentality) s.mentality = msg.mentality;
+        if (msg.sw) s.sw = msg.sw;
         if (msg.minutes && idx === this.host) this.minutes = msg.minutes;
         if (msg.ready !== undefined) s.ready = msg.ready;
         // Any settings change un-readies the other player so nobody starts on terms they didn't see.
@@ -273,7 +276,8 @@ export class Room {
     const a = this.seats[0]!, b = this.seats[1]!;
     const cfg = defaultConfig({
       teams: [a.club, b.club], kits: [a.kit, b.kit], realMinutes: this.minutes, humans: [true, true],
-      difficulty: ['pro', 'pro'], mentality: [a.mentality, b.mentality], autoSwitch: [true, true], seed: randomBytes(4).readUInt32LE(0),
+      difficulty: ['pro', 'pro'], mentality: [a.mentality, b.mentality], autoSwitch: [true, true],
+      switchStyle: [a.sw?.[0] ?? 'full', b.sw?.[0] ?? 'full'], switchSens: [a.sw?.[1] ?? 'normal', b.sw?.[1] ?? 'normal'], seed: randomBytes(4).readUInt32LE(0),
       tactics: [a.tactics ?? defaultTactics(), b.tactics ?? defaultTactics()],
       // No home side online: the crowd stays neutral.
       momentum: false,
@@ -377,7 +381,10 @@ export class Room {
       else if (now - this.halftimeAt > MATCH.halftimePauseOnline * 1000) { m.continueAfterHalftime(); this.halftimeAt = -1; }
     }
     this.snapCounter++;
-    if (this.snapCounter >= SIM.tickRate / SIM.snapshotRate) {
+    // The full-time tick always sends a snapshot: the match ends on this tick, so without it the
+    // players could miss the final whistle (2 ticks in 3 send none) and sit on a frozen match.
+    const final = m.phase === 'fulltime';
+    if (this.snapCounter >= SIM.tickRate / SIM.snapshotRate || final) {
       this.snapCounter = 0;
       const ev = this.pendingEvents;
       this.pendingEvents = [];

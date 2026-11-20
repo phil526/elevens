@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { NET, SIM } from '../src/shared/config';
 import type { ServerMsg } from '../src/shared/protocol';
-import type { Snapshot } from '../src/shared/snapshot';
+import { PHASES, type Snapshot } from '../src/shared/snapshot';
 import { Room, type Conn } from '../src/server/room';
 
 class FakeConn implements Conn {
@@ -143,6 +143,24 @@ describe('room', () => {
     expect(s.room.match!.score).toEqual([0, 0]);
     expect(s.room.match!.tick).toBe(0);
   }, 60_000);
+
+  it('both players always get a full-time snapshot before the match ends (20 Nov 2026 frozen-at-full-time bug)', () => {
+    // The final whistle can fall on any tick; try the three snapshot phases.
+    for (let offset = 0; offset < 3; offset++) {
+      const s = setup();
+      startMatch(s);
+      ticks(s, offset);
+      while (s.room.state === 'match') ticks(s, 1);
+      for (const c of [s.a, s.b]) {
+        const snaps = c.snaps();
+        expect(snaps[snaps.length - 1].ph).toBe(PHASES.indexOf('fulltime'));
+        // The snapshot comes before the end message.
+        const iSnap = c.msgs.lastIndexOf(snaps[snaps.length - 1]);
+        const iEnd = c.msgs.findIndex((m) => (m as { t?: string }).t === 'end');
+        expect(iSnap).toBeLessThan(iEnd);
+      }
+    }
+  }, 120_000);
 
   it('a player leaving mid-match ends it for the other', () => {
     const s = setup();

@@ -15,3 +15,44 @@ export type BCKey = keyof typeof BC;
 export function bcOff(list: string | undefined) {
   for (const k of (list ?? '').split(',').map((s) => s.trim()).filter(Boolean)) if (k in BC) BC[k as BCKey] = false;
 }
+
+// Auto-switching (20 Nov 2026), human control only: `SW_OFF=carry,guard` in the benches and tests.
+// carry = after a switch the stick held for the old player is ignored (he closes down the ball) until
+// moved or let go; guard = no auto-switch just after a challenge or while holding jockey/contain or
+// sprinting at the ball; steady = a better defender must stay better for a moment; cycle = quick
+// second switch press goes on to the next-best; setpiece = start on a box defender at their set
+// pieces; read = the marker reads the pass being wound up; onscreen = prefer players near the ball
+// (on screen); crosses = switch early to the defender under a cross.
+export const SW = { carry: true, guard: true, steady: true, cycle: true, setpiece: true, read: true, onscreen: true, crosses: true };
+export type SWKey = keyof typeof SW;
+export function swOff(list: string | undefined) {
+  for (const k of (list ?? '').split(',').map((s) => s.trim()).filter(Boolean)) if (k in SW) SW[k as SWKey] = false;
+}
+
+/** Tuning for the auto-switch (seconds unless stated). */
+export const SWITCH = {
+  /** Longest the stick held before a switch is ignored (the new man closes down the ball meanwhile). */
+  carryMax: 1.4,
+  /** No auto-switch for this long after you press tackle, slide or contain. */
+  guardAfter: 0.8,
+  /** Extra margin while jockey or contain is held. */
+  guardHold: 0.8,
+  /** Extra margin while sprinting at the ball. */
+  sprintChase: 0.5,
+  /** A better defender must stay better this long before control moves (beaten / crosses: shorter). */
+  steady: 0.25,
+  steadyQuick: 0.05,
+  /** The next-switch marker stays on its man unless another is this much (s) better. */
+  nextKeep: 0.2,
+  /** Presses closer together than this cycle on to the next-best player. */
+  cycleWindow: 0.8,
+  /** Players further than this (m, along the pitch) from the ball are probably off screen. */
+  offscreen: 30,
+  offscreenCost: 0.5,
+  /** Crosses and long balls dropping near your goal: margin and cool-down. */
+  crossThr: 0.45,
+  crossCool: 0.3,
+  crossRange: 26,
+  /** Margin and cool-down multipliers for Calm, Normal and Eager. */
+  sens: { calm: 1.45, normal: 1, eager: 0.7 } as Record<'calm' | 'normal' | 'eager', number>,
+};
