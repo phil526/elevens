@@ -30,7 +30,8 @@ for (let seed = first; seed < first + count; seed++) {
   const runStart = new Map<number, number>();
   let sweeping = false, cornerAt = -99, secondAt = -99, prevOwnerB = -1, sweepAt = -99, sweepOpen = false;
   let lastSw = { from: -1, to: -1, t: -99 };
-  let seq = 1, nextAct = 0, lastCmd = -1, lastKick: { kind: string; kicker: number; recv: number; from: { x: number; z: number } } | null = null, lastShotT = -9;
+  let heldStick: { x: number; z: number } | null = null, heldFor = -1;
+  let seq = 1, nextAct = 0, lastCmd = -1, lastKick: { kind: string; kicker: number; recv: number; from: { x: number; z: number }; t: number } | null = null, lastShotT = -9;
   while (m.phase !== 'fulltime') {
     if (m.phase === 'halftime') m.continueAfterHalftime();
     const c = m.ctrl[0];
@@ -69,10 +70,34 @@ for (let seed = first; seed < first + count; seed++) {
     } else if (me && b.state !== 'dead' && m.possessionTeam() !== 0) {
       mx = b.pos.x - me.pos.x; mz = b.pos.z - me.pos.z; const L = Math.hypot(mx, mz) || 1; mx /= L; mz /= L; sprint = L > 4;
       if (L < 2 && R() < 0.05) ev.push({ k: 'pass', p: 0 });
+    } else if (me && b.state === 'flight' && b.receiver === me.id && process.env.HOLD === '1' && heldStick) {
+      // HOLD=1: like most pad players, the stick stays pushed the way the pass went while it travels.
+      mx = heldStick.x; mz = heldStick.z;
     } else if (me && b.state !== 'dead') {
       mx = b.pos.x - me.pos.x; mz = b.pos.z - me.pos.z; const L = Math.hypot(mx, mz) || 1; mx /= L; mz /= L;
     } else if (me && m.restart && m.restart.taker === me.id && m.restart.ready && m.time >= nextAct) {
       ev.push({ k: 'pass', p: 0.4 }); nextAct = m.time + 1;
+    }
+    if (ev.some((e) => e.k === 'pass' || e.k === 'through')) { heldStick = { x: mx, z: mz }; heldFor = me.id; }
+    else if (b.owner >= 0 && b.owner !== heldFor) heldStick = null;
+    // HOLD=1: the stick stays on the pass through the wind-up too.
+    if (process.env.HOLD === '1' && heldStick && b.owner === heldFor && me && me.id === heldFor && !ev.length) { mx = heldStick.x; mz = heldStick.z; }
+    // Forward options while the human has the ball: teammates 5 m+ ahead of it, onside, 4 m+ from
+    // the nearest opponent and with a clear lane (sampled every 6 ticks).
+    if (me && b.owner === me.id && b.state === 'dribble' && (m.tick % 6) === 0) {
+      const opp = m.teamPlayers(1).filter((o) => !o.off);
+      const line = Math.max(opp.map((o) => o.pos.x * dir).sort((x, y) => y - x)[1], b.pos.x * dir, 0);
+      let n = 0, mv = 0;
+      for (const t of m.teamPlayers(0)) {
+        if (t.id === me.id || t.off || t.role === 'GK') continue;
+        const ahead = (t.pos.x - b.pos.x) * dir;
+        if (ahead < 5) continue;
+        if (t.vel.x * dir > 3.5) mv++;
+        if (t.pos.x * dir > line + 0.05) continue;
+        let near = 99; for (const o of opp) near = Math.min(near, Math.hypot(o.pos.x - t.pos.x, o.pos.z - t.pos.z));
+        if (near >= 4 && laneBlock(me.pos, t.pos, opp) < 0.3) n++;
+      }
+      add('optSamples'); add('fwdOpen', n); add('fwdRunning', mv);
     }
     m.applyInput(0, { seq: seq++, mx, mz, sprint, jockey: false, contain: m.possessionTeam() === 1, ev });
     m.step();
@@ -107,6 +132,7 @@ for (let seed = first; seed < first + count; seed++) {
     if (own >= 0 && lastKick && own !== lastKick.kicker) {
       const ok = m.players[own].team === 0;
       add(`${lastKick.kind}_${ok ? 'ok' : 'lost'}`);
+      if (ok) add('recvMs', Math.round((m.time - lastKick.t) * 1000));
       if (!ok) {
         const rc = lastKick.recv >= 0 ? m.players[lastKick.recv] : null;
         const dR = rc ? Math.hypot(rc.pos.x - m.ball.pos.x, rc.pos.z - m.ball.pos.z) : 99;
@@ -116,7 +142,7 @@ for (let seed = first; seed < first + count; seed++) {
       lastKick = null;
     }
     for (const e of m.drainEvents()) {
-      if (e.type === 'kick' && e.player !== undefined && m.players[e.player as number].team === 0 && lastCmd === e.player && (e.text === 'pass' || e.text === 'through')) { lastKick = { kind: 'hpass', kicker: e.player as number, recv: m.ball.receiver, from: { ...m.players[e.player as number].pos } }; lastCmd = -1; }
+      if (e.type === 'kick' && e.player !== undefined && m.players[e.player as number].team === 0 && lastCmd === e.player && (e.text === 'pass' || e.text === 'through')) { lastKick = { kind: 'hpass', kicker: e.player as number, recv: m.ball.receiver, from: { ...m.players[e.player as number].pos }, t: m.time }; lastCmd = -1; }
       if (e.type === 'kick' && e.text === 'shot' && m.players[e.player as number].team === 0) { add('hshots'); lastShotT = m.time; }
       if (e.type === 'kick' && e.text === 'shot' && m.players[e.player as number].team === 1 && m.time - lostAt < 10) add('aiShotAfterTurnover10s');
       if (e.type === 'goal') add(e.team === 0 ? 'hgoals' : 'aigoals');
@@ -147,4 +173,4 @@ for (let seed = first; seed < first + count; seed++) {
   add('aiShots', m.stats[1].shots); add('aiPasses', m.stats[1].passes); add('aiPassesOk', m.stats[1].passesCompleted);
 }
 const r = (a: number, b: number) => +(100 * a / Math.max(1, b)).toFixed(1);
-console.log(JSON.stringify({ ...out, advance4s: +((out.prog4s ?? 0) / Math.max(1, out.turnovers ?? 1)).toFixed(2), wonBack5Pct: r(out.wonBack5s ?? 0, out.turnovers ?? 0), myPassPct: r(out.hpass_ok ?? 0, (out.hpass_ok ?? 0) + (out.hpass_lost ?? 0)), teamPassPct: r(out.passesOkH, out.passesH), aiPassPct: r(out.aiPassesOk, out.aiPasses), onTargetPct: r(out.onTargetH, out.hshots), goalsPerShot: r(out.hgoals ?? 0, out.hshots) }));
+console.log(JSON.stringify({ ...out, advance4s: +((out.prog4s ?? 0) / Math.max(1, out.turnovers ?? 1)).toFixed(2), wonBack5Pct: r(out.wonBack5s ?? 0, out.turnovers ?? 0), myPassPct: r(out.hpass_ok ?? 0, (out.hpass_ok ?? 0) + (out.hpass_lost ?? 0)), teamPassPct: r(out.passesOkH, out.passesH), aiPassPct: r(out.aiPassesOk, out.aiPasses), onTargetPct: r(out.onTargetH, out.hshots), goalsPerShot: r(out.hgoals ?? 0, out.hshots), recvMsAvg: Math.round((out.recvMs ?? 0) / Math.max(1, out.hpass_ok ?? 1)), fwdOpenAvg: +((out.fwdOpen ?? 0) / Math.max(1, out.optSamples ?? 1)).toFixed(2), fwdRunningAvg: +((out.fwdRunning ?? 0) / Math.max(1, out.optSamples ?? 1)).toFixed(2) }));

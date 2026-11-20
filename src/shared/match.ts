@@ -19,7 +19,7 @@ import type {
 } from './types';
 import { emptyStats } from './types';
 import { newPlayerStats, rateMatch, type PlayerStats, type Rated } from './ratings';
-import { updateAI, planTeams, restartTargets, chooseRestartKick, ROUTINES, routineAim, levelOf, receivePoint, thirdManRun, LONG_THROW_FX, longThrower, throwRange, wallFor, wallSize } from './ai/team';
+import { updateAI, planTeams, restartTargets, chooseRestartKick, ROUTINES, routineAim, levelOf, receivePoint, thirdManRun, humanPassAndMove, LONG_THROW_FX, longThrower, throwRange, wallFor, wallSize } from './ai/team';
 import type { TeamPlan } from './ai/team';
 import { keeperSaveCheck, manualDive, smother } from './ai/keeper';
 import { gameState, restartUrgency } from './ai/gamestate';
@@ -49,7 +49,16 @@ export interface Control {
   prevSprint: boolean;
   /** Be a Pro: the one player this human controls all match (player id), or -1. */
   lock?: number;
+  /**
+   * Stick direction carried over from a pass (radians), or undefined. Control jumps to the receiver
+   * as the ball is played, while the stick is usually still pushed the way the pass went: until it
+   * is let go or pushed a new way, the receiver ignores it and attacks the ball (20 Nov 2026).
+   */
+  carry?: number;
 }
+
+/** How far (radians) the stick can move from the carried-over pass direction and still be ignored. */
+export const CARRY_ANGLE = 0.7;
 
 /** How far back from the ball the taker waits before running in (0: taken standing). */
 export function runupDistance(type: RestartType): number {
@@ -1556,7 +1565,15 @@ export class Match {
       this.humanAction(p, e, c);
     }
     // Movement intention.
-    const inp = c.input;
+    let inp = c.input;
+    if (c.carry !== undefined) {
+      // The stick still held from the pass is not a request to run that way: attack the ball.
+      const b = this.ball;
+      const toMe = b.state === 'flight' && b.receiver === p.id && b.owner < 0;
+      const m0 = Math.hypot(inp.mx, inp.mz);
+      if (!toMe || m0 < 0.25 || Math.abs(wrapAngle(angleOf(inp.mx, inp.mz) - c.carry)) > CARRY_ANGLE) c.carry = undefined;
+      else inp = { ...inp, mx: 0, mz: 0 };
+    }
     const m = Math.hypot(inp.mx, inp.mz);
     const ownsBall = this.ball.owner === p.id;
     // Pressing sprint from below jogging pace gives a short burst of acceleration.
@@ -1611,7 +1628,7 @@ export class Match {
     }
     // Receive assist: an intended receiver with no stick input comes to meet the ball.
     if (m < 0.25 && this.ball.state === 'flight' && this.ball.receiver === p.id) {
-      const meet = receivePoint(this, p);
+      const meet = receivePoint(this, p, true);
       if (meet) this.arrive(p, meet, dist(p.pos, meet) > 2 ? 'sprint' : 'jog', angleOf(this.ball.pos.x - p.pos.x, this.ball.pos.z - p.pos.z));
     }
   }
@@ -2617,6 +2634,8 @@ export class Match {
     if (kind === 'shot') shotBlockLunges(this, p);
     // Third-man run: a forward pass to a teammate can set another attacker off in behind.
     if (!isRestartTaker && !isHolder && receiver >= 0 && (flight === 'pass' || flight === 'through') && kind !== 'shot') thirdManRun(this, p, this.players[receiver]);
+    // Pass and move: a human's passer runs on for the next ball (decided before control moves to the receiver).
+    if (!isRestartTaker && !isHolder && receiver >= 0 && (flight === 'pass' || flight === 'through') && kind !== 'shot' && this.controlOf(p)) humanPassAndMove(this, p, this.players[receiver]);
 
     if (kind === 'shot') {
       this.stats[team].shots++;
@@ -2651,10 +2670,15 @@ export class Match {
 
     // Control passes to the intended receiver straight away so they can move to the ball.
     const c = receiver >= 0 && this.players[receiver].role !== 'GK' ? this.receivingControl(team, p.id, receiver) : null;
-    if (c) {
-      c.pid = receiver;
-      this.emit('switch', { team, player: receiver });
-    }
+    if (c) this.handToReceiver(c, team, receiver);
+  }
+
+  /** Control follows a pass to its receiver; the stick held for the pass is carried over (see Control.carry). */
+  private handToReceiver(c: Control, team: number, receiver: number) {
+    c.pid = receiver;
+    const m = Math.hypot(c.input.mx, c.input.mz);
+    c.carry = m > 0.3 ? angleOf(c.input.mx, c.input.mz) : undefined;
+    this.emit('switch', { team, player: receiver });
   }
 
   private evaluateOffside(passer: Player, exempt: boolean) {
@@ -3379,7 +3403,7 @@ export class Match {
     this.evaluateOffside(p, false);
     this.emit('kick', { player: p.id, team: p.team, power: Math.hypot(b.vel.x, b.vel.y, b.vel.z) * 0.6, text: 'header' });
     const c = receiver >= 0 ? this.receivingControl(p.team, p.id, receiver) : null;
-    if (c) { c.pid = receiver; this.emit('switch', { team: p.team, player: receiver }); }
+    if (c) this.handToReceiver(c, p.team, receiver);
     return true;
   }
 

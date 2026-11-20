@@ -87,7 +87,10 @@ function layoffSpot(m: Match, r: Restart): V2 {
 const RUN_CHANCE = 0.4; // chance per plan update (scaled by mentality) that an eligible attacker starts a forward run
 // Timed runs for the human's teammates: a short check towards the ball, then a sprint onto the
 // shoulder of the last defender, bending along the line so they stay onside until the pass.
-const HUMAN_RUN = { chance: 0.14, check: 0.45, length: 2.8, rest: 1.6, maxRunners: 2 };
+// fromFx: runs start once the human's ball is past this depth (frame x; -15 until 20 Nov 2026, now from
+// deep in their own half too, so a build-up from the back has someone going forward). reach: how far
+// behind the opponents' line a runner can start from (22 until 20 Nov 2026).
+const HUMAN_RUN = { chance: 0.14, check: 0.45, length: 2.8, rest: 1.6, maxRunners: 2, fromFx: -30, reach: 30 };
 const SHAPE_FROM = 10; // ball depth (m into the opponents' half) from which the attacking shape applies
 const AI_RUN_CHANCE = 0.09; // AI teams: per plan update, scaled by mentality and difficulty
 // Third-man runs: when a pass is played, a teammate beyond the receiver sets off in behind so the
@@ -559,7 +562,7 @@ function buildPlan(m: Match, team: number, old: TeamPlan | null): TeamPlan {
           const onside = { x: Math.min(pt.x, Math.max(plan.offsideLineFx, cf.x) - 0.5), z: pt.z };
           if (p && p.id !== carrier.id) plan.boxTargets.set(p.id, fromFrame(dir, onside));
         }
-      } else if (cf.x > -15 && m.isHumanControlled(carrier)) {
+      } else if (cf.x > HUMAN_RUN.fromFx && m.isHumanControlled(carrier)) {
         humanTeamRuns(m, plan, squad, carrier, ment.fullbackOverlap, HUMAN_RUN.chance);
       } else if (cf.x > -15) {
         // AI attackers time their runs on the opponents' back line too: a check, then a sprint
@@ -900,7 +903,7 @@ function humanTeamRuns(m: Match, plan: TeamPlan, squad: Player[], carrier: Playe
   for (const p of idle) {
     if (running >= HUMAN_RUN.maxRunners || !m.rng.chance(chance)) continue;
     const f = toFrame(dir, p.pos);
-    if (f.x < plan.offsideLineFx - 22) continue; // too far back to threaten the line
+    if (f.x < plan.offsideLineFx - (m.isHumanControlled(carrier) ? HUMAN_RUN.reach : 22)) continue; // too far back to threaten the line
     p.runLane = p.role === 'ST' ? 3 : p.role === 'RB' || p.role === 'LB' ? 1 : p.role === 'LCM' || p.role === 'RCM' || p.role === 'CDM' ? 2 : (m.rng.chance(0.5) ? 1 : 2);
     p.runStart = m.time;
     p.aiRunUntil = m.time + HUMAN_RUN.length;
@@ -954,6 +957,22 @@ export function thirdManRun(m: Match, passer: Player, receiver: Player) {
   best.aiHoldUntil = m.time + THIRD_MAN.length + 1.5;
   thirdMen.set(best, receiver.id);
   if (m.rng.chance(THIRD_MAN.decoy)) startDecoy(m, best, m.teamPlayers(team).filter((q) => q.id !== passer.id && q.id !== receiver.id));
+}
+
+/**
+ * Pass and move for the human (20 Nov 2026): after a human plays the ball forward or square, the
+ * passer (now a computer player) often runs on past the receiver into space for the next ball, as
+ * the computer's own midfielders do. Not centre-backs or the keeper, not after a back pass, not
+ * when told to stay back.
+ */
+export const PASS_MOVE = { chance: 0.55, back: 3, maxDist: 25, time: 2.2 };
+export function humanPassAndMove(m: Match, passer: Player, receiver: Player) {
+  if (passer.role === 'GK' || passer.role === 'LCB' || passer.role === 'RCB' || passer.off || instrOf(m, passer) < 0) return;
+  const dir = m.attackDir(passer.team);
+  const fx = passer.pos.x * dir;
+  if (fx < -30 || fx > 40) return;
+  if ((receiver.pos.x - passer.pos.x) * dir < -PASS_MOVE.back || dist(passer.pos, receiver.pos) > PASS_MOVE.maxDist) return;
+  if (m.rng.chance(PASS_MOVE.chance)) passer.giveGoUntil = m.time + PASS_MOVE.time;
 }
 
 /** Who a third-man runner is waiting on (the receiver of the pass that set the run off). */
@@ -1301,7 +1320,7 @@ function openBody(m: Match, p: Player, fb: number): number {
 }
 
 /** Get into the line of a ground pass (robust), or meet a lofted ball where it comes down. */
-export function receivePoint(m: Match, p: Player): V2 | null {
+export function receivePoint(m: Match, p: Player, eager = false): V2 | null {
   const b = m.ball;
   const sp = Math.hypot(b.vel.x, b.vel.z);
   // Balls played into space: run to where the ball can be reached in time.
@@ -1313,7 +1332,8 @@ export function receivePoint(m: Match, p: Player): V2 | null {
     // Come towards the ball rather than waiting for it (more so with a marker close by).
     let nearOpp = 99;
     for (const o of m.players) if (o.team !== p.team) nearOpp = Math.min(nearOpp, dist(o.pos, p.pos));
-    const meet = nearOpp < 5 ? 3 : 1.5;
+    // A human's receiver (stick let go) attacks the pass harder: a few strides towards it.
+    const meet = eager ? (nearOpp < 5 ? 4 : 2.5) : nearOpp < 5 ? 3 : 1.5;
     const a = clamp(along - meet, 1, Math.max(1, stopDist - 0.5));
     const onLine = { x: b.pos.x + ux * a, z: b.pos.z + uz * a };
     // If the ball will be past that point before we get there, run to where it can still be caught.
