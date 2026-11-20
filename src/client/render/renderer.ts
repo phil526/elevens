@@ -146,6 +146,11 @@ export interface DebugDraw {
 }
 
 const QUALITY = { low: 0, medium: 1, high: 2, ultra: 3 } as const;
+/**
+ * Test pages (?test) draw without Sharper picture unless they ask (&sharp): in software rendering
+ * it slows the frame rate a lot, and the older browser checks time their waits on it.
+ */
+const SHARP_TEST_OFF = typeof location !== 'undefined' && new URLSearchParams(location.search).has('test') && !new URLSearchParams(location.search).has('sharp');
 const DPR_CAP = { low: 1, medium: 1.5, high: 2, ultra: 2.5 } as const;
 const MAX_DPR = 3;
 /** On Low, realistic players further than this from the camera (m) don't plant their feet. */
@@ -632,7 +637,7 @@ export class GameRenderer {
 
   private setupPost(q: number) {
     if (q !== 1) this.liteDof.dispose();
-    if (q >= 2 || this.gfx.sharpen === false) this.sharp.dispose();
+    if (q >= 2 || this.gfx.sharpen === false || SHARP_TEST_OFF) this.sharp.dispose();
     if (q < 2) {
       this.composer?.dispose();
       this.composer = null;
@@ -1544,7 +1549,7 @@ export class GameRenderer {
       this.grassU.uReflOn.value = on ? this.reflGain : 0;
       if (on) { this.grassU.uRefl.value = this.wet.target!.texture; this.grassU.uReflMat.value.copy(this.wet.matrix); }
     }
-    const sharpen = this.gfx.sharpen !== false && this.glCheck.level < 2;
+    const sharpen = this.gfx.sharpen !== false && this.glCheck.level < 2 && !SHARP_TEST_OFF;
     if (this.composer) {
       if (this.grade) this.grade.uniforms.uSharp.value = sharpen ? sharpenFor(this.gfx.preset, this.dyn.scale) : 0;
       this.composer.render();

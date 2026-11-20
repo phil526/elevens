@@ -23,7 +23,7 @@ try {
       const page = await ctx.newPage();
       page.on('pageerror', (e) => report.errors.push(`${tag}: ${e.message}`));
       page.on('console', (m) => { if (m.type() === 'error') report.errors.push(`${tag}: ${m.text()}`); });
-      await page.goto(`${BASE}/?test${query}`);
+      await page.goto(`${BASE}/?test&sharp${query}`);
       await page.waitForSelector('[data-a=quick]');
       await page.click('[data-a=offline]'); await page.click('[data-a=next]'); await page.click('[data-a=go]');
       for (let i = 0; i < 150; i++) { if ((await page.evaluate(() => window.__elevens?.session?.view()?.phase)) === 'kickoff') break; await sleep(200); }

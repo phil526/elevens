@@ -16,7 +16,7 @@ try {
     const ctx = await browser.newContext({ viewport: { width: 915, height: 412 }, deviceScaleFactor: 2.6, hasTouch: true });
     await ctx.addInitScript(([p, s, w]) => localStorage.setItem('elevens.settings.v1', JSON.stringify({ graphics: { preset: p, renderScale: 1, shadows: p !== 'low', players: 'realistic', matchTime: 'night', weather: w, autoRes: false, sharpen: s }, matchIntro: false, tvGraphics: false })), [preset, on, weather]);
     const page = await ctx.newPage();
-    await page.goto(`${BASE}/?test${weather !== 'clear' ? `&weather=${weather}` : ''}`);
+    await page.goto(`${BASE}/?test&sharp${weather !== 'clear' ? `&weather=${weather}` : ''}`);
     await page.waitForSelector('[data-a=quick]');
     await page.click('[data-a=offline]'); await page.click('[data-a=next]'); await page.click('[data-a=go]');
     for (let i = 0; i < 150; i++) { const ph = await page.evaluate(() => window.__elevens?.session?.view()?.phase); if (ph === 'kickoff' || ph === 'play') break; await sleep(200); }
