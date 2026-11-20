@@ -12,7 +12,7 @@ import type { ViewState } from '../view';
 import { MOMENTUM } from '../../shared/momentum';
 
 /** Calls handled by Hud.g6Call (any team). */
-const G6_CALLS = new Set(['crowd', 'tactical', 'trapped', 'deflection', 'hold', 'muscle', 'aerial', 'scramble']);
+const G6_CALLS = new Set(['crowd', 'tactical', 'trapped', 'deflection', 'hold', 'muscle', 'aerial', 'scramble', 'heavy', 'beat', 'turned']);
 import { possessionTeam } from '../view';
 
 const hex = (c: number) => '#' + c.toString(16).padStart(6, '0');
@@ -28,6 +28,8 @@ export interface HudInfo {
   conn: { show: boolean; state: string; latency: number; colour: string } | null;
   guide: string;
   debug: string | null;
+  /** The frame-rate readout (Settings > Graphics > Frame rate), or null when it is off. */
+  fps?: string | null;
   /** Local multiplayer: the other players' kick charges (null: not charging). */
   extraPower?: ({ x: number; y: number; visible: boolean; charge: number; label: string } | null)[];
 }
@@ -51,6 +53,8 @@ export class Hud {
   private hint: HTMLDivElement;
   private toastEl: HTMLDivElement;
   private debugEl: HTMLDivElement;
+  private fpsEl!: HTMLDivElement;
+  private fpsText: string | null = null;
   private guideEl: HTMLDivElement;
   private bannerTimer = 0;
   private toastTimer = 0;
@@ -71,6 +75,7 @@ export class Hud {
       <div class="hint"></div>
       <div class="toast"></div>
       <div class="debug"></div>
+      <div class="fpsbox"></div>
       <div class="guide"></div>`;
     this.bug = root.querySelector('.scorebug')!;
     this.mom = root.querySelector('.mom')!;
@@ -83,6 +88,7 @@ export class Hud {
     this.hint = root.querySelector('.hint')!;
     this.toastEl = root.querySelector('.toast')!;
     this.debugEl = root.querySelector('.debug')!;
+    this.fpsEl = root.querySelector('.fpsbox')!;
     this.guideEl = root.querySelector('.guide')!;
     this.show(false);
   }
@@ -96,9 +102,9 @@ export class Hud {
   restartCaptions = false;
   /** Practice mode: the clock in the score bug becomes the drill's name. */
   private challenge = 0;
-  setPractice(drill: 'free' | 'freekick' | 'penalty' | 'crosses' | 'crossbar' | 'targets' | null | undefined, challenge = 0) {
-    this.practice = drill ? { free: 'PRACTICE', freekick: 'FREE KICKS', penalty: 'PENALTIES', crosses: 'CROSSES', crossbar: 'CROSSBAR', targets: 'TARGETS' }[drill] : null;
-    this.challenge = drill ? challenge : 0;
+  setPractice(drill: 'free' | 'freekick' | 'penalty' | 'crosses' | 'crossbar' | 'targets' | 'control' | null | undefined, challenge = 0) {
+    this.practice = drill ? { free: 'PRACTICE', freekick: 'FREE KICKS', penalty: 'PENALTIES', crosses: 'CROSSES', crossbar: 'CROSSBAR', targets: 'TARGETS', control: 'BALL CONTROL' }[drill] : null;
+    this.challenge = drill && drill !== 'control' ? challenge : 0;
     this.lastBug = '';
   }
   /** The match clock, or the penalty count during a shootout. */
@@ -110,6 +116,8 @@ export class Hud {
   /** The practice label, with the attempt count in a challenge. */
   private practiceText(v: ViewState) {
     if (!this.practice) return null;
+    // Ball control drill: the time left.
+    if (v.skill?.timeLeft !== undefined) { const s = Math.ceil(v.skill.timeLeft); return `${this.practice} ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
     return this.challenge ? `${this.practice} ${Math.min(v.attempts, this.challenge)}/${this.challenge}` : this.practice;
   }
 
@@ -160,6 +168,10 @@ export class Hud {
       case 'hold': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast(`${who} holds them off`, 1000); break;
       case 'muscle': if (!mine && this.ctlIds.has(e.power ?? -1)) this.toast(`${who} muscles you off the ball`, 1000); break;
       case 'aerial': if (mine) this.toast(`${who} wins the header`, 1000); break;
+      // Ball control (19 Nov 2026): only for your own player.
+      case 'heavy': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast('Heavy touch', 900); break;
+      case 'beat': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast('Left him for dead', 900); break;
+      case 'turned': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast('Turned him with the first touch', 1000); break;
       default: break;
     }
   }
@@ -331,11 +343,17 @@ export class Hud {
     } else if (v.ball.state === 'held' && v.ball.owner >= 0 && lt !== undefined && v.players[v.ball.owner].team === lt && v.humans[lt] && v.phase === 'play') {
       this.hint.style.display = 'block';
       this.hint.textContent = 'Keeper\'s ball: PASS rolls it out, LOB throws, THROUGH drop-kicks, SHOOT punts. Aim with the stick, hold for distance';
+    } else if (v.skill?.task) {
+      // Ball control drill: what to do now.
+      this.hint.style.display = 'block';
+      this.hint.textContent = v.skill.task;
     } else this.hint.style.display = 'none';
     this.guideEl.innerHTML = info.guide;
     this.guideEl.style.display = info.guide ? 'block' : 'none';
     if (info.debug !== null) { this.debugEl.style.display = 'block'; this.debugEl.textContent = info.debug; }
     else this.debugEl.style.display = 'none';
+    const fps = info.fps ?? null;
+    if (fps !== this.fpsText) { this.fpsText = fps; this.fpsEl.style.display = fps ? 'block' : 'none'; if (fps) this.fpsEl.textContent = fps; }
     this.drawRadar(v, info.localTeams);
   }
 

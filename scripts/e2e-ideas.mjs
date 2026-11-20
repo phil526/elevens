@@ -141,12 +141,13 @@ try {
   await mp.tap('[data-a=go]');
   await mp.waitForFunction(() => window.__elevens?.session?.match?.phase === 'kickoff', null, { timeout: 30000 });
   // The match intro may still be running: wait until the touch row shows the attacking labels.
-  await mp.waitForFunction(() => [...document.querySelectorAll('.tb-s')].map((x) => x.textContent).join(',') === 'RUN,SHIELD,', null, { timeout: 20000 }).catch(() => {});
+  await mp.waitForFunction(() => [...document.querySelectorAll('.tb-s')].map((x) => x.textContent).join(',') === 'RUN,SHIELD,CLOSE', null, { timeout: 20000 }).catch(() => {});
   const atk = await mp.$$eval('.tb-s', (b) => b.map((x) => x.textContent));
-  await mp.evaluate(() => window.__elevens.touch.setContext(false));
-  const def = await mp.$$eval('.tb-s', (b) => b.map((x) => x.textContent));
+  // Read the defending labels in the same step: the game puts the attacking ones back on its next
+  // frame, because the player's side still has the ball.
+  const def = await mp.evaluate(() => { window.__elevens.touch.setContext(false); return [...document.querySelectorAll('.tb-s')].map((x) => x.textContent); });
   await mp.screenshot({ path: OUT + 'ideas-07-touch-row.png' });
-  check('touch: RUN and SHIELD with the ball; KEEPER, PRESS and TRAP without it', atk.join(',') === 'RUN,SHIELD,' && def.join(',') === 'KEEPER,PRESS,TRAP', `${atk} / ${def}`);
+  check('touch: RUN, SHIELD and CLOSE with the ball; KEEPER, PRESS and TRAP without it', atk.join(',') === 'RUN,SHIELD,CLOSE' && def.join(',') === 'KEEPER,PRESS,TRAP', `${atk} / ${def}`);
   // A controller hides the touch controls; unplugging it brings them back.
   const layerShown = () => mp.$eval('.touch-layer', (e) => getComputedStyle(e).display !== 'none');
   const before = await layerShown();
@@ -157,8 +158,13 @@ try {
   });
   const hid = await mp.waitForFunction(() => getComputedStyle(document.querySelector('.touch-layer')).display === 'none' && !document.body.classList.contains('touch'), null, { timeout: 8000 }).then(() => true, () => false);
   await mp.evaluate(() => { window.__fakePads = []; });
+  // Unplugging mid-match pauses the game; the touch controls stay hidden behind the pause menu
+  // (so its buttons can be tapped) and return when play resumes.
+  const paused = await mp.waitForFunction(() => document.body.classList.contains('touch') && !!document.querySelector('[data-a=resume]'), null, { timeout: 8000 }).then(() => true, () => false);
+  const hiddenUnderMenu = await layerShown().then((v) => !v);
+  if (paused) await mp.tap('[data-a=resume]');
   const back = await mp.waitForFunction(() => getComputedStyle(document.querySelector('.touch-layer')).display !== 'none' && document.body.classList.contains('touch'), null, { timeout: 8000 }).then(() => true, () => false);
-  check('touch: a connected controller hides the touch controls, and they return when it disconnects', before && hid && back, `${before}/${hid}/${back}`);
+  check('touch: a connected controller hides the touch controls, and they return when it disconnects (after the pause menu)', before && hid && paused && hiddenUnderMenu && back, `${before}/${hid}/${paused}/${hiddenUnderMenu}/${back}`);
   await mob.close();
   // --- Controller on a tablet: the stick and D-pad move a visible highlight through the menus.
   const tab = await browser.newContext({ ...devices['iPad Pro 11 landscape'] });

@@ -25,11 +25,12 @@ export interface RawState {
   trap: boolean; // defending: the back four step up (offside trap)
   keeper: boolean; // take control of your keeper (or hand him back)
   plan: boolean; // next game plan (live tactics)
+  close: boolean; // close control (19 Nov 2026): small touches; with skill, flick the ball up and juggle it
   rsx: number; // right stick (gamepad): flick to switch player when defending, skill move when attacking
   rsy: number;
 }
 
-export const emptyRaw = (): RawState => ({ sx: 0, sy: 0, sprint: false, jockey: false, pass: false, through: false, lob: false, shoot: false, switch: false, skill: false, pause: false, help: false, teamPress: false, trap: false, keeper: false, plan: false, rsx: 0, rsy: 0 });
+export const emptyRaw = (): RawState => ({ sx: 0, sy: 0, sprint: false, jockey: false, pass: false, through: false, lob: false, shoot: false, switch: false, skill: false, pause: false, help: false, teamPress: false, trap: false, keeper: false, plan: false, close: false, rsx: 0, rsy: 0 });
 
 /** Right-stick flick thresholds: a flick fires once when the stick passes FLICK_ON, and re-arms below FLICK_OFF. */
 export const FLICK_ON = 0.75;
@@ -135,11 +136,11 @@ export class ActionLayer {
     const m = emptyRaw();
     for (const s of this.sources) {
       const r = s.read();
-      const active = Math.hypot(r.sx, r.sy) > 0.05 || Math.hypot(r.rsx, r.rsy) > 0.3 || r.pass || r.shoot || r.lob || r.through || r.switch || r.skill || r.sprint || r.jockey || r.teamPress || r.trap || r.keeper || r.plan;
+      const active = Math.hypot(r.sx, r.sy) > 0.05 || Math.hypot(r.rsx, r.rsy) > 0.3 || r.pass || r.shoot || r.lob || r.through || r.switch || r.skill || r.sprint || r.jockey || r.teamPress || r.trap || r.keeper || r.plan || r.close;
       if (active) this.lastDevice = s.device;
       m.sx += r.sx; m.sy += r.sy;
       m.rsx += r.rsx; m.rsy += r.rsy;
-      for (const k of ['sprint', 'jockey', 'pass', 'through', 'lob', 'shoot', 'switch', 'skill', 'pause', 'help', 'teamPress', 'trap', 'keeper', 'plan'] as const) m[k] = m[k] || r[k];
+      for (const k of ['sprint', 'jockey', 'pass', 'through', 'lob', 'shoot', 'switch', 'skill', 'pause', 'help', 'teamPress', 'trap', 'keeper', 'plan', 'close'] as const) m[k] = m[k] || r[k];
     }
     const l = Math.hypot(m.sx, m.sy);
     if (l > 1) { m.sx /= l; m.sy /= l; }
@@ -184,15 +185,15 @@ export class ActionLayer {
       if (pressed('switch') && !this.switchUsed) ev.push({ k: 'switch' });
       if (pressed('keeper')) ev.push({ k: 'keeper' });
       if (pressed('plan')) ev.push({ k: 'plan', p: ((this.planIndex + 1) % 5) / 4 });
-      // Skill moves: with the modifier held, the ball roll, elastico and drag-back turn.
-      if (pressed('skill')) ev.push(r.jockey ? { k: 'skill', m: true } : { k: 'skill' });
+      // Skill moves: with the modifier held, the ball roll, elastico and drag-back turn; with close control, a flick up.
+      if (pressed('skill')) ev.push(r.close ? { k: 'skill', v: 'flick' } : r.jockey ? { k: 'skill', m: true } : { k: 'skill' });
       // Right-stick flick, camera-relative like movement: a skill move with the ball, a directed switch without.
       const rm = Math.hypot(r.rsx, r.rsy);
       if (rm < FLICK_OFF) this.flickArmed = true;
       else if (rm > FLICK_ON && this.flickArmed) {
         this.flickArmed = false;
         const [fx, fz] = this.toWorld(r.rsx / rm, r.rsy / rm);
-        ev.push(ctx.attacking ? (r.jockey ? { k: 'skill', x: fx, z: fz, m: true } : { k: 'skill', x: fx, z: fz }) : { k: 'switch', x: fx, z: fz, m: this.stickSwitch === 'ball' });
+        ev.push(ctx.attacking ? (r.close ? { k: 'skill', x: fx, z: fz, v: 'flick' } : r.jockey ? { k: 'skill', x: fx, z: fz, m: true } : { k: 'skill', x: fx, z: fz }) : { k: 'switch', x: fx, z: fz, m: this.stickSwitch === 'ball' });
       }
       for (const e of this.extra.splice(0)) ev.push(e);
       if (!ctx.attacking && !this.chargeKind && pressed('shoot')) { ev.push({ k: 'shoot', p: 0.4 }); this.suppressShootRelease = true; }
@@ -205,7 +206,7 @@ export class ActionLayer {
     // Holding the through-ball button without the ball asks the nearest teammate to press (contain).
     const contain = enabled && !ctx.attacking && r.through;
     const [mx, mz] = this.toWorld(r.sx, r.sy);
-    return { seq: ++this.seq, mx: enabled ? mx : 0, mz: enabled ? mz : 0, sprint: enabled && r.sprint, jockey: enabled && r.jockey, contain, ev: ev.slice(0, 4) };
+    return { seq: ++this.seq, mx: enabled ? mx : 0, mz: enabled ? mz : 0, sprint: enabled && r.sprint, jockey: enabled && r.jockey, contain, close: enabled && r.close, ev: ev.slice(0, 4) };
   }
 
   /**

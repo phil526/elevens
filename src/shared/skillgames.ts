@@ -11,6 +11,8 @@ import type { Match } from './match';
 import type { V2 } from './types';
 
 export type SkillGame = 'crossbar' | 'targets';
+/** The ball control drill (Practice) keeps its points in a SkillState too. */
+export type PointsGame = SkillGame | 'control';
 export const SKILL_GAMES: SkillGame[] = ['crossbar', 'targets'];
 export const SKILL_NAMES: Record<SkillGame, string> = { crossbar: 'Crossbar challenge', targets: 'Target practice' };
 export const SKILL_HELP: Record<SkillGame, string> = {
@@ -21,7 +23,7 @@ export const SKILL_HELP: Record<SkillGame, string> = {
 export interface SkillTarget { z: number; y: number; r: number; pts: number; hit: boolean }
 
 export interface SkillState {
-  game: SkillGame;
+  game: PointsGame;
   points: number;
   /** What the last attempt scored (shown on screen), and when. */
   last: { text: string; pts: number; at: number } | null;
@@ -42,7 +44,7 @@ export function freshTargets(): SkillTarget[] {
   ];
 }
 
-export function newSkillState(game: SkillGame): SkillState {
+export function newSkillState(game: PointsGame): SkillState {
   return { game, points: 0, last: null, targets: game === 'targets' ? freshTargets() : [], done: false };
 }
 

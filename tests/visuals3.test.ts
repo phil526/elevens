@@ -184,7 +184,8 @@ describe('pre-match ceremony', () => {
   it('runs line-up, handshakes and photos in order', () => {
     expect(preStage(0).stage).toBe('line');
     expect(preStage(PREMATCH.line + 0.1).stage).toBe('shake');
-    expect(preStage(PREMATCH_LENGTH - 0.1).stage).toBe('photo');
+    expect(preStage(PREMATCH_LENGTH - PREMATCH.huddle - 0.1).stage).toBe('photo');
+    expect(preStage(PREMATCH_LENGTH - 0.1).stage).toBe('huddle');
   });
 
   it('lines the teams up either side of halfway, then the away side files past the home line', () => {

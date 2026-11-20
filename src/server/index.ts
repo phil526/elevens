@@ -26,6 +26,8 @@ const server = new GameServer({
   latencyMs: Number(process.env.SIM_LATENCY_MS ?? 0),
   jitterMs: Number(process.env.SIM_JITTER_MS ?? 0),
   rankedFile: process.env.RANKED_FILE === '' ? null : resolve(process.cwd(), process.env.RANKED_FILE ?? 'data/ranked.json'),
+  rankedSecret: process.env.RANKED_SECRET || null,
+  playUrl: process.env.PLAY_URL || null,
 });
 
 server.listen().then((port) => {

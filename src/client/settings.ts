@@ -34,6 +34,10 @@ export interface Settings {
   rumble: boolean;
   /** On-screen captions for throw-ins, goal kicks, corners and free kicks (off by default). */
   restartCaptions: boolean;
+  /** Bar of button hints along the bottom of the match screen ("Pass (hold = further) · Shoot ..."); on by default. */
+  controlHints: boolean;
+  /** A small frame-rate readout at the top of the match screen (19 Nov 2026). */
+  showFps?: boolean;
   /** Stadium fly-in and tunnel walk-out before kick-off (offline). */
   matchIntro: boolean;
   /** Net-cam replay after each goal (offline). */
@@ -108,6 +112,8 @@ export function defaultSettings(): Settings {
     playerRing: false,
     rumble: true,
     restartCaptions: false,
+    controlHints: true,
+    showFps: false,
     matchIntro: true,
     goalReplays: true,
     highlights: true,
@@ -125,6 +131,11 @@ export function defaultSettings(): Settings {
     mouseControl: false,
     controls: defaultBindings(),
     name: '',
+    // A new player already has today's defaults: the one-time moves in loadSettings are for older saves only.
+    tabletMedium: true,
+    broadcastDefault: true,
+    ringOffDefault: true,
+    announcerOffDefault: true,
   };
 }
 
@@ -139,22 +150,22 @@ export function loadSettings(): Settings {
     const test = typeof location !== 'undefined' && new URLSearchParams(location.search).has('test');
     if (test) return out;
     // Tablets saved before 18 Nov started on Low (classic players): move them up to Medium once.
-    if (!out.tabletMedium && isTablet()) {
+    if (!s.tabletMedium && isTablet()) {
       if (out.graphics.preset === 'low') out.graphics.preset = 'medium';
       out.tabletMedium = true;
     }
     // Broadcast became the default camera on 18 Nov: settings saved before then held the old default.
-    if (!out.broadcastDefault) {
+    if (!s.broadcastDefault) {
       if ((out.camera.mode ?? 'tracking') === 'tracking') out.camera.mode = 'broadcast';
       out.broadcastDefault = true;
     }
     // The ring under your player became optional (Off by default) on 18 Nov: turn it off once.
-    if (!out.ringOffDefault) {
+    if (!s.ringOffDefault) {
       out.playerRing = false;
       out.ringOffDefault = true;
     }
     // Philip asked for the stadium announcer to be off by default (19 Nov): turn it off once.
-    if (!out.announcerOffDefault) {
+    if (!s.announcerOffDefault) {
       out.audio.announcer = false;
       out.announcerOffDefault = true;
     }

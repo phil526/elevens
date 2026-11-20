@@ -60,7 +60,7 @@ try {
   for (const i of [13, 15, 12, 14]) { await nav(i); path.push(await sel()); }
   check('controller: the highlight starts on the first slot and the stick/D-pad moves it around the grid', path.join(' > ') === 'pass:0 > shoot:0 > shoot:1 > pass:1 > pass:0', path.join(' > '));
   await tp.screenshot({ path: OUT + 'remap-01-ipad-controller.png' });
-  // A on Pass, let go, then press RB: RB becomes Pass, and Sprint (RT/RB) takes A in exchange.
+  // A on Pass, let go, then press RB: RB becomes Pass, and Close control (RB since 19 Nov) takes A in exchange.
   await pressA();
   const listening = await seen(() => !!document.querySelector('.bind.listening'));
   await tp.screenshot({ path: OUT + 'remap-02-ipad-listening.png' });
@@ -71,10 +71,10 @@ try {
   await sleep(300);
   const after = await tp.evaluate(() => ({ pad: window.__elevens.settings.controls.pad, msg: document.querySelector('.bindmsg')?.textContent ?? '', saved: JSON.parse(localStorage.getItem('elevens.settings.v1')).controls?.pad }));
   await tp.screenshot({ path: OUT + 'remap-03-ipad-swapped.png' });
-  check('controller: A starts listening and the next button pressed (RB) becomes Pass; Sprint takes A in the swap', listening && done && after.pad.pass.join() === '5' && after.pad.sprint.join() === '7,0' && /RB is now Pass/.test(after.msg), `${JSON.stringify(after.pad.pass)} / sprint ${JSON.stringify(after.pad.sprint)} / "${after.msg}"`);
+  check('controller: A starts listening and the next button pressed (RB) becomes Pass; Close control takes A in the swap', listening && done && after.pad.pass.join() === '5' && after.pad.close.join() === '0' && after.pad.sprint.join() === '7' && /RB is now Pass/.test(after.msg), `${JSON.stringify(after.pad.pass)} / close ${JSON.stringify(after.pad.close)} / sprint ${JSON.stringify(after.pad.sprint)} / "${after.msg}"`);
   check('controller: the new layout is saved', after.saved?.pass?.join() === '5');
-  const play = await tp.evaluate(() => { const g = window.__elevens.gamepad; g.read(); window.__pad.buttons[5].pressed = true; const r = g.read(); window.__pad.buttons[5].pressed = false; window.__pad.buttons[0].pressed = true; const r2 = g.read(); const m = g.readMenu(); window.__pad.buttons[0].pressed = false; return { rbPass: r.pass, aSprint: r2.sprint, aPass: r2.pass, menuA: m.a }; });
-  check('controller: in play RB passes and A sprints, while menus still take A', play.rbPass && play.aSprint && !play.aPass && play.menuA, JSON.stringify(play));
+  const play = await tp.evaluate(() => { const g = window.__elevens.gamepad; g.read(); window.__pad.buttons[5].pressed = true; const r = g.read(); window.__pad.buttons[5].pressed = false; window.__pad.buttons[0].pressed = true; const r2 = g.read(); const m = g.readMenu(); window.__pad.buttons[0].pressed = false; return { rbPass: r.pass, aClose: r2.close, aPass: r2.pass, menuA: m.a }; });
+  check('controller: in play RB passes and A is close control, while menus still take A', play.rbPass && play.aClose && !play.aPass && play.menuA, JSON.stringify(play));
   // Waiting without a press cancels; reset puts the defaults back.
   await pressA();
   const cancelled = await tp.waitForFunction(() => !window.__elevens.rebind && /cancelled/.test(document.querySelector('.bindmsg')?.textContent ?? ''), null, { timeout: 15000 }).then(() => true, () => false);
@@ -84,7 +84,7 @@ try {
   if ((await sel()) === 'back') await nav(14); // Reset sits left of Back
   const atReset = await sel();
   await pressA();
-  const reset = await tp.evaluate(() => window.__elevens.settings.controls.pad.pass.join() === '0' && window.__elevens.settings.controls.pad.sprint.join() === '7,5');
+  const reset = await tp.evaluate(() => window.__elevens.settings.controls.pad.pass.join() === '0' && window.__elevens.settings.controls.pad.sprint.join() === '7' && window.__elevens.settings.controls.pad.close.join() === '5');
   check('controller: Reset controller to defaults', reset, `highlight ${atReset}`);
   // B still goes back.
   await tp.evaluate(() => { window.__pad.buttons[1].pressed = true; });

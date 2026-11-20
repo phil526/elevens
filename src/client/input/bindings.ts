@@ -6,7 +6,7 @@ import type { PadStyle } from './gamepad';
 
 export type BindAction =
   | 'up' | 'down' | 'left' | 'right'
-  | 'sprint' | 'pass' | 'shoot' | 'lob' | 'through' | 'jockey' | 'switch' | 'skill' | 'teamPress' | 'trap' | 'keeper' | 'plan' | 'pause' | 'help';
+  | 'sprint' | 'pass' | 'shoot' | 'lob' | 'through' | 'jockey' | 'switch' | 'skill' | 'close' | 'teamPress' | 'trap' | 'keeper' | 'plan' | 'pause' | 'help';
 
 /**
  * Keyboard: up to two keys per action. Controller: up to two buttons per action (standard mapping indices).
@@ -39,6 +39,7 @@ export const BIND_ACTIONS: { id: BindAction; name: string; pad: boolean }[] = [
   { id: 'jockey', name: 'Modifier / jockey', pad: true },
   { id: 'switch', name: 'Switch player / call run', pad: true },
   { id: 'skill', name: 'Skill move / take the keeper', pad: true },
+  { id: 'close', name: 'Close control (with skill: flick up)', pad: true },
   { id: 'teamPress', name: 'Team press (defending)', pad: true },
   { id: 'trap', name: 'Offside trap (defending)', pad: true },
   { id: 'keeper', name: 'Take or leave the keeper', pad: true },
@@ -52,18 +53,19 @@ export function defaultBindings(): ControlBindings {
     keys: {
       up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'], left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'],
       sprint: ['ShiftLeft', 'ShiftRight'], pass: ['KeyJ'], shoot: ['KeyK', 'Space'], lob: ['KeyL'], through: ['KeyI'],
-      jockey: ['KeyE'], switch: ['KeyQ'], skill: ['KeyU'], teamPress: ['KeyR'], trap: ['KeyT'], keeper: ['KeyG'], plan: ['KeyY'], pause: ['KeyP'], help: ['KeyH'],
+      jockey: ['KeyE'], switch: ['KeyQ'], skill: ['KeyU'], close: ['KeyC'], teamPress: ['KeyR'], trap: ['KeyT'], keeper: ['KeyG'], plan: ['KeyY'], pause: ['KeyP'], help: ['KeyH'],
     },
     pad: {
       up: [], down: [], left: [], right: [],
-      pass: [0], lob: [1], shoot: [2], through: [3], switch: [4], sprint: [7, 5], jockey: [6],
+      // RB is close control (19 Nov 2026; it was a second sprint button): sprint stays on RT.
+      pass: [0], lob: [1], shoot: [2], through: [3], switch: [4], sprint: [7], close: [5], jockey: [6],
       trap: [8], pause: [9], teamPress: [10], skill: [11], keeper: [], plan: [], help: [],
     },
     // Mouse and keyboard: point to run, left click passes, right click shoots, A long ball, S through ball.
     mouse: {
       up: [], down: [], left: [], right: [],
       pass: ['Mouse0'], shoot: ['Mouse2'], lob: ['KeyA'], through: ['KeyS'], sprint: ['ShiftLeft', 'ShiftRight'], jockey: ['KeyD'],
-      switch: ['Space', 'Mouse1'], skill: ['KeyF'], teamPress: ['KeyR'], trap: ['KeyT'], keeper: ['KeyG'], plan: ['KeyY'], pause: ['KeyP'], help: ['KeyH'],
+      switch: ['Space', 'Mouse1'], skill: ['KeyF'], close: ['KeyC'], teamPress: ['KeyR'], trap: ['KeyT'], keeper: ['KeyG'], plan: ['KeyY'], pause: ['KeyP'], help: ['KeyH'],
     },
   };
 }
@@ -86,7 +88,19 @@ export function cleanBindings(raw: unknown): ControlBindings {
   const d = defaultBindings();
   if (!raw || typeof raw !== 'object') return d;
   const r = raw as { keys?: Record<string, unknown>; pad?: Record<string, unknown>; mouse?: Record<string, unknown> };
+  // Close control (19 Nov 2026) took RB from sprint: a saved pad table from before keeps sprint on RT only.
+  if (r.pad && typeof r.pad === 'object' && !Array.isArray(r.pad.close) && Array.isArray(r.pad.sprint) && r.pad.sprint.includes(5) && r.pad.sprint.length > 1) {
+    r.pad = { ...r.pad, sprint: (r.pad.sprint as unknown[]).filter((b) => b !== 5) };
+  }
+  // An action added since a table was saved gets its default inputs only where the saved table doesn't use them.
+  const used = (t: Record<string, unknown> | undefined) => new Set<unknown>(t && typeof t === 'object' ? Object.values(t).flatMap((v) => (Array.isArray(v) ? v : [])) : []);
+  const usedK = used(r.keys), usedP = used(r.pad), usedM = used(r.mouse);
   const out = defaultBindings();
+  for (const id of ACTION_IDS) {
+    if (r.keys && typeof r.keys === 'object' && !Array.isArray(r.keys[id])) out.keys[id] = out.keys[id].filter((c) => !usedK.has(c));
+    if (r.pad && typeof r.pad === 'object' && !Array.isArray(r.pad[id])) out.pad[id] = out.pad[id].filter((c) => !usedP.has(c));
+    if (r.mouse && typeof r.mouse === 'object' && !Array.isArray(r.mouse[id])) out.mouse[id] = out.mouse[id].filter((c) => !usedM.has(c));
+  }
   const seenK = new Set<string>();
   const seenP = new Set<number>();
   const seenM = new Set<string>();

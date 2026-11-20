@@ -22,10 +22,18 @@ export type ReactionKind =
   // Goal celebrations (render/celebration.ts).
   | 'kneeSlide' | 'badgeKiss' | 'huddle' | 'aeroplane' | 'kneelSky' | 'cupEar' | 'pointCrowd' | 'dance' | 'bow' | 'armsWide'
   // The walk-out and the pre-match ceremony (render/mascots.ts, render/prematch.ts).
-  | 'holdHand' | 'mascotHand' | 'shake' | 'photoStand' | 'photoCrouch' | 'lineUp';
+  | 'holdHand' | 'mascotHand' | 'shake' | 'photoStand' | 'photoCrouch' | 'lineUp' | 'teamHuddle'
+  // 20 Nov 2026 (render/moves7.ts pack): a hand on an opponent's shirt and a hand-off in a duel,
+  // the keeper organising his wall, and the officials' signals (render/officials.ts).
+  | 'grabL' | 'grabR' | 'fendL' | 'fendR' | 'organise'
+  | 'refPoint' | 'refCard' | 'refAdvantage' | 'refSpot' | 'flagUp' | 'flagPoint';
 
-const FULL: ReadonlySet<ReactionKind> = new Set<ReactionKind>(['crouch', 'stretch', 'kneeSlide', 'huddle', 'photoCrouch', 'kneelSky', 'dance', 'bow']);
+/** When the pre-match huddle breaks up (seconds into the 'teamHuddle' reaction). */
+export const PREMATCH_HUDDLE_BREAK = 3.3;
+
+const FULL: ReadonlySet<ReactionKind> = new Set<ReactionKind>(['crouch', 'stretch', 'kneeSlide', 'huddle', 'teamHuddle', 'photoCrouch', 'kneelSky', 'dance', 'bow']);
 const CALL_CHANNELS = [SRX, SRZ, ERX] as const;
+const LEFT_CHANNELS = [SLX, SLZ, ELX] as const;
 
 interface Reaction { kind: ReactionKind; t: number; dur: number; seed: number }
 interface Queued { id: number; kind: ReactionKind; at: number; dur: number }
@@ -208,11 +216,96 @@ export function reactionPose(kind: ReactionKind, t: number, seed: number, P: Flo
       P[SLX] = -0.75 - 0.08 * s(2); P[SLZ] = 1.25; P[ELX] = -0.3;
       P[SRX] = -0.75 - 0.08 * s(2, 1); P[SRZ] = -1.25; P[ERX] = -0.3;
       break;
-    case 'lineUp':
-      // Standing tall in the line-up: arms down by the sides, hands loosely in front.
-      P[SPX] = -0.03; P[NKX] = -0.04;
-      P[SLX] = -0.12; P[SLZ] = 0.07; P[ELX] = -0.3;
-      P[SRX] = -0.12; P[SRZ] = -0.07; P[ERX] = -0.3;
+    case 'lineUp': {
+      // Standing tall in the line-up: arms down by the sides, or hands clasped in front (as in TV
+      // walk-outs), shifting the weight and breathing, the odd glance down.
+      const clasp = seed > 0.55;
+      const b = 0.025 * s(1.6), glance = Math.max(0, s(0.45, 2)) ** 6;
+      P[SPX] = -0.03 + b * 0.4 + 0.12 * glance; P[NKX] = -0.04 + 0.35 * glance;
+      if (clasp) { P[SLX] = -0.42; P[SLZ] = -0.12; P[ELX] = -0.85 + b; P[SRX] = -0.42; P[SRZ] = 0.12; P[ERX] = -0.85 + b; }
+      else { P[SLX] = -0.12 + b; P[SLZ] = 0.07; P[ELX] = -0.3; P[SRX] = -0.12 - b; P[SRZ] = -0.07; P[ERX] = -0.3; }
+      break;
+    }
+    case 'teamHuddle': {
+      // The pre-match huddle (20 Nov 2026, from Philip's walk-out video): arms round the shoulders
+      // either side, bent in towards the middle and still while the captain talks, a little sway;
+      // then everyone straightens, claps once and breaks away.
+      const brk = Math.max(0, Math.min(1, (t - PREMATCH_HUDDLE_BREAK) / 0.35));
+      const sway = 0.03 * s(1.3);
+      const k = 1 - brk;
+      P[BY] = -0.06 * k; P[HLX] = -0.14 * k; P[HRX] = -0.14 * k; P[KLX] = 0.24 * k; P[KRX] = 0.24 * k;
+      P[SPX] = 0.5 * k + sway; P[NKX] = 0.42 * k - 0.1 * brk;
+      if (brk <= 0) {
+        P[SLX] = -1.35; P[SLZ] = 1.15; P[ELX] = -0.42 + sway;
+        P[SRX] = -1.35; P[SRZ] = -1.15; P[ERX] = -0.42 - sway;
+      } else {
+        // The clap: both hands together in front of the chest.
+        const c = Math.abs(Math.sin(brk * Math.PI));
+        P[SLX] = -1.35 + 0.35 * brk; P[SLZ] = 1.15 - 1.3 * brk + 0.1 * c; P[ELX] = -0.42 - 1.0 * brk;
+        P[SRX] = -1.35 + 0.35 * brk; P[SRZ] = -1.15 + 1.3 * brk - 0.1 * c; P[ERX] = -0.42 - 1.0 * brk;
+      }
+      break;
+    }
+    case 'grabL': case 'grabR': {
+      // A hand on the opponent's shirt alongside: the arm reaching out at shoulder height, tugging.
+      const l = kind === 'grabL', tug = 0.08 * s(9);
+      if (l) { P[SLX] = -1.05 + tug; P[SLZ] = 0.95; P[ELX] = -0.2; } else { P[SRX] = -1.05 + tug; P[SRZ] = -0.95; P[ERX] = -0.2; }
+      break;
+    }
+    case 'fendL': case 'fendR': {
+      // Holding the defender off: the arm out to the side, elbow bent, forearm braced.
+      const l = kind === 'fendL', push = 0.06 * s(7);
+      if (l) { P[SLX] = -0.55; P[SLZ] = 1.05 + push; P[ELX] = -0.95; } else { P[SRX] = -0.55; P[SRZ] = -1.05 - push; P[ERX] = -0.95; }
+      break;
+    }
+    case 'organise': {
+      // The keeper sets his wall: one arm points along the line ("one more!"), then a hand cupped
+      // to the mouth, shouting; then the other way.
+      const ph = (t * 0.55 + seed) % 2;
+      const point = ph < 1;
+      const k = Math.sin(Math.PI * (ph % 1));
+      P[SPX] = 0.1; P[NKX] = -0.12;
+      if (point) {
+        P[SRX] = -1.5; P[SRZ] = -0.55 - 0.15 * k; P[ERX] = -0.1 - 0.1 * s(8);
+        P[SLX] = -0.4; P[SLZ] = 0.35; P[ELX] = -0.6;
+      } else {
+        P[SLX] = -1.0; P[SLZ] = 0.55; P[ELX] = -2.3;
+        P[SRX] = -1.2 - 0.3 * k; P[SRZ] = -0.25; P[ERX] = -0.3;
+      }
+      break;
+    }
+    case 'refPoint':
+      // Free kick: the right arm straight out the way it goes, the whistle in the left hand at the mouth.
+      P[SPX] = -0.02; P[NKX] = -0.05;
+      P[SRX] = -1.5; P[SRZ] = -0.08; P[ERX] = -0.05;
+      P[SLX] = -1.0; P[SLZ] = 0.55; P[ELX] = -2.25;
+      break;
+    case 'refCard':
+      // The card held straight up, the other hand at the side.
+      P[SPX] = -0.05; P[NKX] = -0.08;
+      P[SRX] = -2.98; P[SRZ] = -0.1; P[ERX] = -0.05;
+      P[SLX] = -0.1; P[SLZ] = 0.15; P[ELX] = -0.3;
+      break;
+    case 'refAdvantage':
+      // Play on: both arms swept forward and up.
+      P[SPX] = 0.05; P[NKX] = -0.05;
+      P[SLX] = -1.35 + 0.08 * s(4); P[SRX] = -1.35 + 0.08 * s(4); P[SLZ] = 0.25; P[SRZ] = -0.25; P[ELX] = -0.12; P[ERX] = -0.12;
+      break;
+    case 'refSpot':
+      // Penalty: the arm pointing down at the spot.
+      P[SPX] = 0.04; P[NKX] = 0.1;
+      P[SRX] = -1.05; P[SRZ] = -0.05; P[ERX] = -0.02;
+      P[SLX] = -1.0; P[SLZ] = 0.55; P[ELX] = -2.25;
+      break;
+    case 'flagUp':
+      // Assistant: the flag held straight up.
+      P[SRX] = -2.98; P[SRZ] = -0.06; P[ERX] = -0.04;
+      P[SLX] = -0.05; P[SLZ] = 0.12; P[ELX] = -0.25;
+      break;
+    case 'flagPoint':
+      // Assistant: the flag held out at 45 degrees the way the throw-in or kick goes.
+      P[SRX] = -2.2; P[SRZ] = -0.1; P[ERX] = -0.04;
+      P[SLX] = -0.05; P[SLZ] = 0.12; P[ELX] = -0.25;
       break;
     case 'holdHand':
       // Walking out with a mascot: the right hand down and out to the side, holding the child's.
@@ -443,7 +536,8 @@ export class ReactionDirector {
     const e = Math.min(ein, eout);
     f.w = e * e * (3 - 2 * e);
     f.full = FULL.has(r.kind);
-    f.only = r.kind === 'call' || r.kind === 'holdHand' || r.kind === 'shake' ? CALL_CHANNELS : undefined;
+    f.only = r.kind === 'call' || r.kind === 'holdHand' || r.kind === 'shake' || r.kind === 'grabR' || r.kind === 'fendR' ? CALL_CHANNELS
+      : r.kind === 'grabL' || r.kind === 'fendL' ? LEFT_CHANNELS : undefined;
     return f;
   }
 

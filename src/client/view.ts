@@ -1,3 +1,4 @@
+import { drillTask } from '../shared/controldrill';
 import type { GamePlan, Half } from '../shared/config';
 import type { MatchWeather } from '../shared/weather';
 import type { Rated } from '../shared/ratings';
@@ -63,7 +64,7 @@ export interface ViewState {
   /** An injured player being treated (offline matches), for the physios and stretcher. */
   injury?: { pid: number; severity: number; t: number; stage: string; at: V2; edge: V2 } | null;
   /** Skill games: the targets in the goal, and which way team 0 attacks. */
-  skill?: { game: string; points: number; targets: { z: number; y: number; r: number; pts: number; hit: boolean }[]; dir: number } | null;
+  skill?: { game: string; points: number; targets: { z: number; y: number; r: number; pts: number; hit: boolean }[]; dir: number; gate?: { x: number; z: number; ax: number; az: number; w: number } | null; timeLeft?: number; task?: string } | null;
 }
 
 export function possessionTeam(v: ViewState): number {
@@ -148,7 +149,8 @@ export class MatchViewBuilder {
     v.plans = m.plan;
     const j = m.injury;
     v.injury = j ? { pid: j.pid, severity: j.severity, t: j.t, stage: j.stage, at: j.at, edge: j.edge } : null;
-    v.skill = m.skill ? { game: m.skill.game, points: m.skill.points, targets: m.skill.targets, dir: m.attackDir(0) } : null;
+    const cd = m.ctlDrill;
+    v.skill = m.skill ? { game: m.skill.game, points: m.skill.points, targets: m.skill.targets, dir: m.attackDir(0), gate: cd?.gate ?? null, timeLeft: cd?.timeLeft, task: cd ? drillTask(cd) : undefined } : null;
     return v;
   }
 }

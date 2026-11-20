@@ -2,8 +2,9 @@
 // Attribute effects (DESIGN §7): Pace -> top speed, Acceleration -> accel/turn,
 // Stamina -> sprint drain/recovery.
 
-import { PITCH, PLAYER } from './config';
+import { BALLCTL, PITCH, PLAYER } from './config';
 import { angleOf, clamp, turnTowards, wrapAngle } from './math';
+import { BC } from './switches';
 import type { Attributes, MoveModeName, V2 } from './types';
 
 export interface MoverState {
@@ -18,6 +19,23 @@ export interface MoverState {
 
 /** Turn-rate multiplier for a carrier dribbling at jogging pace (server and client prediction). */
 export const DRIBBLE_TURN = 1.3;
+
+/**
+ * How sharply a carrier turns with the ball (19 Nov 2026): better control turns tighter, at jogging
+ * pace and when sprinting (the average player is unchanged: 1.3 jogging, 1.0 sprinting); close
+ * control is tightest of all. Off the ball it is 1.
+ */
+export function dribbleTurn(a: Attributes, sprinting: boolean, close = false): number {
+  if (close) return BALLCTL.closeTurn * (0.85 + 0.2 * a.control);
+  if (!BC.attr) return sprinting ? 1 : DRIBBLE_TURN;
+  return sprinting ? 1 + 0.6 * (a.control - 0.7) : DRIBBLE_TURN + 1.0 * (a.control - 0.7);
+}
+
+/** A carrier's movement (server and client prediction): mode, speed and acceleration multipliers and turn rate. */
+export function carrierMove(a: Attributes, mode: MoveMode, close: boolean): { mode: MoveMode; speed: number; accel: number; turn: number } {
+  if (close && mode !== 'jockey' && mode !== 'jockeyfast') return { mode: 'jog', speed: BALLCTL.closeSpeed, accel: BALLCTL.closeAccel, turn: dribbleTurn(a, false, true) };
+  return { mode, speed: 1, accel: 1, turn: mode === 'sprint' ? dribbleTurn(a, true) : dribbleTurn(a, false) };
+}
 
 export type MoveMode = MoveModeName;
 

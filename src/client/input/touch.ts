@@ -5,13 +5,14 @@
 import { emptyRaw, type InputSource, type RawState } from './actions';
 
 export type TouchButton = 'a' | 'b' | 'c' | 'd' | 'e' | 'sprint' | 'f' | 'g' | 'h';
-type Action = 'pass' | 'shoot' | 'lob' | 'through' | 'switch' | 'jockey' | 'sprint' | 'skill' | 'teamPress' | 'trap';
+type Action = 'pass' | 'shoot' | 'lob' | 'through' | 'switch' | 'jockey' | 'sprint' | 'skill' | 'teamPress' | 'trap' | 'close';
 
 // Defending reuses the attacking actions the simulation reinterprets: lob = slide tackle, held through = contain.
 // The small row (f, g, h): with the ball, RUN calls a run (switch) and SHIELD holds the modifier, which shields
 // the ball and also turns passes driven, through balls lofted and shots placed. Without it, RUSH sends the
-// keeper, PRESS starts a team press and TRAP springs the offside trap.
-const ATTACK: Record<TouchButton, Action | null> = { a: 'pass', b: 'shoot', c: 'lob', d: 'through', e: 'skill', sprint: 'sprint', f: 'switch', g: 'jockey', h: null };
+// keeper, PRESS starts a team press and TRAP springs the offside trap. CLOSE (held) is close control on the
+// ball: small touches, let go of the stick to stop it under the sole, and with SKILL a flick up (19 Nov 2026).
+const ATTACK: Record<TouchButton, Action | null> = { a: 'pass', b: 'shoot', c: 'lob', d: 'through', e: 'skill', sprint: 'sprint', f: 'switch', g: 'jockey', h: 'close' };
 const DEFEND: Record<TouchButton, Action | null> = { a: 'pass', b: 'lob', c: 'jockey', d: 'switch', e: 'through', sprint: 'sprint', f: 'skill', g: 'teamPress', h: 'trap' };
 // In goal: COME OUT (pass) rushes the keeper off his line, DIVE (shoot) dives, OUTFIELD (skill) hands him back.
 const KEEPER: Record<TouchButton, Action | null> = { a: 'pass', b: 'shoot', c: 'jockey', d: 'switch', e: null, sprint: 'sprint', f: 'skill', g: 'teamPress', h: 'trap' };
@@ -20,7 +21,7 @@ const WALL: Record<TouchButton, Action | null> = { a: null, b: 'shoot', c: null,
 export type TouchContext = 'attack' | 'defend' | 'keeper' | 'wall';
 const MAPS: Record<TouchContext, Record<TouchButton, Action | null>> = { attack: ATTACK, defend: DEFEND, keeper: KEEPER, wall: WALL };
 export const TOUCH_LABELS: Record<TouchContext, Record<TouchButton, string>> = {
-  attack: { a: 'PASS', b: 'SHOOT', c: 'LOB', d: 'THROUGH', e: 'SKILL', sprint: 'SPRINT', f: 'RUN', g: 'SHIELD', h: '' },
+  attack: { a: 'PASS', b: 'SHOOT', c: 'LOB', d: 'THROUGH', e: 'SKILL', sprint: 'SPRINT', f: 'RUN', g: 'SHIELD', h: 'CLOSE' },
   defend: { a: 'TACKLE', b: 'SLIDE', c: 'JOCKEY', d: 'SWITCH', e: 'CONTAIN', sprint: 'SPRINT', f: 'KEEPER', g: 'PRESS', h: 'TRAP' },
   keeper: { a: 'COME OUT', b: 'DIVE', c: 'JOCKEY', d: 'SWITCH', e: '', sprint: 'SPRINT', f: 'OUTFIELD', g: 'PRESS', h: 'TRAP' },
   wall: { a: '', b: 'JUMP', c: '', d: 'ADD MAN', e: '', sprint: '', f: '', g: '', h: '' },
@@ -104,7 +105,7 @@ export class TouchControls {
         <button data-b="b" class="tb tb-b">SHOOT</button>
         <button data-b="f" class="tb tb-s tb-f">RUN</button>
         <button data-b="g" class="tb tb-s tb-g">SHIELD</button>
-        <button data-b="h" class="tb tb-s tb-h" style="visibility:hidden"></button>
+        <button data-b="h" class="tb tb-s tb-h">CLOSE</button>
       </div>
       <button class="touch-pause" aria-label="Pause">❚❚</button>`;
     parent.appendChild(this.el);

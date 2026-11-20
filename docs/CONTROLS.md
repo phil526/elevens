@@ -30,7 +30,12 @@ The game opens on the main menu. **Kick off** (already highlighted: Enter, A or 
 | Through ball | I (hold, release) | Played into space ahead of a running teammate. Charge picks near or far |
 | Lofted through ball | Hold E while releasing I | Over the top of the defence, dropping into the runner's path |
 | First touch | Hold a direction as the ball arrives | The touch goes that way. Hold Shift too to push it well ahead and run onto it. With no direction held the ball is killed dead at your feet. Worse touch or a faster pass means a less accurate touch |
-| Advanced skill moves (with the ball) | Hold E, then U plus a direction | Forward: **elastico** (out and back with the outside of the foot; the best fool a defender in front, but a poor touch can lose it). Sideways: **ball roll** (roll the sole across the ball and glide sideways). Straight back: **drag-back turn** (pull it back and spin away, ending up facing the other way) |
+| Close control | C (hold) | Small, slow touches with the ball right at your feet: tighter turns and harder for a defender to rob. Hold it as a pass arrives to kill the ball dead at your feet, or to chest down a high ball |
+| Sole stop | Hold C, let go of the direction while you are moving | You stop the ball under your sole. Push a direction within about a second to burst away with a push touch |
+| Slow jog dribble | Press the direction gently (stick or touch stick part-way) | Keeps the ball closer than a full run. Keyboard keys are always full stick |
+| Chop · cut-back | Sprint, then turn sharply (about 60°) · reverse (about 130°) | The ball is cut away with the inside or outside of the foot; a defender closing in can be left behind |
+| Flick up · keepy-ups · flick over | Hold C + U · U again while it is up · forward + U while it is up | Up to eight keepy-ups. Forward flicks it over a defender's head to run onto. Shoot while it is up for a volley; pass or other kicks end it |
+| Advanced skill moves (with the ball) | Hold E, then U plus a direction | Forward: **elastico** (out and back with the outside of the foot; the best fool a defender in front, but a poor touch can lose it). Sideways: **ball roll** (roll the sole across the ball and glide sideways). Straight back: **drag-back turn** (pull it back and spin away, ending up facing the other way). Diagonally forward: **Berba spin** (roll it across and spin right round on it, away the other side). Diagonally back: **McGeady spin** (sole on top, half a turn and away at a right angle) |
 | Chained step-overs | U again during a step-over | Up to three in a row, each to the other side and a little more convincing |
 | Skill move (with the ball) | U plus a direction | Towards where you face: knock-on (push the ball ahead and burst after it). Straight back: drag-back (pull it behind you and turn). Diagonally back: roulette (a full spin on the ball that rolls you about a metre to that side; the body shields the ball while you turn, and a defender charging in close can be left behind). Sideways or no direction: step-over, which can wrong-foot a defender in front of you |
 | Fake shot (with the ball) | Hold K, tap J before you let go | The shooting leg swings back, then cuts the ball across instead (towards the stick, or away from the nearest defender). Defenders within about 5 m who rush in to block can be left on the floor. A defender who is jockeying, side-on and set, is much harder to fool with any skill move |
@@ -81,12 +86,13 @@ Chip: hold A and right click. Low drive: hold S and right click. Fake shot: hold
 
 ## Controller (Standard Gamepad layout)
 
-Xbox labels shown; PlayStation equivalents in brackets. The game detects the controller family and shows matching labels in the guide and overlays.
+Xbox labels shown; PlayStation equivalents in brackets. The game detects the controller family and shows matching labels in the guide and overlays. The bar of button hints along the bottom of the match screen can be hidden with Settings > Gameplay and accessibility > Button hints (On by default).
 
 | Action | Button |
 | --- | --- |
 | Move | Left stick or D-pad (radial dead zone 0.18) |
-| Sprint | RT [R2] or RB [R1] |
+| Sprint | RT [R2] |
+| Close control (hold) · sole stop (let go of the stick) · flick up (with the skill button or a right-stick flick) | RB [R1] |
 | Pass (hold for further) / tackle | A [✕] |
 | Chip shot | Hold B [○] + shoot X [□] |
 | Low driven shot | Hold Y [△] + shoot X [□] |
@@ -99,7 +105,10 @@ Xbox labels shown; PlayStation equivalents in brackets. The game detects the con
 | Jockey / modifier: finesse shot, driven pass, lofted through ball | LT [L2] (hold) |
 | Power shot | Hold LT [L2] + RT [R2] + shoot X [□] |
 | Placed shot | Hold X [□], tap LB [L1] |
-| Elastico · ball roll · drag-back turn | Hold LT [L2] + flick the right stick forward · sideways · back |
+| Elastico · ball roll · drag-back turn · Berba spin · McGeady spin | Hold LT [L2] + flick the right stick forward · sideways · back · diagonally forward · diagonally back |
+| Body feint (sprinting) | Flick the right stick sideways at full speed: drop the shoulder one way and go the other |
+| Overhead kick | Shoot as a high ball drops over you with your back to goal |
+| Diving header | Shoot at full speed as a low cross arrives near goal |
 | Tactical foul (defending) | Hold LT [L2] + B [○] |
 | Free kick curve and dip | Hold LT [L2] + left stick |
 | Switch player · call a run (with the ball) · set-piece routine | LB [L1] |
@@ -149,9 +158,18 @@ Main menu or pause menu → **Controls**. The **Controller** and **Keyboard** ta
 | Small row above the buttons | RUN calls a run; SHIELD (hold) shields the ball and is also the modifier for driven passes, lofted through balls and finesse shots (with SPRINT: power shots) | RUSH sends the keeper out; PRESS starts a team press; TRAP springs the offside trap |
 | ❚❚ (top right) | Pause / menu | Pause / menu |
 
+CLOSE (in the small row, held) is close control: with SKILL it flicks the ball up and juggles it.
+
 Pass into space: hold SPRINT while you release PASS. One-two: tap PASS again while your pass is on its way. Dummy: hold SHIELD as a teammate's pass reaches you.
 
 Labels change as possession changes. Several fingers work at once (move, sprint and shoot together). Portrait orientation shows a prompt to rotate the device. Touch layouts have been checked only in emulated browsers (see [VERIFICATION.md](VERIFICATION.md)), not on physical devices.
+
+## Ball control and dribbling
+
+- **Better dribblers keep it closer.** A player's Control rating sets how far ahead each touch goes and how tightly he turns with the ball.
+- **Heavy touches.** Weaker players under pressure, sprinting or on a wet pitch sometimes take a heavy touch that runs away from them (you will see "Heavy touch"). Close control and better players avoid most of them. The difficulty's help setting makes them rarer for you.
+- **First touch away from a defender.** Hold a direction as the ball arrives and the touch goes that way. A defender closing in from the other side can be turned ("Turned him with the first touch").
+- **Chest and thigh control.** A ball dropping at chest height is chested down, lower ones are taken on the thigh, into your stride when you hold a direction.
 
 ## Kick power and the weaker foot
 
@@ -286,6 +304,7 @@ Main menu → More modes → Practice. There is no clock and no full time; use t
 - **Free kicks:** a free kick in shooting range, from a new spot after each attempt. Time the ring for accuracy.
 - **Penalties:** penalty after penalty against the keeper.
 - **Crossing and finishing:** a winger crosses for your striker against two defenders and the keeper. Head it, or volley it as it drops.
+- **Ball control drill** (60 seconds, a score to beat): dribble through the gate of two orange cones (100 points, up to 60 more for speed, 40 more for keeping the ball within a metre as you go through). Then pass to the coach (+20). He plays it back along the ground or in the air and the next gate goes up: a clean first touch scores 60 (90 off the chest or thigh), and 30 more when the touch already takes you towards the gate. Keepy-ups score 10 each; losing the ball costs 30. The best score is kept on this device.
 
 **Challenges** (below the drills): ten attempts at free kicks, penalties or finishing, then your score. The best score for each is kept on this device and shown on its button.
 

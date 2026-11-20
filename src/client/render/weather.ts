@@ -164,6 +164,8 @@ export class WeatherFx {
   /** The match wind (m/s, world x/z): rain and snow drift with it. */
   setWind(wx: number, wz: number) {
     for (const m of this.mats) {
+      // (The ground splashes have no wind.)
+      if (!m.uniforms.uWind || !m.uniforms.uSnow) continue;
       const snow = m.uniforms.uSnow.value > 0.5;
       // A little of the old default drift always, so still air doesn't look frozen.
       m.uniforms.uWind.value.set((snow ? 0.6 : 1.6) * 0.4 + wx * (snow ? 0.5 : 0.8), (snow ? 0.3 : 0.8) * 0.4 + wz * (snow ? 0.5 : 0.8));

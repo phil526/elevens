@@ -91,8 +91,8 @@ export class ModeScreens {
   }
 
   /** The save slot changed: load its modes. */
-  syncSlot() {
-    if (this.h.slot() === this.slotNo) return;
+  syncSlot(force = false) {
+    if (!force && this.h.slot() === this.slotNo) return;
     this.slotNo = this.h.slot();
     this.store = loadModes(this.slotNo);
   }
@@ -437,7 +437,7 @@ export class ModeScreens {
       <h2>Be a Pro</h2>
       <p class="note">Create a player and play his whole career: you control only him. Every match earns experience; level up and spend points on his attributes, win offers from bigger clubs, and watch his rating grow.</p>
       <div class="field"><span class="lbl">Name</span><input class="text-in" data-in="pname" maxlength="24" value="${esc(s.name)}"></div>
-      <div class="field"><span class="lbl">Position</span>${this.h.seg('ppos', PRO_POSITIONS.map((r) => [r, PRO_POS_NAMES[r] ?? r]), s.pos)}</div>
+      <div class="field"><span class="lbl">Position</span>${this.h.seg('ppos', PRO_POSITIONS.map((r) => [r, PRO_POS_NAMES[r] ?? r]), s.pos).replace('class="seg"', 'class="seg wrap pro-pos"')}</div>
       <div class="field"><span class="lbl">Shirt number</span><input class="text-in num" data-in="pnum" type="number" min="2" max="99" value="${s.number}"></div>
       <div class="field"><span class="lbl">Stronger foot</span>${this.h.seg('pfoot', [['R', 'Right'], ['L', 'Left']], s.foot)}</div>
       <div class="field"><span class="lbl">Skin</span>${this.h.seg('pskin', SKINS.map((x, i) => [String(i), x]), String(s.skin))}</div>

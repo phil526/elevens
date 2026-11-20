@@ -237,6 +237,8 @@ export class Commentary {
           if (this.rng.chance(0.18 * this.chat)) add(this.line('tackle', 0, ctx, P));
           break;
         case 'skill':
+          // Everyday ball control (chops, sole stops, keepy-ups) isn't worth a line; a flick over a man is.
+          if (['chop', 'cutback', 'solestop', 'flickup', 'juggle'].includes(e.text ?? '')) break;
           if (this.rng.chance(0.4 * this.chat)) add(this.line('skill', 1, ctx, P));
           break;
         case 'halftime': {

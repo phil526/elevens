@@ -1,7 +1,7 @@
 // HTTP + WebSocket game server. Serves the built client (optional), a health
 // endpoint, and private rooms at /ws. All match logic runs here at 60 Hz.
 
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -19,6 +19,12 @@ export interface ServerOptions {
   jitterMs?: number;
   /** Ranked records file (null: kept in memory only). */
   rankedFile?: string | null;
+  /** Secret that signs the ranked records players keep, so a restarted server can take them back. */
+  rankedSecret?: string | null;
+  /** The game's own address: when the client isn't served here, `/` sends visitors there. */
+  playUrl?: string | null;
+  /** Compress WebSocket messages (permessage-deflate). Default on. */
+  compress?: boolean;
   log?: (msg: string) => void;
 }
 
@@ -56,14 +62,22 @@ export class GameServer {
 
   constructor(private opts: ServerOptions) {
     this.log = opts.log ?? ((m) => console.log(`[elevens] ${m}`));
-    this.ranks = new RankStore(opts.rankedFile ?? null, this.log);
+    this.ranks = new RankStore(opts.rankedFile ?? null, this.log, opts.rankedSecret ?? null);
     this.http = createServer((req, res) => this.serveHttp(req, res));
-    this.wss = new WebSocketServer({ noServer: true, maxPayload: NET.maxMessageBytes });
+    // Snapshots are similar from one to the next, so compression with a shared window cuts them
+    // to about a tenth (bandwidth matters on free hosting plans).
+    this.wss = new WebSocketServer({
+      noServer: true,
+      maxPayload: NET.maxMessageBytes,
+      perMessageDeflate: opts.compress === false ? false : { zlibDeflateOptions: { level: 4, memLevel: 7 }, threshold: 128, concurrencyLimit: 8 },
+    });
     this.http.on('upgrade', (req, socket, head) => {
       const url = new URL(req.url ?? '/', 'http://x');
       const origin = req.headers.origin;
       const allowed = this.opts.allowedOrigins ?? [];
-      if (url.pathname !== '/ws' || (allowed.length > 0 && (!origin || !allowed.includes(origin)))) {
+      // The server's own pages are always allowed (when it serves the client too).
+      const own = !!origin && !!req.headers.host && origin.replace(/^https?:\/\//, '') === req.headers.host;
+      if (url.pathname !== '/ws' || (allowed.length > 0 && !own && (!origin || !allowed.includes(origin)))) {
         socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
         socket.destroy();
         return;
@@ -132,14 +146,14 @@ export class GameServer {
         const ids = r.ranked!.ids;
         const out = this.ranks.record(ids[0], ids[1], result);
         if (!out) return;
-        for (const i of [0, 1] as const) r.seats[i]?.conn?.send({ t: 'rankres', before: out.before[i], after: out.after[i], delta: out.delta[i], opp: out.after[1 - i].name });
+        for (const i of [0, 1] as const) r.seats[i]?.conn?.send({ t: 'rankres', before: out.before[i], after: out.after[i], delta: out.delta[i], opp: out.after[1 - i].name, sig: this.ranks.sign(ids[i]) });
         this.log(`room ${r.code}: ranked result ${result} (${out.after[0].name} ${out.delta[0] >= 0 ? '+' : ''}${out.delta[0]}, ${out.after[1].name} ${out.delta[1] >= 0 ? '+' : ''}${out.delta[1]})`);
       };
       room.startRanked([a.id, b.id], [a.club, b.club]);
       this.log(`room ${code}: ranked match ${a.id.slice(0, 6)} v ${b.id.slice(0, 6)}`);
     }
     // Tell everyone still waiting how many are in the queue.
-    if (pairs.length || Math.random() < 0.2) for (const e of this.queue.list) { const rec = this.ranks.get(e.id); if (rec) e.who.conn.send({ t: 'rank', rec, queued: true, waiting: this.queue.list.length }); }
+    if (pairs.length || Math.random() < 0.2) for (const e of this.queue.list) { const rec = this.ranks.get(e.id); if (rec) e.who.conn.send({ t: 'rank', rec, queued: true, waiting: this.queue.list.length, sig: this.ranks.sign(e.id) }); }
   }
 
   /** Remove idle/finished rooms. */
@@ -157,12 +171,18 @@ export class GameServer {
   private serveHttp(req: IncomingMessage, res: import('node:http').ServerResponse) {
     const url = new URL(req.url ?? '/', 'http://x');
     if (url.pathname === '/health') {
-      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      // Any page may ask (the game wakes a sleeping server with this before going online).
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', 'access-control-allow-origin': '*' });
       res.end(JSON.stringify({ ok: true, rooms: this.rooms.size, tickMs: Number(this.tickMs.toFixed(3)), protocol: PROTOCOL_VERSION }));
       return;
     }
     const dir = this.opts.staticDir;
     if (!dir || !existsSync(dir)) {
+      if (this.opts.playUrl && (url.pathname === '/' || url.pathname === '/index.html')) {
+        res.writeHead(302, { location: this.opts.playUrl + url.search, 'cache-control': 'no-store' });
+        res.end();
+        return;
+      }
       res.writeHead(404, { 'content-type': 'text/plain' });
       res.end('ELEVENS server: WebSocket endpoint at /ws. Static client not served (set SERVE_CLIENT=1 after npm run build).');
       return;
@@ -171,6 +191,13 @@ export class GameServer {
     let p = normalize(join(root, decodeURIComponent(url.pathname)));
     if (!p.startsWith(root)) { res.writeHead(403); res.end(); return; }
     if (!existsSync(p) || statSync(p).isDirectory()) p = join(root, 'index.html');
+    if (p.endsWith('index.html')) {
+      // Tell the client this server served it, so it plays online here and not on the public server.
+      const html = readFileSync(p, 'utf8').replace('<head>', '<head><meta name="elevens-server" content="self">');
+      res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
+      res.end(html);
+      return;
+    }
     res.writeHead(200, {
       'content-type': MIME[extname(p)] ?? 'application/octet-stream',
       'cache-control': p.endsWith('index.html') ? 'no-cache' : 'public, max-age=31536000, immutable',
@@ -266,7 +293,7 @@ export class GameServer {
         if (c.room) { c.room.leave(c.token); this.byToken.delete(c.token); c.room = null; }
         return;
       case 'ranked': {
-        const rec = this.ranks.identify(msg.id, msg.key, msg.name);
+        const rec = this.ranks.identify(msg.id, msg.key, msg.name, msg.saved);
         if (!rec) { c.conn.send({ t: 'err', code: 'bad_msg', msg: 'That ranked profile belongs to another device.' }); return; }
         if (c.room && c.room.state === 'match') return;
         if (c.room) { c.room.leave(c.token); this.byToken.delete(c.token); c.room = null; }
@@ -275,13 +302,13 @@ export class GameServer {
         c.rankedId = msg.id;
         c.name = msg.name;
         this.queue.add({ who: c, id: msg.id, elo: rec.elo, club: msg.club, since: Date.now() });
-        c.conn.send({ t: 'rank', rec, queued: true, waiting: this.queue.list.length });
+        c.conn.send({ t: 'rank', rec, queued: true, waiting: this.queue.list.length, sig: this.ranks.sign(msg.id) });
         return;
       }
       case 'unranked': {
         this.queue.remove(c);
         const rec = c.rankedId ? this.ranks.get(c.rankedId) : null;
-        if (rec) c.conn.send({ t: 'rank', rec, queued: false, waiting: this.queue.list.length });
+        if (rec) c.conn.send({ t: 'rank', rec, queued: false, waiting: this.queue.list.length, sig: this.ranks.sign(c.rankedId!) });
         return;
       }
       case 'board':

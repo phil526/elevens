@@ -8,7 +8,7 @@ import type { InputEvent, InputFrame } from './types';
 import { ALL_CLUBS, TEAMS } from './teams';
 import type { RankedRecord } from './ranked';
 
-export const PROTOCOL_VERSION = 12;
+export const PROTOCOL_VERSION = 14;
 
 export type ClientMsg =
   | { t: 'hello'; v: number; token?: string; name?: string }
@@ -22,7 +22,7 @@ export type ClientMsg =
   | { t: 'sub'; id: number; bench: number }
   | { t: 'leave' }
   /** Ranked (19 Nov 2026): join the queue with your device's id and key and your club; leave it; the top of the table. */
-  | { t: 'ranked'; id: string; key: string; name: string; club: string }
+  | { t: 'ranked'; id: string; key: string; name: string; club: string; saved?: { rec: RankedRecord; sig: string } }
   | { t: 'unranked' }
   | { t: 'board' };
 
@@ -58,9 +58,9 @@ export type ServerMsg =
   | { t: 'opp'; status: 'disconnected' | 'reconnected' | 'left'; graceMs?: number }
   | { t: 'end'; reason: 'fulltime' | 'abandoned' | 'opponent_left' }
   /** Ranked: your record (and whether you are queued, and how many are waiting). */
-  | { t: 'rank'; rec: RankedRecord; queued: boolean; waiting: number }
+  | { t: 'rank'; rec: RankedRecord; queued: boolean; waiting: number; sig?: string }
   /** Ranked: a match result, your record before and after. */
-  | { t: 'rankres'; before: RankedRecord; after: RankedRecord; delta: number; opp: string }
+  | { t: 'rankres'; before: RankedRecord; after: RankedRecord; delta: number; opp: string; sig?: string }
   | { t: 'board'; top: RankedRecord[] };
 
 export type ErrCode = 'bad_code' | 'not_found' | 'room_full' | 'bad_msg' | 'rate_limited' | 'version' | 'not_in_room' | 'server';
@@ -72,6 +72,16 @@ export const ROOM_CODE_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{5}$/;
 
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 const num = (x: unknown, lo: number, hi: number): number | null => (typeof x === 'number' && Number.isFinite(x) && x >= lo && x <= hi ? x : null);
+/** A ranked record the player kept with the server's signature (checked on the server). */
+function cleanSaved(x: unknown, id: string): { rec: RankedRecord; sig: string } | undefined {
+  if (!isObj(x) || !isObj(x.rec) || typeof x.sig !== 'string' || !/^[a-f0-9]{64}$/.test(x.sig)) return undefined;
+  const r = x.rec;
+  const n = (v: unknown, hi: number) => { const k = num(v, 0, hi); return k !== null && k === Math.floor(k) ? k : null; };
+  const elo = n(r.elo, 5000), points = n(r.points, 100000), w = n(r.w, 1e6), d = n(r.d, 1e6), l = n(r.l, 1e6), best = n(r.best, 100000);
+  if (r.id !== id || typeof r.name !== 'string' || elo === null || points === null || w === null || d === null || l === null || best === null) return undefined;
+  return { rec: { id, name: cleanName(r.name), elo, points, w, d, l, best }, sig: x.sig };
+}
+
 export const cleanName = (x: unknown) => (typeof x === 'string' ? x.replace(/[^\p{L}\p{N} ._-]/gu, '').trim().slice(0, 16) : '') || 'Player';
 
 function validFrame(x: unknown): InputFrame | null {
@@ -87,7 +97,7 @@ function validFrame(x: unknown): InputFrame | null {
     if (p === null) return null;
     const out: InputEvent = { k: e.k as InputEvent['k'], p, m: e.m === true };
     if (e.v !== undefined) {
-      if (e.v !== 'chip' && e.v !== 'low' && e.v !== 'fake' && e.v !== 'placed' && e.v !== 'power') return null;
+      if (e.v !== 'chip' && e.v !== 'low' && e.v !== 'fake' && e.v !== 'placed' && e.v !== 'power' && e.v !== 'flick') return null;
       out.v = e.v;
     }
     if (e.x !== undefined || e.z !== undefined) {
@@ -106,7 +116,7 @@ function validFrame(x: unknown): InputFrame | null {
     }
     ev.push(out);
   }
-  return { seq: Math.floor(seq), mx, mz, sprint: x.sprint === true, jockey: x.jockey === true, contain: x.contain === true, ev };
+  return { seq: Math.floor(seq), mx, mz, sprint: x.sprint === true, jockey: x.jockey === true, contain: x.contain === true, close: x.close === true, ev };
 }
 
 /** Parse and validate one client message. Returns null for anything malformed. */
@@ -171,7 +181,8 @@ export function parseClientMsg(raw: string): ClientMsg | null {
       const id = typeof x.id === 'string' && /^[a-f0-9]{32}$/.test(x.id) ? x.id : null;
       const key = typeof x.key === 'string' && /^[a-f0-9]{32}$/.test(x.key) ? x.key : null;
       if (!id || !key || typeof x.club !== 'string' || !ALL_CLUBS.some((tm) => tm.id === x.club)) return null;
-      return { t: 'ranked', id, key, name: cleanName(x.name), club: x.club };
+      const saved = cleanSaved(x.saved, id);
+      return saved ? { t: 'ranked', id, key, name: cleanName(x.name), club: x.club, saved } : { t: 'ranked', id, key, name: cleanName(x.name), club: x.club };
     }
     case 'unranked':
       return { t: 'unranked' };

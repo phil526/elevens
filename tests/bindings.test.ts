@@ -13,7 +13,8 @@ describe('control bindings', () => {
     expect(m.Space).toBe('shoot');
     expect(m.Escape).toBe('pause');
     expect(m.ArrowUp).toBe('up');
-    expect(defaultBindings().pad.sprint).toEqual([7, 5]);
+    expect(defaultBindings().pad.sprint).toEqual([7]);
+    expect(defaultBindings().pad.close).toEqual([5]); // RB: close control (19 Nov 2026)
   });
   it('a key already in use swaps with the slot being changed', () => {
     const b = defaultBindings();
@@ -37,6 +38,7 @@ describe('control bindings', () => {
     assign(b, 'pad', 'shoot', 0, 0); // A to shoot, X to pass
     expect(b.pad.shoot).toEqual([0]);
     expect(b.pad.pass).toEqual([2]);
+    b.pad.sprint = [7, 5]; b.pad.close = [];
     assign(b, 'pad', 'sprint', 0, 5); // RB into the first sprint slot
     expect(b.pad.sprint).toEqual([5, 7]);
   });

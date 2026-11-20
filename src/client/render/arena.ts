@@ -76,8 +76,15 @@ export interface Arena {
   flagpoles: THREE.Vector3[];
   /** Height of the roof's front edge (the blimp and drone shots keep clear of it). */
   roofHeight: number;
+  /** The stands' tiers (rows out from the bowl's edge and up), for the fans' display (render/tifo.ts). */
+  tiers: { low: ArenaTier; upr: ArenaTier | null };
+  /** Where the flares burn in the crowd (render/smoke.ts drifts their smoke over the pitch). */
+  flarePos: THREE.Vector3[];
   update(time: number, info: ArenaInfo): void;
 }
+
+/** A tier of seating: first row out from the bowl's edge (d0, m), rows, row depth and rise (m), first row height. */
+export interface ArenaTier { d0: number; rows: number; rd: number; rise: number; y0: number }
 
 // ---------- small helpers ----------
 
@@ -1167,6 +1174,8 @@ export function buildArena(o: ArenaOptions): Arena {
     ground,
     flagpoles,
     roofHeight: roofY,
+    tiers: { low: LOW, upr: twoTier ? UPR : null },
+    flarePos: flares.map((f) => f.pos.clone()),
     crowdCount,
     flareCount: flares.length,
     flagCount: flagSpots.length,

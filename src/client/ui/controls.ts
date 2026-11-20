@@ -21,8 +21,16 @@ const ROWS: [string, string, string, string][] = [
   ['Low cross (from wide)', 'Hold {k1:jockey} + {k1:pass}', 'Hold {jockey} + {pass}', 'Hold SHIELD + PASS'],
   ['Keeper has the ball: roll out · throw · drop-kick · punt (stick aims, hold for distance)', '{k1:pass} · {k1:lob} · {k1:through} · {k1:shoot}', '{pass} · {lob} · {through} · {shoot}', 'PASS · LOB · THROUGH · SHOOT'],
   ['First touch', 'Hold a direction as the ball arrives (+ {k1:sprint} to push it ahead)', 'Hold the stick as the ball arrives (+ {sprint} to push it ahead)', 'Hold the stick as the ball arrives'],
+  ['Close control: small, slow touches, tight turns, harder to rob · chest down a high ball', '{k:close} (hold)', '{close} (hold)', 'CLOSE (hold)'],
+  ['Stop the ball under the sole, then burst away', 'Hold {k1:close}, let go of the direction, then move', 'Hold {close}, let go of the stick, then push it', 'Hold CLOSE, let go of the stick'],
+  ['Slow jog with the ball', 'Hold {k1:close} and move', 'Push the stick gently', 'Push the stick gently'],
+  ['Chop · cut-back while sprinting', 'Sprint, then turn sharply · reverse', 'Sprint, then turn the stick sharply · pull it back', 'SPRINT + turn sharply'],
+  ['Flick the ball up · juggle (press again) · flick it over a defender (forward)', 'Hold {k1:close} + {k1:skill} · {k1:skill} · forward + {k1:skill}', 'Hold {close} + {skill} or flick {flick} · again · flick {flick} forward', 'Hold CLOSE + SKILL'],
+  ['Volley it while juggling', '{k1:shoot}', '{shoot}', 'SHOOT'],
   ['Skill move: forward knock-on · sideways step-over (press again to chain) · diagonally back roulette · straight back drag-back', '{k:skill} + direction', 'Flick {flick} that way, or click {skill}', 'SKILL + stick'],
-  ['Advanced skills: forward elastico · sideways ball roll · back drag-back turn', 'Hold {k1:jockey} + {k1:skill} + direction', 'Hold {jockey} + flick {flick}', '—'],
+  ['Advanced skills: forward elastico · sideways ball roll · back drag-back turn · diagonal forward Berba spin · diagonal back McGeady spin', 'Hold {k1:jockey} + {k1:skill} + direction', 'Hold {jockey} + flick {flick}', '—'],
+  ['Body feint: a skill move sideways at full speed', '{k1:skill} + sideways while sprinting', 'Flick {flick} sideways while sprinting', 'SKILL + stick sideways while sprinting'],
+  ['Overhead kick (back to goal, high ball) · diving header (full speed, low cross)', '{k1:shoot} as the ball arrives', '{shoot} as the ball arrives', 'SHOOT as the ball arrives'],
   ['Tactical foul: pull back a runner on the break (usually a booking)', 'Hold {k1:jockey} + {k1:lob} (defending)', 'Hold {jockey} + {lob} (defending)', '—'],
   ['Free kick: bend (stick across) and dip (stick forward) the shot', 'Hold {k1:jockey} + move', 'Hold {jockey} + stick', '—'],
   ['Fake shot (cut the ball across)', 'Hold {k1:shoot}, tap {k1:pass}', 'Hold {shoot}, tap {pass}', 'Hold SHOOT, tap PASS'],
@@ -77,6 +85,8 @@ const MOUSE_CELLS: Record<string, string> = {
   'First touch': 'Point where to take it as the ball arrives (+ {k1:sprint} to push it ahead)',
   'Skill move: forward knock-on · sideways step-over · diagonally back roulette · straight back drag-back': '{k:skill}, pointing that way',
   'Switch to a chosen player (defending)': '{k:switch} (nearest)',
+  'Slow jog with the ball': 'Point just in front of your player, or hold {k1:close}',
+  'Chop · cut-back while sprinting': 'Sprint, then point sharply to the side · behind',
   'Defending a free kick: shift the wall · men in the wall · jump': 'Point · {k1:switch} · {k1:shoot}',
 };
 
@@ -100,17 +110,17 @@ export function guideLine(device: 'keyboard' | 'gamepad' | 'touch' | 'mouse', st
   if (device === 'mouse') {
     const k = (a: BindAction) => kbd(keysText(mouseAsKeys(b), a)[0] ?? '—');
     return attacking
-      ? `Point to run · ${k('pass')} Pass (hold = further) · ${k('shoot')} Shoot · ${k('lob')} Long ball · ${k('through')} Through ball · ${k('sprint')} Sprint · ${k('switch')} Call run · ${k('skill')} Skill`
+      ? `Point to run · ${k('pass')} Pass (hold = further) · ${k('shoot')} Shoot · ${k('lob')} Long ball · ${k('through')} Through ball · ${k('sprint')} Sprint · ${k('switch')} Call run · ${k('skill')} Skill · ${k('close')} Close control`
       : `Point to run · ${k('pass')} Tackle · ${k('lob')} Slide · ${k('through')} Contain · ${k('jockey')} Jockey · ${k('switch')} Switch · ${k('keeper')} Take keeper`;
   }
   if (device === 'gamepad') {
     const p = padLabels(style, b);
     return attacking
-      ? `<kbd>${p.pass}</kbd> Pass (hold = further) · <kbd>${p.shoot}</kbd> Shoot · <kbd>${p.lob}</kbd>+<kbd>${p.shoot}</kbd> Chip · <kbd>${p.through}</kbd> Through · <kbd>${p.jockey}</kbd> Driven/finesse · <kbd>${p.switch}</kbd> Call run`
+      ? `<kbd>${p.pass}</kbd> Pass (hold = further) · <kbd>${p.shoot}</kbd> Shoot · <kbd>${p.lob}</kbd>+<kbd>${p.shoot}</kbd> Chip · <kbd>${p.through}</kbd> Through · <kbd>${p.jockey}</kbd> Driven/finesse · <kbd>${p.close}</kbd> Close control · <kbd>${p.switch}</kbd> Call run`
       : `<kbd>${p.pass}</kbd> Tackle · <kbd>${p.lob}</kbd> Slide · <kbd>${p.through}</kbd> Contain · <kbd>${p.jockey}</kbd> Jockey · <kbd>${p.switch}</kbd>/<kbd>${p.flick}</kbd> Switch · <kbd>${p.skill}</kbd> Take keeper`;
   }
   const k = (a: BindAction) => kbd(keysText(b, a)[0] ?? '—');
   return attacking
-    ? `${k('pass')} Pass (hold = further) · ${k('shoot')} Shoot · ${k('lob')}+${k('shoot')} Chip · ${k('through')}+${k('shoot')} Low · ${k('jockey')} Driven/finesse · ${k('switch')} Call run · ${k('skill')} Skill`
+    ? `${k('pass')} Pass (hold = further) · ${k('shoot')} Shoot · ${k('lob')}+${k('shoot')} Chip · ${k('through')}+${k('shoot')} Low · ${k('jockey')} Driven/finesse · ${k('close')} Close control · ${k('switch')} Call run · ${k('skill')} Skill`
     : `${k('pass')} Tackle · ${k('lob')} Slide · ${k('through')} Contain · ${k('jockey')} Jockey · ${k('switch')}/click Switch · ${k('keeper')} Take keeper · ${k('help')} Help`;
 }

@@ -10,7 +10,7 @@ import type { Mentality } from '../../shared/config';
 import { GAME_PLANS, NET, SIM, type GamePlan } from '../../shared/config';
 import { cleanWeather, weatherPlay, type MatchWeather, type WeatherPlay } from '../../shared/weather';
 import { angleOf } from '../../shared/math';
-import { DRIBBLE_TURN, stepMovement, type MoverState } from '../../shared/movement';
+import { carrierMove, stepMovement, type MoveMode, type MoverState } from '../../shared/movement';
 import { ACTIONS, BALL_STATES, FLIGHTS, KICKS, PHASES, PLAYER_STRIDE, RESTARTS, SKILLS, type Snapshot } from '../../shared/snapshot';
 import { teamById, type TeamDef } from '../../shared/teams';
 import type { Attributes, InputFrame, MatchEvent, TeamStats } from '../../shared/types';
@@ -114,9 +114,10 @@ export class OnlineSession implements Session {
     };
     const ball = { x: s.b[0], z: s.b[2] };
     for (const f of this.pending) {
-      const mode = f.jockey ? 'jockey' : f.sprint ? 'sprint' : 'jog'; // on the ball the jockey button shields (also at jockey pace)
+      const mode: MoveMode = f.jockey ? 'jockey' : f.sprint ? 'sprint' : 'jog'; // on the ball the jockey button shields (also at jockey pace)
       const face = mode === 'jockey' && !ownsBall ? angleOf(ball.x - m.pos.x, ball.z - m.pos.z) : null;
-      stepMovement(m, f.mx, f.mz, mode, SIM.dt, face, (ownsBall ? 0.92 : 1) * this.wp.speed, this.wp.accel, (ownsBall && mode !== 'sprint' ? DRIBBLE_TURN : 1) * this.wp.turn);
+      const cm = ownsBall ? carrierMove(m.a, mode, !!f.close) : { mode, speed: 1, accel: 1, turn: 1 };
+      stepMovement(m, f.mx, f.mz, cm.mode, SIM.dt, face, (ownsBall ? 0.92 : 1) * cm.speed * this.wp.speed, cm.accel * this.wp.accel, cm.turn * this.wp.turn);
     }
     if (this.predFor !== pid) {
       // Newly controlled player: start from where it is drawn now to avoid a pop.
@@ -163,9 +164,10 @@ export class OnlineSession implements Session {
         const m = this.predicted;
         const ball = this.v.ball.pos;
         const ownsBall = this.v.ball.owner === this.predFor;
-        const mode = f.jockey ? 'jockey' : f.sprint ? 'sprint' : 'jog'; // on the ball the jockey button shields (also at jockey pace)
+        const mode: MoveMode = f.jockey ? 'jockey' : f.sprint ? 'sprint' : 'jog'; // on the ball the jockey button shields (also at jockey pace)
         const face = mode === 'jockey' && !ownsBall ? angleOf(ball.x - m.pos.x, ball.z - m.pos.z) : null;
-        stepMovement(m, f.mx, f.mz, mode, SIM.dt, face, (ownsBall ? 0.92 : 1) * this.wp.speed, this.wp.accel, (ownsBall && mode !== 'sprint' ? DRIBBLE_TURN : 1) * this.wp.turn);
+        const cm = ownsBall ? carrierMove(m.a, mode, !!f.close) : { mode, speed: 1, accel: 1, turn: 1 };
+        stepMovement(m, f.mx, f.mz, cm.mode, SIM.dt, face, (ownsBall ? 0.92 : 1) * cm.speed * this.wp.speed, cm.accel * this.wp.accel, cm.turn * this.wp.turn);
       }
       if (this.planEvent >= 0 && f.ev.length < 4) { f.ev.push({ k: 'plan', p: this.planEvent / 4 }); this.planEvent = -1; }
       while (this.instrEvents.length && f.ev.length < 4) f.ev.push({ k: 'instr', p: this.instrEvents.shift()! / 32 });
@@ -216,7 +218,7 @@ export class OnlineSession implements Session {
       const ticksAhead = renderTick - src.t;
       const k9 = src.p[so + 9];
       p.action = at === 'skill'
-        ? { type: at, t: src.p[so + 7] / 1000 + ticksAhead / SIM.tickRate, dur: src.p[so + 8] / 1000, skill: SKILLS[k9 & 7], side: k9 & 8 ? -1 : 1 }
+        ? { type: at, t: src.p[so + 7] / 1000 + ticksAhead / SIM.tickRate, dur: src.p[so + 8] / 1000, skill: SKILLS[k9 & 31], side: k9 & 32 ? -1 : 1 }
         : { type: at, t: src.p[so + 7] / 1000 + ticksAhead / SIM.tickRate, dur: src.p[so + 8] / 1000, kind: KICKS[k9 & 15], variant: k9 & 16 ? 'roll' : undefined };
       if (at === 'dive') {
         const d = src.dv.find((x) => x[0] === i);

@@ -11,8 +11,8 @@ export const BALL_STATES: BallState[] = ['free', 'dribble', 'flight', 'held', 'd
 export const FLIGHTS: FlightKind[] = ['none', 'pass', 'through', 'lob', 'cross', 'shot', 'header', 'clear', 'throw', 'deflect'];
 export const ACTIONS: ActionType[] = ['none', 'kick', 'tackle', 'stumble', 'dive', 'celebrate', 'throw', 'header', 'catch', 'down', 'slide', 'skill', 'barge', 'jump'];
 export const KICKS: (KickKind | undefined)[] = [undefined, 'pass', 'through', 'lob', 'shot', 'clear', 'cross', 'throw'];
-/** Skill moves; a skill action sends its index here in the kick slot, plus 8 when it breaks to the left (side -1). */
-export const SKILLS: SkillMove[] = ['stepover', 'dragback', 'knockon', 'roulette', 'fakeshot', 'ballroll', 'elastico', 'dragturn'];
+/** Skill moves; a skill action sends its index here in the kick slot, plus 32 when it breaks to the left (side -1). */
+export const SKILLS: SkillMove[] = ['stepover', 'dragback', 'knockon', 'roulette', 'fakeshot', 'ballroll', 'elastico', 'dragturn', 'chop', 'cutback', 'solestop', 'flickup', 'juggle', 'flickover', 'bodyfeint', 'berba', 'mcgeady'];
 export const RESTARTS: RestartType[] = ['kickoff', 'throwin', 'goalkick', 'corner', 'freekick', 'penalty', 'dropball'];
 
 export const PLAYER_STRIDE = 11;
@@ -56,7 +56,7 @@ export function encodeSnapshot(m: Match, ack: number, events: MatchEvent[], with
     const a = pl.action;
     p.push(
       r2(pl.pos.x), r2(pl.pos.z), r2(pl.vel.x), r2(pl.vel.z), r2(pl.facing), Math.round(pl.stamina * 100),
-      ACTIONS.indexOf(a.type), Math.round(a.t * 1000), Math.round(a.dur * 1000), a.type === 'skill' ? Math.max(0, SKILLS.indexOf(a.skill ?? 'stepover')) + ((a.side ?? 1) < 0 ? 8 : 0) : Math.max(0, KICKS.indexOf(a.kind)) + (a.variant === 'roll' ? 16 : 0), (pl.sprinting ? 1 : 0) | (pl.jockeying ? 2 : 0) | (pl.cards > 0 ? 4 : 0) | (pl.off ? 8 : 0) | (pl.callUntil > m.time ? 16 : 0),
+      ACTIONS.indexOf(a.type), Math.round(a.t * 1000), Math.round(a.dur * 1000), a.type === 'skill' ? Math.max(0, SKILLS.indexOf(a.skill ?? 'stepover')) + ((a.side ?? 1) < 0 ? 32 : 0) : Math.max(0, KICKS.indexOf(a.kind)) + (a.variant === 'roll' ? 16 : 0), (pl.sprinting ? 1 : 0) | (pl.jockeying ? 2 : 0) | (pl.cards > 0 ? 4 : 0) | (pl.off ? 8 : 0) | (pl.callUntil > m.time ? 16 : 0),
     );
     if (a.type === 'dive' && a.target) dv.push([pl.id, r2(a.target.x), r2(a.target.y), r2(a.target.z)]);
   }

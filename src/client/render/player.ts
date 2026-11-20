@@ -15,6 +15,8 @@ import { handWindup } from '../../shared/kick';
 import { anticipatePose, catchPose, catchStyleFor, CATCH_DUR, overarmPose, parryPose, rollPose, type CatchStyle } from './keeperpose';
 import { FALL_TOTAL, fallDirFor, fallPose, gesturePose, kickFlavourFor, relAngle, restPose, tacklePose, tackleStyleFor, type FallDir, type Gesture, type KickFlavour, type TackleStyle } from './motion';
 import { footProfile } from '../../shared/teams';
+import { airKickFor, backpedalPose, divingHeaderPose, injuredPose, limpPose, moveDirFor, overheadPose, punchPose, quickSaveFor, quickSavePose, scissorPose, sidestepPose, skill7Pose, type QuickSave } from './moves7';
+import { FALL } from './motion';
 
 // Pose channels.
 /** Body roll for a shoulder barge (sign flips with the side of the challenge). */
@@ -53,7 +55,8 @@ export function headerStyleFor(p: ViewPlayer, ball: THREE.Vector3, vel: THREE.Ve
   const sp = Math.hypot(vel.x, vel.z);
   const along = sp > 0.5 ? (vel.x * fx + vel.z * fz) / sp : 1;
   const lat = sp > 0.5 ? (vel.x * fz - vel.z * fx) / sp : 0; // + to the player's right
-  const kind: 'stoop' | 'stand' | 'jump' = ball.y < 1.25 ? 'stoop' : ball.y < 1.9 ? 'stand' : 'jump';
+  // A diving header (20 Nov 2026): the simulation gives it a longer action (match.ts AERIAL7.diveTime).
+  const kind: 'stoop' | 'stand' | 'jump' | 'dive' = p.action.type === 'header' && p.action.dur >= 0.65 ? 'dive' : ball.y < 1.25 ? 'stoop' : ball.y < 1.9 ? 'stand' : 'jump';
   return { kind, flick: clamp01((-along - 0.1) / 0.5), turn: Math.max(-1, Math.min(1, lat * 1.4)) };
 }
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -116,6 +119,7 @@ export class PlayerModel {
   private hipR = new THREE.Group();
   private knL = new THREE.Group();
   private knR = new THREE.Group();
+  private movePose = new Float32Array(17);
   /** Final blended pose channels (read by the realistic model, which reuses this as its action layer). */
   readonly pose = new Float32Array(CH);
   private loco = new Float32Array(CH);
@@ -158,11 +162,28 @@ export class PlayerModel {
   /** Standing tackle style, picked when the tackle starts. */
   tackleStyle: { style: TackleStyle; side: 1 | -1 } = { style: 'block', side: 1 };
   /** Toe poke, outside of the boot or backheel (null: a normal kick), and the foot for it. */
-  kickFlavour: { flavour: KickFlavour | null; foot?: 1 | -1 } = { flavour: null };
+  kickFlavour: { flavour: KickFlavour | null; foot?: 1 | -1; side?: 1 | -1 } = { flavour: null };
   private kickRefined = false;
   private prevActT = 0;
   /** Header style picked when a header starts (see the 'header' case). */
-  private headerStyle: { kind: 'stoop' | 'stand' | 'jump'; flick: number; turn: number } = { kind: 'stand', flick: 0, turn: 0 };
+  private headerStyle: { kind: 'stoop' | 'stand' | 'jump' | 'dive'; flick: number; turn: number } = { kind: 'stand', flick: 0, turn: 0 };
+  /** Forward shift of the whole body (m) for poses that pivot far from the feet (overhead kicks, diving headers). */
+  bodyShift = 0;
+  /** After an overhead kick, scissor volley or diving header: lands this way and gets up (the fall plays on). */
+  private landAfter: { dir: FallDir; action: string } | null = null;
+  /** Backpedalling / side-stepping weight (RealPlayerModel poses the legs from the solver while it shows). */
+  moveW = 0;
+  /** The backpedalling part of moveW (realistic players play a captured backwards walk for it). */
+  backW = 0;
+  private moveDir: 1 | -1 = 1;
+  /** Star block or foot save, picked when the dive starts (null: the full dive). */
+  quickSave: QuickSave | null = null;
+  private quickSide = 1;
+  /** Set by the renderer: this player is injured and down ('down'), being treated ('treat') or limping ('limp', 0..1 strength). */
+  injury: { stage: 'down' | 'treat'; t: number } | null = null;
+  limp = 0;
+  /** Off the ground this frame (planted-feet IK must let go). */
+  get airborne() { return this.bodyShift !== 0 || (this.gesture?.kind === 'hurdle') || !!this.injury; }
   meshes: THREE.Mesh[] = [];
 
   /** `headless` builds no meshes: only the pose solver runs (used by RealPlayerModel). */
@@ -278,6 +299,19 @@ export class PlayerModel {
       L[SLZ] = lerp(L[SLZ], 0.45, j);
       L[SRZ] = lerp(L[SRZ], -0.45, j);
     }
+    // Backpedalling and side-stepping (20 Nov 2026): short steps backwards, or a side-on shuffle
+    // with the feet never crossing, instead of a forward run played in reverse.
+    const md = moveDirFor(p.facing, p.vel.x, p.vel.z);
+    const mvWant = p.action.type === 'none' && !this.dribbling && !p.jockeying && !this.injury ? Math.max(md.back, md.side) : 0;
+    this.moveW = lerp(this.moveW, mvWant, 1 - Math.exp(-dt * 10));
+    this.backW = lerp(this.backW, mvWant > 0 && md.back >= md.side ? md.back : 0, 1 - Math.exp(-dt * 10));
+    if (md.side > 0.05) this.moveDir = md.dir;
+    if (this.moveW > 0.01) {
+      const M = this.movePose;
+      M.set(L);
+      if (md.back >= md.side) backpedalPose(M, ph, r); else sidestepPose(M, ph, r, this.moveDir);
+      for (let i = 0; i < CH; i++) L[i] = lerp(L[i], M[i], this.moveW);
+    }
     if (this.dribbling && !keeper) {
       // Ball at the feet: shorter, looser arm swing held a little out from the body for balance,
       // chest over the ball and eyes down.
@@ -292,6 +326,8 @@ export class PlayerModel {
       L[SLX] *= 1 - 0.35 * k; L[SRX] *= 1 - 0.35 * k; L[ELX] *= 1 - 0.2 * k; L[ERX] *= 1 - 0.2 * k;
       L[SPX] += 0.08 * k; L[NKX] += 0.12 * k;
     }
+    // Limping after a knock (render/moves7.ts limpPose).
+    if (this.limp > 0.01 && speed > 0.3) limpPose(L, ph, this.limp);
     // Resting while the ball is dead or far away: bent over with hands on knees, or hands on hips.
     const restWant = this.resting && this.tired > 0.3 && speed < 0.35 && p.action.type === 'none' && !ballHeldByMe && !this.holdThrow && !keeper ? 1 : 0;
     if (restWant && this.restW < 0.02) this.restKind = this.tired > 0.5 && this.id % 3 !== 0 ? 'knees' : 'breathe';
@@ -333,6 +369,13 @@ export class PlayerModel {
     this.prevActT = a.t;
     if (this.fallFrom && (this.fallFrom.ttl -= dt) <= 0) this.fallFrom = null;
     if (started) this.actionStarted(p, ballPos);
+    this.bodyShift = 0;
+    // An overhead kick, scissor volley or diving header ends on the grass: the fall plays on from there.
+    if (this.landAfter && a.type !== this.landAfter.action) {
+      if (a.type === 'none' || a.type === 'stumble') this.fall = { dir: this.landAfter.dir, t: FALL.stagger + FALL.drop };
+      this.landAfter = null;
+    }
+    if (this.quickSave && a.type !== 'dive' && a.type !== 'down') this.quickSave = null;
     if (a.type === 'kick' && !this.kickRefined && a.t >= (a.windup ?? (a.kind === 'shot' ? PLAYER.shotWindup : PLAYER.kickWindup))) this.refineKick(p, ballPos, this.ballVel.x, this.ballVel.z);
     // A fall plays on after the simulation lets the player go (lying, then getting up), faster if he has to move.
     if (this.fall) {
@@ -342,10 +385,13 @@ export class PlayerModel {
         if (this.fall.t >= FALL_TOTAL) this.fall = null;
       }
     }
-    if (a.type === 'header' && (this.prevHeader !== a || a.t < 0.02)) {
+    // A new header (views can hand over a fresh action object every frame, so go by its clock):
+    // the style is picked once, at contact, and kept to the end (a diving header stays a dive).
+    if (a.type === 'header') {
+      if (this.prevHeaderT < 0 || a.t < this.prevHeaderT - 1e-4 || (a.t < 0.02 && this.prevHeader !== a)) this.headerStyle = headerStyleFor(p, ballPos, this.ballVel);
       this.prevHeader = a;
-      this.headerStyle = headerStyleFor(p, ballPos, this.ballVel);
-    }
+      this.prevHeaderT = a.t;
+    } else this.prevHeaderT = -1;
     if (a.type === 'none' && this.holdThrow) {
       // Throw-in: ball held behind the head in both hands, one foot in front of the other.
       target = 1;
@@ -390,6 +436,16 @@ export class PlayerModel {
             // Outside of the boot: the leg swings across, the foot turned in, and out through the ball.
             const f = ease(clamp01((t - w) / 0.2));
             X[HRZ] = t < w ? 0.15 * ease(clamp01(t / w)) : lerp(0.15, -0.4, f);
+          } else if (fl === 'overhead') {
+            // Overhead kick (render/moves7.ts): held to the end of the action, then down onto the back.
+            this.bodyShift = overheadPose(X, t, w);
+            this.landAfter = { dir: 'back', action: 'kick' };
+            target = 1;
+          } else if (fl === 'scissor') {
+            const sd = this.kickFlavour.side ?? 1;
+            scissorPose(X, t, w, sd);
+            this.landAfter = { dir: sd > 0 ? 'right' : 'left', action: 'kick' };
+            target = 1;
           }
           break;
         }
@@ -447,10 +503,22 @@ export class PlayerModel {
           break;
         }
         case 'down': {
+          if (this.quickSave === 'star') {
+            // Up on the knees after a star block, ready to go again.
+            X[BY] = -0.45; X[HLX] = -0.2; X[HRX] = -0.2; X[KLX] = 1.6; X[KRX] = 1.6; X[SPX] = 0.25;
+            X[SLX] = -0.8; X[SRX] = -0.8; X[SLZ] = 0.4; X[SRZ] = -0.4; X[ELX] = -0.6; X[ERX] = -0.6;
+            break;
+          }
           X[BRZ] = this.lastRoll; X[BY] = 0.18; X[SLX] = -2.6; X[SRX] = -2.6; X[HLX] = -0.2; X[HRX] = -0.1;
           break;
         }
         case 'dive': {
+          if (this.quickSave) {
+            // Star block or foot save (render/moves7.ts); lying the other way after a foot save.
+            quickSavePose(X, this.quickSave, t, this.quickSide);
+            this.lastRoll = this.quickSave === 'foot' ? 1.2 * this.quickSide : 0;
+            break;
+          }
           const k = ease(clamp01(t / 0.3));
           let side = 1, hgt = 0.8;
           if (a.target) {
@@ -493,7 +561,11 @@ export class PlayerModel {
           const snap = ease(clamp01(t / 0.12)); // head driven through the ball
           const rec = ease(clamp01((u - 0.45) / 0.55)); // back to running
           const nod = lerp(0.35, -0.35, hs.flick);
-          if (hs.kind === 'stoop') {
+          if (hs.kind === 'dive') {
+            // Flat out at a low cross, then down on the chest (render/moves7.ts).
+            this.bodyShift = divingHeaderPose(X, u);
+            this.landAfter = { dir: 'forward', action: 'header' };
+          } else if (hs.kind === 'stoop') {
             const k = 1 - rec;
             X[BRX] = 0.3 * k; X[BY] = -0.12 * k; X[SPX] = 0.35 * k;
             X[HLX] = -0.55 * k; X[KLX] = 0.75 * k; X[HRX] = 0.35 * k; X[KRX] = 0.35 * k;
@@ -575,6 +647,35 @@ export class PlayerModel {
             // Sole on the ball, rolling it back while the body turns.
             X[HRX] = -0.35 * s; X[KRX] = 0.25; X[SPX] = -0.15 * s; X[BY] = -0.05 * s;
             X[SLZ] = 0.45; X[SRZ] = -0.45;
+          } else if (a.skill === 'chop') {
+            // Planted on the outside foot, the other boot chops across the ball; body leans into the new line.
+            const side = a.side ?? 1;
+            X[BRZ] = 0.28 * side * s; X[BY] = -0.1 * s; X[SPX] = 0.22 * s;
+            X[HRX] = -0.4 * s; X[HRZ] = -0.45 * side * s; X[KRX] = 0.55 * s; X[HLX] = 0.25 * s; X[KLX] = 0.7 * s;
+            X[SLZ] = 0.55 + 0.5 * s; X[SRZ] = -0.55 - 0.5 * s; X[ELX] = -0.4; X[ERX] = -0.4;
+          } else if (a.skill === 'cutback') {
+            // Brakes, leans back and drags the ball back across with the inside of the boot, turning with it.
+            const side = a.side ?? 1;
+            X[SPX] = -0.2 * s + 0.2 * clamp01(t / a.dur); X[BY] = -0.12 * s; X[BRZ] = 0.18 * side * s;
+            X[HRX] = -0.55 * s; X[HRZ] = 0.4 * side * s; X[KRX] = 0.45 * s; X[HLX] = 0.3 * s; X[KLX] = 0.8 * s;
+            X[SLZ] = 0.7 + 0.4 * s; X[SRZ] = -0.7 - 0.4 * s; X[ELX] = -0.35; X[ERX] = -0.35;
+          } else if (a.skill === 'solestop') {
+            // Sole planted on top of the ball, leaning back against the run.
+            X[HRX] = -0.5 * s; X[KRX] = 0.55 * s; X[SPX] = -0.18 * s; X[BY] = -0.06 * s;
+            X[HLX] = 0.15 * s; X[KLX] = 0.45 * s; X[SLZ] = 0.5 + 0.2 * s; X[SRZ] = -0.5 - 0.2 * s;
+          } else if (a.skill === 'flickup' || a.skill === 'juggle') {
+            // Toe under the ball and up: a keepy-up off alternate feet, arms out for balance, eyes on the ball.
+            const right = (a.side ?? 1) > 0;
+            const k = Math.sin(Math.PI * clamp01(t / Math.min(a.dur, 0.3)));
+            if (right) { X[HRX] = -0.75 * k; X[KRX] = 0.95 * k; } else { X[HLX] = -0.75 * k; X[KLX] = 0.95 * k; }
+            X[SLZ] = 0.6; X[SRZ] = -0.6; X[ELX] = -0.3; X[ERX] = -0.3; X[NKX] = 0.35; X[SPX] = 0.05;
+          } else if (a.skill === 'bodyfeint' || a.skill === 'berba' || a.skill === 'mcgeady') {
+            skill7Pose(X, a.skill, clamp01(t / a.dur), a.side ?? 1);
+          } else if (a.skill === 'flickover') {
+            // Heel flicks up behind, lifting the ball over the defender (a rainbow), then away.
+            const k = Math.sin(Math.PI * clamp01(t / 0.3));
+            X[HRX] = 0.45 * k; X[KRX] = 1.6 * k; X[SPX] = 0.18 * k; X[HLX] = -0.1 * k;
+            X[SLZ] = 0.6 * k + 0.2; X[SRZ] = -0.6 * k - 0.2; X[NKX] = -0.2 * k;
           } else {
             // Knock-on: a long push with the outside of the foot, then away.
             X[HRX] = -0.8 * s; X[KRX] = 0.3; X[SPX] = 0.3; X[SLX] = 0.5; X[SRX] = -0.5;
@@ -594,6 +695,13 @@ export class PlayerModel {
       X.set(L);
       fallPose(X, this.fall.dir, this.fall.t);
       this.overlay = true;
+    }
+    // Injured and down (render/moves7.ts): holding the leg, sitting up while the physio treats him.
+    if (this.injury) {
+      target = 1;
+      injuredPose(X, time + this.id, this.injury.stage === 'treat' ? clamp01(this.injury.t / 1.6) * 0.85 : 0);
+      this.overlay = true;
+      this.fall = null;
     }
     // Goalkeeper handling: hands up to meet the ball, the catch itself, standing parries.
     this.gkLayer = false;
@@ -639,10 +747,24 @@ export class PlayerModel {
       const dx = h ? h.x - p.pos.x : Math.cos(p.facing), dz = h ? h.z - p.pos.z : Math.sin(p.facing);
       this.kickFlavour = this.pickFlavour(p, ballPos, relAngle(p.facing, dx, dz));
     }
+    if (a.type === 'dive') {
+      // Up close a keeper spreads himself; a low ball just out of reach gets a foot (render/moves7.ts).
+      this.quickSave = null;
+      if (a.target) {
+        const fx = Math.cos(p.facing), fz = Math.sin(p.facing);
+        const lx = a.target.x - p.pos.x, lz = a.target.z - p.pos.z;
+        const left = lx * fz - lz * fx; // + to the keeper's left (the model's local +x)
+        this.quickSide = left >= 0 ? 1 : -1;
+        this.quickSave = quickSaveFor(Math.hypot(ballPos.x - p.pos.x, ballPos.z - p.pos.z), Math.abs(left), a.target.y);
+      }
+    }
   }
 
-  private pickFlavour(p: ViewPlayer, ballPos: THREE.Vector3, angle: number) {
+  private pickFlavour(p: ViewPlayer, ballPos: THREE.Vector3, angle: number): { flavour: KickFlavour | null; foot?: 1 | -1; side?: 1 | -1 } {
     const a = p.action;
+    // Off the ground: an overhead kick or a scissor volley (render/moves7.ts); the body falls away from the ball's way.
+    const air = airKickFor(ballPos.y, angle);
+    if (air) return { flavour: air, side: angle > 0 ? 1 : -1 };
     const gx = Math.sign(p.pos.x || 1) * PITCH_HALF;
     return kickFlavourFor({
       kind: a.kind, angle, strong: footProfile(p.def).foot === 1 ? 1 : -1,
@@ -658,8 +780,9 @@ export class PlayerModel {
     if (Math.hypot(bvx, bvz) < 2) return;
     const was = this.kickFlavour.flavour;
     const now = this.pickFlavour(p, ballPos, relAngle(p.facing, bvx, bvz));
-    // Only switch to or from a backheel (the others read the same either way at the strike).
-    if ((now.flavour === 'backheel') !== (was === 'backheel')) this.kickFlavour = now;
+    // Only switch to or from a backheel or an air kick (the others read the same either way at the strike).
+    const special = (f: KickFlavour | null | undefined) => f === 'backheel' || f === 'overhead' || f === 'scissor';
+    if ((special(now.flavour) || special(was)) && now.flavour !== was) this.kickFlavour = now;
   }
 
   /** Where the ball sits while held overhead for a throw-in (and until it leaves the hands). */
@@ -727,7 +850,9 @@ export class PlayerModel {
       if (u >= 1 || a.type === 'dive') this.parry = null;
       else {
         if (a.type === 'none') X.set(L);
-        parryPose(X, this.parry.y, u, 1);
+        // A high ball is punched clear with both fists; anything lower is pushed away with the palms.
+        if (this.parry.y > 1.75 && a.type === 'none') punchPose(X, this.parry.y, u);
+        else parryPose(X, this.parry.y, u, 1);
         this.gkLayer = true;
         return 1;
       }
@@ -759,6 +884,7 @@ export class PlayerModel {
   private lastAction: ViewPlayer['action'] | null = null;
   private keeper = false;
   private prevHeader: unknown = null;
+  private prevHeaderT = -1;
   /** Header style chosen at contact (exposed for RealPlayerModel). */
   get header() { return this.headerStyle; }
   private lastRoll = 1.3;
@@ -783,6 +909,7 @@ export class PlayerModel {
   private apply() {
     const P = this.pose;
     this.body.position.y = P[BY];
+    this.body.position.z = this.bodyShift * this.actW;
     this.body.rotation.z = P[BRZ];
     this.body.rotation.x = P[BRX];
     this.spine.rotation.x = P[SPX];

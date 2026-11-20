@@ -74,6 +74,30 @@ export class MatchExtras {
   }
 
   /** Builds the targets for a skill game (once per match). */
+  /** Ball control drill gate: two cones and a line on the grass between them (built on first use). */
+  private gate: THREE.Group | null = null;
+  private gateLine: THREE.Mesh | null = null;
+  private gateMat: THREE.MeshBasicMaterial | null = null;
+  private ensureGate(): THREE.Group {
+    if (this.gate) return this.gate;
+    const g = new THREE.Group();
+    g.name = 'drill-gate';
+    const cone = new THREE.ConeGeometry(0.22, 0.6, 18);
+    cone.translate(0, 0.3, 0);
+    const cm = new THREE.MeshStandardMaterial({ color: 0xff7a1a, roughness: 0.6 });
+    for (const s of [-1, 1]) { const c = new THREE.Mesh(cone, cm); c.position.set(s, 0, 0); c.name = s < 0 ? 'cone-a' : 'cone-b'; c.castShadow = true; g.add(c); }
+    this.gateMat = new THREE.MeshBasicMaterial({ color: 0xffe14a, transparent: true, opacity: 0.55, depthWrite: false });
+    const line = new THREE.Mesh(new THREE.PlaneGeometry(1, 0.12), this.gateMat);
+    line.rotation.x = -Math.PI / 2;
+    line.position.y = 0.02;
+    g.add(line);
+    this.gateLine = line;
+    g.visible = false;
+    this.group.add(g);
+    this.gate = g;
+    return g;
+  }
+
   private ensureTargets(n: number) {
     while (this.targets.length < n) {
       const mat = new THREE.MeshBasicMaterial({ color: 0xffd23a, transparent: true, opacity: 0.92, side: THREE.DoubleSide });
@@ -110,6 +134,20 @@ export class MatchExtras {
       });
       for (let i = sk.targets.length; i < this.targets.length; i++) this.targets[i].visible = false;
     } else for (const m of this.targets) m.visible = false;
+
+    // Ball control drill: the gate to dribble through.
+    const gt = sk?.gate;
+    if (gt || this.gate) {
+      const g = this.ensureGate();
+      g.visible = !!gt;
+      if (gt) {
+        g.position.set(gt.x, 0, gt.z);
+        g.rotation.y = -Math.atan2(gt.az, gt.ax);
+        g.children[0].position.x = -gt.w; g.children[1].position.x = gt.w;
+        this.gateLine!.scale.x = gt.w * 2;
+        this.gateMat!.opacity = 0.4 + 0.25 * Math.sin(this.t * 5);
+      }
+    }
 
     // Injury treatment.
     const j = view.injury;

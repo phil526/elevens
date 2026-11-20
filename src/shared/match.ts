@@ -2,14 +2,14 @@
 // on the multiplayer server and in headless tests. Clients only ever feed it
 // InputFrames (intentions); everything else is decided here.
 
-import { ADAPTIVE, BALL, DIFFICULTY, GAME_PLANS, MATCH, PITCH, PLAYER, SIM, adaptiveParams, halfLength, halfStart, type DifficultyParams, type GamePlan, type Half } from './config';
+import { ADAPTIVE, BALL, BALLCTL, DIFFICULTY, GAME_PLANS, MATCH, PITCH, PLAYER, SIM, adaptiveParams, halfLength, halfStart, type DifficultyParams, type GamePlan, type Half } from './config';
 import { predictGoalLine, setBallEnv, stepBall, type BallEnv } from './ball';
 import { cleanWeather, weatherEnv, weatherPlay, type MatchWeather, type WeatherPlay } from './weather';
 import type { Crossing } from './ball';
 import { aimFromInput, clampToPitch, throughPlan, STRIDE, kickWindup, handWindup, HAND_FOLLOW, pressureOn, selectReceiver, wantedDistance, SEMI_PASS_ANGLE, solveGroundPass, solveLob, solveShot, leadTarget, timingAccuracy, timingRing, solveCross, crossTarget, inCrossZone } from './kick';
 import { humanHelp, type KickContext, type StridePlan } from './kick';
-import { angleOf, clamp, dist, dirOf, norm, wrapAngle } from './math';
-import { DRIBBLE_TURN, jogSpeed, stepMovement } from './movement';
+import { angleOf, clamp, dist, dirOf, norm, turnTowards, wrapAngle } from './math';
+import { carrierMove, jogSpeed, stepMovement } from './movement';
 import { Rng } from './rng';
 import { benchFor, footProfile, teamById, TEAMS } from './teams';
 import type { PlayerDef, TeamDef } from './teams';
@@ -27,13 +27,15 @@ import { LINK, armSetPiece, linkKey, linkLevel, shotBlockLunges } from './ai/mat
 import { TEAMMATE_ON } from './ai/team';
 import { landingPoint } from './ball';
 import { callForBall } from './pro';
-import { newSkillState, skillCrossing, skillSpot, skillWoodwork, type SkillState } from './skillgames';
+import { newSkillState, skillCrossing, skillSpot, skillWoodwork, type SkillGame, type SkillState } from './skillgames';
+import { controlDrillEvent, controlDrillOut, controlDrillWishes, setupControlDrill, stepControlDrill, type ControlDrillState } from './controldrill';
 import { maybeInjure, stepInjury, type Injury } from './injury';
 import { chooseDistribution, distributionFor, distributionRequest, pickDistribution, type Distribution } from './ai/distribution';
 import { aerialWin, holdOffChance, strengthOf, DUEL } from './physical';
 import { Momentum, MOMENTUM } from './momentum';
 import { manualShotAim } from './kick';
-import { G6 } from './switches';
+import { BC, G6 } from './switches';
+import { closeDribble, heavyChance, humanCarrierInput, isJuggle, placeBallForSkill, startFlick, stepBallSkill, touchAway } from './ballcontrol';
 
 export interface Control {
   human: boolean; // false => the whole team is AI (offline AI side, or a disconnected online player)
@@ -105,7 +107,7 @@ export const defaultConfig = (over: Partial<MatchConfig> = {}): MatchConfig => (
 
 const isLocked = (c: Control) => (c.lock ?? -1) >= 0;
 
-const emptyInput = (): InputFrame => ({ seq: 0, mx: 0, mz: 0, sprint: false, jockey: false, ev: [] });
+const emptyInput = (): InputFrame => ({ seq: 0, mx: 0, mz: 0, sprint: false, jockey: false, close: false, ev: [] });
 
 const KICK_STATES: KickKind[] = ['pass', 'through', 'lob', 'cross', 'throw'];
 
@@ -140,6 +142,17 @@ export function skill6Ball(p: Player, a: Player['action']): V2 {
   const g = dirOf(p.facing);
   return { x: g.x * 0.36, z: g.z * 0.36 };
 }
+
+/**
+ * Overhead kicks and diving headers (20 Nov 2026), both from a shot pressed by a human as the ball arrives.
+ * Overhead: ball 1.6-2.25 m up and the player's facing pointing back towards his own goal (x
+ * component against the attack under backToGoal); error x overheadError on top of a volley's.
+ * Diving header: a low cross (diveLow-diveHigh m) met at diveSpeed m/s or more within diveRange m of the goal line.
+ */
+export const AERIAL7 = { overhead: true, overheadMax: 2.25, backToGoal: -0.25, overheadError: 1.3, divingHeader: true, diveLow: 0.45, diveHigh: 1.15, diveSpeed: 3.4, diveRange: 22, diveTime: 0.7 } as const;
+
+/** Body feint, Berba spin and McGeady spin (20 Nov 2026): durations (s), the share of a feint spent selling it, and how fast a carrier must be going to drop the shoulder. */
+export const SKILL7 = { time: { bodyfeint: 0.36, berba: 0.62, mcgeady: 0.56 } as Record<'bodyfeint' | 'berba' | 'mcgeady', number>, feintSell: 0.42, feintSpeed: 4.6 } as const;
 
 /** Free kicks with bend and dip (19 Nov 2026): how fast the stick changes them (per second at full stick). */
 export const FREEKICK = { bendRate: 1.5 } as const;
@@ -186,6 +199,14 @@ export class Match {
   events: MatchEvent[] = [];
   /** A steered first touch in progress: the dribble leaves the ball alone until `until`. */
   firstTouch = { pid: -1, until: 0 };
+  /** Ball control (19 Nov 2026): human carriers holding close control this tick. */
+  closeIds = new Set<number>();
+  /** After a sole stop: until when pushing the stick sets off with a burst, by player id. */
+  soleGo = new Map<number, number>();
+  /** When each player may chop again (sim time), by player id. */
+  chopCd = new Map<number, number>();
+  /** A ball flicked over a defender: the flicker leaves it until it drops below waist height (or `until`). */
+  flickOver = { pid: -1, until: 0 };
   ctrl: [Control, Control];
   /**
    * Co-op (local multiplayer): a second human on a team, or null. While its input is handled it is
@@ -284,7 +305,7 @@ export class Match {
       human: true, pid: t * 11 + 10, input: emptyInput(), next: -1, autoSwitch: cfg.autoSwitch[t], quickRestarts: cfg.quickRestarts?.[t] ?? true, lastAutoSwitch: -10, lastSeq: 0, prevSprint: false,
     } : null)) as [Control | null, Control | null];
     this.bench = [benchFor(this.teams[0]), benchFor(this.teams[1])];
-    if (cfg.practice === 'crossbar' || cfg.practice === 'targets') this.skill = newSkillState(cfg.practice);
+    if (cfg.practice === 'crossbar' || cfg.practice === 'targets' || cfg.practice === 'control') this.skill = newSkillState(cfg.practice);
     this.setAdaptive(cfg.adaptiveStart ?? ADAPTIVE.start);
     this.firstKickoff = this.rng.chance(0.5) ? 0 : 1;
     this.startKickoff(this.firstKickoff);
@@ -404,6 +425,7 @@ export class Match {
   emit(type: MatchEventType, data: Partial<MatchEvent> = {}) {
     this.events.push({ id: ++this.eventId, type, tick: this.tick, ...data });
     this.momentumFrom(type, data);
+    if (this.ctlDrill) controlDrillEvent(this, this.ctlDrill, type, data.text, data.player);
   }
 
   /** Momentum: shots, saves, corners, goals, tackles and the woodwork swing it towards the side on top. */
@@ -468,15 +490,17 @@ export class Match {
     if (!c.human) return;
     const m = Math.hypot(f.mx, f.mz);
     const k = m > 1 ? 1 / m : 1;
-    c.input = { seq: f.seq, mx: (f.mx || 0) * k, mz: (f.mz || 0) * k, sprint: !!f.sprint, jockey: !!f.jockey, contain: !!f.contain, ev: [] };
+    c.input = { seq: f.seq, mx: (f.mx || 0) * k, mz: (f.mz || 0) * k, sprint: !!f.sprint, jockey: !!f.jockey, contain: !!f.contain, close: !!f.close, ev: [] };
     c.lastSeq = f.seq;
     for (const e of f.ev.slice(0, 4)) {
       // A game plan change applies at once, whatever is happening (restarts included).
       if (e.k === 'plan') { this.setPlan(team, GAME_PLANS[clamp(Math.round((Number(e.p) || 0) * 4), 0, 4)]); continue; }
       if (e.k === 'instr') { const n = clamp(Math.round((Number(e.p) || 0) * 32), 0, 32); this.setInstruction(team, Math.floor(n / 3), (n % 3) - 1); continue; }
       const ev: InputEvent = { k: e.k, p: clamp(Number(e.p) || 0, 0, 1), m: !!e.m };
-      if (e.k === 'shoot' && (e.v === 'chip' || e.v === 'low')) ev.v = e.v;
-      if (e.k === 'skill' && e.v === 'fake') ev.v = 'fake';
+      // Shot styles (placed and power were dropped here until 19 Nov 2026, so they played as normal and finesse shots).
+      if (e.k === 'shoot' && (e.v === 'chip' || e.v === 'low' || e.v === 'placed' || e.v === 'power')) ev.v = e.v;
+      if (e.k === 'shoot' && e.a === 2) ev.a = 2;
+      if (e.k === 'skill' && (e.v === 'fake' || e.v === 'flick')) ev.v = e.v;
       if ((e.k === 'pass' || e.k === 'through' || e.k === 'lob') && Number.isInteger(e.r) && e.r! >= 0 && e.r! < this.players.length) ev.r = e.r;
       if ((e.k === 'pass' || e.k === 'through' || e.k === 'lob') && (e.a === 1 || e.a === 2)) ev.a = e.a;
       if (Number.isFinite(e.x) && Number.isFinite(e.z)) { ev.x = clamp(e.x!, -80, 80); ev.z = clamp(e.z!, -80, 80); ev.at = !!e.at; }
@@ -941,11 +965,13 @@ export class Match {
 
   private drillRestart: Restart | null = null;
   private drillT = 0;
-  /** Practice: the set piece on repeat, or null for open play and normal matches. */
-  get drill(): 'freekick' | 'penalty' | 'crosses' | 'crossbar' | 'targets' | null {
+  /** Practice: the set piece on repeat (or the ball control drill), or null for open play and normal matches. */
+  get drill(): 'freekick' | 'penalty' | 'crosses' | 'crossbar' | 'targets' | 'control' | null {
     const p = this.cfg.practice;
-    return p === 'freekick' || p === 'penalty' || p === 'crosses' || p === 'crossbar' || p === 'targets' ? p : null;
+    return p === 'freekick' || p === 'penalty' || p === 'crosses' || p === 'crossbar' || p === 'targets' || p === 'control' ? p : null;
   }
+  /** The ball control drill in progress (Practice > Ball control drill), or null. */
+  ctlDrill: ControlDrillState | null = null;
   /** Attempts started in this practice session (a challenge ends after cfg.challenge of them). */
   drillAttempts = 0;
 
@@ -990,6 +1016,11 @@ export class Match {
 
   /** Set up the next attempt: everyone placed at once, the ball on a new spot (free kicks vary). */
   nextDrill() {
+    if (this.drill === 'control') {
+      // One continuous 60-second drill: set it up once.
+      if (!this.ctlDrill) { this.drillAttempts = 1; this.ctlDrill = setupControlDrill(this); }
+      return;
+    }
     if (this.cfg.challenge && this.drillAttempts >= this.cfg.challenge) {
       // Challenge over: the score is the goals from the attempts.
       if ((this.phase as string) === 'fulltime') return;
@@ -1011,7 +1042,7 @@ export class Match {
     if (this.skill) {
       // Skill games: the striker alone with the goal (and no keeper).
       this.skill.done = false;
-      spot = skillSpot(this.skill.game, dir, () => this.rng.next());
+      spot = skillSpot(this.skill.game as SkillGame, dir, () => this.rng.next());
       for (const p of this.players) { p.off = !(p.team === 0 && p.role === 'ST'); if (p.off) p.pos = { x: 0, z: (p.team ? 1 : -1) * 60 }; }
     } else if (this.drill === 'penalty') spot = { x: dir * (PITCH.halfLength - PITCH.penaltySpot), z: 0 };
     else spot = { x: dir * (PITCH.halfLength - this.rng.range(17, 30)), z: this.rng.range(-17, 17) };
@@ -1028,7 +1059,18 @@ export class Match {
 
   /** The attempt is over once it is saved and held, out of play, or has run for a few seconds. */
   private stepDrill(dt: number) {
-    if (this.phase === 'kickoff') { this.nextDrill(); return; }
+    if (this.phase === 'kickoff' && !this.ctlDrill) { this.nextDrill(); return; }
+    if (this.ctlDrill) {
+      if ((this.phase as string) === 'fulltime') return;
+      if (stepControlDrill(this, this.ctlDrill, dt)) {
+        // Time up: the points are the score.
+        this.ball.state = 'dead'; this.ball.owner = -1;
+        this.phase = 'fulltime'; this.phaseT = 0;
+        this.emit('whistle', { power: 3, text: 'fulltime' });
+        this.emit('fulltime', { team: 0, power: this.score[0], text: 'challenge' });
+      }
+      return;
+    }
     if (this.phase === 'restart') {
       if (this.restart !== this.drillRestart && this.phaseT > 1.2) this.nextDrill();
       return;
@@ -1461,6 +1503,7 @@ export class Match {
     this.processHumanInput();
     this.updateContain();
     updateAI(this, dt);
+    if (this.ctlDrill) controlDrillWishes(this, this.ctlDrill);
     this.stepActions(dt);
     this.moveAll(dt);
     if (this.phase !== 'play') return; // a foul during actions may have stopped play
@@ -1477,6 +1520,7 @@ export class Match {
   }
 
   private processHumanInput() {
+    this.closeIds.clear();
     for (const team of [0, 1] as TeamIndex[]) {
       if (this.ctrl[team].human) this.processHumanFor(team);
       // Co-op: the second human on the team, handled with their control swapped in.
@@ -1540,7 +1584,11 @@ export class Match {
       const o = this.nearestOpponent(p, 4.5);
       if (o) face = angleOf(p.pos.x - o.pos.x, p.pos.z - o.pos.z);
     }
+    // Close control (19 Nov 2026): small, slow touches with the ball glued to the boot.
+    const close = BC.close && ownsBall && !!inp.close && this.ball.state === 'dribble' && !p.shielding && p.role !== 'GK';
+    if (close) { this.closeIds.add(p.id); mode = 'jog'; }
     p.wish = { x: inp.mx, z: inp.mz, mode, face };
+    if (ownsBall && this.ball.state === 'dribble') humanCarrierInput(this, p, inp, m, close);
     // Dummy: holding shield as a teammate's pass arrives lets it run on to the next teammate behind.
     if (inp.jockey && !p.queued && this.ball.state === 'flight' && this.ball.receiver === p.id && this.ball.lastTouchTeam === team && this.ball.kicker !== p.id) {
       const q = this.dummyTarget(p);
@@ -1766,7 +1814,7 @@ export class Match {
     if (e.k === 'skill') {
       if (this.ball.owner === p.id && this.ball.state === 'dribble') {
         const sx = e.x ?? dir.x, sz = e.z ?? dir.z;
-        this.startSkill(p, sx, sz, e.v === 'fake', !!e.m);
+        this.startSkill(p, sx, sz, e.v === 'fake', !!e.m, e.v === 'flick');
       } else if (p.role === 'GK') this.leaveKeeper(p.team);
       else if (this.possessionTeam() !== p.team || this.ball.state === 'held') this.takeKeeper(p.team);
       return;
@@ -1794,6 +1842,16 @@ export class Match {
       return;
     }
     const style = kickStyle(e);
+    if (this.ball.owner === p.id && isJuggle(p.action)) {
+      // Juggling: shoot volleys it from the air; a pass, through ball or lob is played off the bounce.
+      const b = this.ball;
+      if (kind === 'shot' && b.pos.y > 0.3) {
+        p.queued = { kind, dir: { ...dir }, power: e.p ?? 0.5, ...style, until: this.time + 0.3 };
+        this.volley(p, b.pos.y);
+        return;
+      }
+      p.action = { type: 'none', t: 0, dur: 0 };
+    }
     if (this.ball.owner === p.id) {
       // Early receiver: the teammate picked when the button went down (still on the pitch).
       const lr = e.r !== undefined ? this.players[e.r] : null;
@@ -1981,9 +2039,11 @@ export class Match {
    * back a drag-back that turns away, and sideways a ball roll under the sole across the body.
    * Pressing skill again late in a step-over chains a second one the other way.
    */
-  startSkill(p: Player, dx: number, dz: number, fake = false, mod = false): SkillMove | null {
+  startSkill(p: Player, dx: number, dz: number, fake = false, mod = false, flick = false): SkillMove | null {
     const b = this.ball;
     if (b.owner !== p.id || b.state !== 'dribble') return null;
+    // Close control + skill: flick it up, juggle it, or flick it over a defender (ballcontrol.ts).
+    if (flick || isJuggle(p.action)) return startFlick(this, p, dx, dz);
     const cur = p.action;
     const chain = cur.type === 'skill' && cur.skill === 'stepover' && !fake && !mod && cur.t > 0.2 && (cur.chain ?? 0) < 2;
     if (!chain && (p.action.type !== 'none' || p.skillCd > 0)) return null;
@@ -1995,12 +2055,16 @@ export class Match {
     let side = 1;
     if (fake) move = 'fakeshot';
     else if (chain) move = 'stepover';
-    else if (mod && d && along > 0.55) move = 'elastico';
-    else if (mod && d && along < -0.6) move = 'dragturn';
+    else if (mod && d && along > 0.85) move = 'elastico';
+    else if (mod && d && along > 0.2) move = 'berba';
+    else if (mod && d && along < -0.85) move = 'dragturn';
+    else if (mod && d && along < -0.2) move = 'mcgeady';
     else if (mod) move = 'ballroll';
     else if (d && along > 0.55) move = 'knockon';
     else if (d && along < -0.82) move = 'dragback';
     else if (d && along < -0.25) move = 'roulette';
+    // Sideways at full speed, a human carrier drops the shoulder instead: a quicker body feint (20 Nov 2026).
+    else if (d && Math.abs(along) < 0.55 && Math.hypot(p.vel.x, p.vel.z) > SKILL7.feintSpeed && this.isHumanCarrier(p)) move = 'bodyfeint';
     if (d && Math.abs(f.x * d.z - f.z * d.x) > 0.2) side = f.x * d.z - f.z * d.x >= 0 ? 1 : -1;
     else {
       // No sideways direction: break away from the nearest opponent.
@@ -2031,6 +2095,11 @@ export class Match {
       // Drag it back under the sole and turn right round with it, away from pressure.
       p.vel.x *= 0.3; p.vel.z *= 0.3;
       p.action = { type: 'skill', t: 0, dur: SKILL6.turnTime, skill: move, side, dir: { x: f.x, z: f.z } };
+    } else if (move === 'bodyfeint' || move === 'berba' || move === 'mcgeady') {
+      // Shoulder drop one way and away the other; or a spin on the ball (20 Nov 2026, see stepSkill7).
+      const keep = move === 'bodyfeint' ? 0.85 : move === 'berba' ? 0.5 : 0.35;
+      p.vel.x *= keep; p.vel.z *= keep;
+      p.action = { type: 'skill', t: 0, dur: SKILL7.time[move], skill: move, side, dir: { x: f.x, z: f.z } };
     } else if (move === 'knockon') {
       const k = d ?? f;
       const sp = Math.hypot(p.vel.x, p.vel.z) + 5.5 + 1.5 * p.a.pace;
@@ -2070,9 +2139,9 @@ export class Match {
    * A step-over, roulette or fake shot can wrong-foot opponents in front: they lose their footing for a moment.
    * A set, jockeying defender is much harder to fool; one charging in (or sliding in to block a fake shot) bites.
    */
-  private stepoverFeint(p: Player, move: SkillMove = 'stepover') {
-    const range = move === 'fakeshot' ? 5.5 : move === 'roulette' ? 2.6 : move === 'elastico' ? 3.2 : move === 'ballroll' ? 2.8 : move === 'dragturn' ? 2.4 : 3.5;
-    const cone = move === 'roulette' || move === 'dragturn' ? 1.7 : 1.2;
+  stepoverFeint(p: Player, move: SkillMove = 'stepover') {
+    const range = move === 'fakeshot' ? 5.5 : move === 'roulette' ? 2.6 : move === 'elastico' ? 3.2 : move === 'ballroll' ? 2.8 : move === 'dragturn' ? 2.4 : move === 'flickover' ? 3.8 : move === 'bodyfeint' ? 3.4 : move === 'berba' ? 2.8 : move === 'mcgeady' ? 2.5 : 3.5;
+    const cone = move === 'roulette' || move === 'dragturn' || move === 'berba' || move === 'mcgeady' ? 1.7 : 1.2;
     for (const o of this.teamPlayers(1 - p.team)) {
       if (o.role === 'GK' || o.action.type !== 'none') continue;
       const d = dist(o.pos, p.pos);
@@ -2082,7 +2151,7 @@ export class Match {
       // Closing in fast (towards the carrier) makes a defender easier to beat.
       const closing = ((p.pos.x - o.pos.x) * o.vel.x + (p.pos.z - o.pos.z) * o.vel.z) / Math.max(0.5, d);
       const chained = move === 'stepover' && (p.action.chain ?? 0) > 0 ? 0.06 * (p.action.chain ?? 0) : 0;
-      const base = (move === 'fakeshot' ? 0.25 : move === 'roulette' ? 0.28 : move === 'elastico' ? 0.36 : move === 'ballroll' ? 0.3 : move === 'dragturn' ? 0.24 : 0.3) + chained;
+      const base = (move === 'fakeshot' ? 0.25 : move === 'roulette' ? 0.28 : move === 'elastico' ? 0.36 : move === 'ballroll' ? 0.3 : move === 'dragturn' ? 0.24 : move === 'flickover' ? 0.42 : move === 'bodyfeint' ? 0.32 : move === 'berba' ? 0.33 : move === 'mcgeady' ? 0.27 : 0.3) + chained;
       const set = o.jockeying && o.jockeyT > PLAYER.jockeySetTime;
       const pBeat = clamp(base + 0.5 * p.a.control - 0.3 * o.a.tackling + (set ? -0.25 : o.jockeying ? -0.12 : 0.1) + 0.05 * clamp(closing - 2, 0, 4), 0.06, 0.85);
       if (this.rng.chance(pBeat)) {
@@ -2166,6 +2235,47 @@ export class Match {
     }
   }
 
+  /**
+   * Body feint, Berba spin and McGeady spin (20 Nov 2026), scripted over their duration.
+   * Body feint: a shoulder drop and lean the other way for a beat, then away on the stick's side.
+   * Berba spin: the ball is rolled across the body with one foot and the player spins round it,
+   * coming out diagonally forward on the other side. McGeady spin: the sole drags the ball back as
+   * the player spins half a turn, then away at a right angle to where he was going.
+   */
+  private stepSkill7(p: Player, a: Player['action']) {
+    const f = a.dir!;
+    const s = a.side ?? 1;
+    const u = clamp(a.t / a.dur, 0, 1);
+    const fa = angleOf(f.x, f.z);
+    if (a.skill === 'bodyfeint') {
+      if (u < SKILL7.feintSell) {
+        const o = dirOf(fa - s * 0.5);
+        p.wish = { x: o.x * 0.75, z: o.z * 0.75, mode: 'jog', face: fa };
+      } else {
+        if (!a.resolved) { a.resolved = true; this.stepoverFeint(p, 'bodyfeint'); p.burst = Math.max(p.burst, 0.5); }
+        const br = dirOf(fa + s * 0.8);
+        p.wish = { x: br.x, z: br.z, mode: 'sprint', face: null };
+      }
+      return;
+    }
+    if (a.skill === 'berba') {
+      // A full turn, away from the side the ball goes, while drifting diagonally forward to that side.
+      const k = Math.min(1, u / 0.75);
+      const face = wrapAngle(fa - s * 2 * Math.PI * k);
+      const o = dirOf(fa + s * 0.9);
+      if (u < 0.75) { p.wish = { x: o.x * 0.55, z: o.z * 0.55, mode: 'walk', face }; p.facing = face; }
+      else { const br = dirOf(fa + s * 0.55); p.wish = { x: br.x, z: br.z, mode: 'sprint', face: null }; }
+      if (!a.resolved && u >= 0.5) { a.resolved = true; this.stepoverFeint(p, 'berba'); p.burst = Math.max(p.burst, 0.45); }
+      return;
+    }
+    // McGeady: half a turn towards the break side, the ball pulled back under the sole, then away sideways.
+    const k = Math.min(1, u / 0.6);
+    const face = wrapAngle(fa + s * Math.PI * 0.5 * k);
+    if (u < 0.6) { p.wish = { x: -f.x * 0.15, z: -f.z * 0.15, mode: 'walk', face }; p.facing = face; }
+    else { const br = dirOf(fa + s * Math.PI * 0.5); p.wish = { x: br.x, z: br.z, mode: 'sprint', face: null }; }
+    if (!a.resolved && u >= 0.5) { a.resolved = true; this.stepoverFeint(p, 'mcgeady'); p.burst = Math.max(p.burst, 0.45); }
+  }
+
   /** Scripted facing through a roulette: a full turn, spinning away from the side it rolls to. */
   rouletteFacing(a: Player['action']): number {
     const f = a.dir!;
@@ -2219,7 +2329,9 @@ export class Match {
           if (this.phase !== 'play') return;
         }
       }
-      if (a.type === 'skill') {
+      if (a.type === 'skill' && stepBallSkill(p, dt)) {
+        // Ball-control moves (ballcontrol.ts).
+      } else if (a.type === 'skill') {
         if (a.skill === 'stepover') {
           const f = dirOf(p.facing);
           if (a.t < 0.22) p.wish = { x: f.x * 0.25, z: f.z * 0.25, mode: 'walk', face: p.facing };
@@ -2232,6 +2344,8 @@ export class Match {
           p.wish = { x: 0, z: 0, mode: 'walk', face: angleOf(a.dir!.x, a.dir!.z) };
         } else if (a.skill === 'ballroll' || a.skill === 'elastico' || a.skill === 'dragturn') {
           this.stepSkill6(p, a);
+        } else if (a.skill === 'bodyfeint' || a.skill === 'berba' || a.skill === 'mcgeady') {
+          this.stepSkill7(p, a);
         } else if (a.skill === 'roulette') {
           this.stepRoulette(p, a);
         } else if (a.skill === 'fakeshot') {
@@ -2845,10 +2959,14 @@ export class Match {
       if (p.beaten > 0) { scale *= 0.35; accel = 0.5; }
       // A carrier running at a set, goal-side jockeying defender has to check their stride.
       if (this.ball.owner === p.id && this.ball.state === 'dribble' && this.jockeyedBy(p)) scale *= 0.88;
-      // On the ball at jogging pace, turns are a little tighter (close control).
-      const turn = (this.ball.owner === p.id && w.mode !== 'sprint' ? DRIBBLE_TURN : 1) * this.wplay.turn;
+      // On the ball, turns are tighter, more so for better control and tightest with close control.
+      let mode = w.mode, turn = this.wplay.turn;
+      if (this.ball.owner === p.id) {
+        const cm = carrierMove(p.a, w.mode, this.closeIds.has(p.id));
+        mode = cm.mode; scale *= cm.speed; accel *= cm.accel; turn *= cm.turn;
+      }
       const st0 = p.stamina;
-      stepMovement(p, w.x, w.z, w.mode, dt, w.face, scale * this.wplay.speed, accel * this.wplay.accel, turn);
+      stepMovement(p, w.x, w.z, mode, dt, w.face, scale * this.wplay.speed, accel * this.wplay.accel, turn);
       // The home crowd's lift: the home side's running costs them a little less.
       if (p.stamina < st0) { const k = this.momentum.staminaDrain(p.team); if (k < 1) p.stamina = st0 - (st0 - p.stamina) * k; }
       if (p.action.type === 'skill' && p.action.skill === 'roulette') p.facing = this.rouletteFacing(p.action);
@@ -2991,6 +3109,9 @@ export class Match {
       if (p.touchCooldown > 0 || p.contestCooldown > 0) continue;
       if (b.kickLock > 0 && b.kicker === p.id) continue;
       if (this.dummy.pid === p.id && this.time < this.dummy.until && b.state === 'flight') continue;
+      // A ball flicked over a defender: the flicker lets it drop before he takes it again.
+      if (this.flickOver.pid === p.id && (this.time > this.flickOver.until || b.owner >= 0)) this.flickOver.pid = -1;
+      if (this.flickOver.pid === p.id && b.pos.y > 1.05) continue;
       const at = p.action.type;
       if (at === 'stumble' || at === 'down' || at === 'dive' || at === 'tackle' || at === 'celebrate' || at === 'slide' || at === 'barge') continue;
       if (owner && owner.team === p.team) continue;
@@ -3024,7 +3145,9 @@ export class Match {
       const sep = dist(owner.pos, b.pos) > (this.isHumanCarrier(owner) ? 1.1 : 0.8) ? 0.3 : 0;
       // A jockeying defender is set to nick the ball off a carrier who dribbles into them.
       const jk = p.jockeying ? (p.jockeyT > PLAYER.jockeySetTime ? 0.1 : 0.05) : 0;
-      const pSteal = clamp((0.05 + 0.3 * p.a.tackling - 0.3 * owner.a.control + sep + jk) * (1 - this.shieldBonus(owner, p)), 0.02, 0.6);
+      // Close control keeps it out of reach; a ball juggled in the air is hard to nick without fouling (19 Nov 2026).
+      const bc = (this.closeIds.has(owner.id) ? BALLCTL.closeSteal : 1) * (isJuggle(owner.action) && b.pos.y > 0.45 ? 0.5 : 1);
+      const pSteal = clamp((0.05 + 0.3 * p.a.tackling - 0.3 * owner.a.control + sep + jk) * (1 - this.shieldBonus(owner, p)) * bc, 0.02, 0.6);
       if (this.rng.chance(pSteal)) {
         this.emit('tackle', { player: p.id, team: p.team });
         if (this.rng.chance(0.5)) this.takePossession(p, false);
@@ -3035,10 +3158,23 @@ export class Match {
 
     const fastShot = b.flight === 'shot' && bSpeed > 17;
     // Intended receivers take a dropping ball on the chest; anyone else heads it.
-    const chest = b.receiver === p.id && bestY < 1.9 && b.vel.y <= 0.5;
+    // A human holding close control chests a dropping ball down too, rather than heading it (19 Nov 2026).
+    const chest = (b.receiver === p.id || (BC.chest && this.closeHeld(p))) && bestY < 1.9 && b.vel.y <= 0.5;
     if (bestY > 1.6 && !chest) {
+      // Overhead kick (20 Nov 2026): shoot pressed as a high ball arrives with the player's back to goal.
+      if (AERIAL7.overhead && p.queued?.kind === 'shot' && p.role !== 'GK' && bestY <= AERIAL7.overheadMax && !fastShot && dirOf(p.facing).x * this.attackDir(p.team) < AERIAL7.backToGoal) {
+        if (this.checkOffsideInvolvement(p)) return;
+        this.volley(p, bestY, true);
+        return;
+      }
       // Aerial duel: an opponent going up for the same ball can win it instead.
       this.header(G6.duels ? this.aerialDuel(p, prev) : p);
+      return;
+    }
+    // Diving header (20 Nov 2026): shoot pressed at full tilt as a low cross arrives, near goal.
+    if (AERIAL7.divingHeader && p.queued?.kind === 'shot' && p.role !== 'GK' && !fastShot && b.flight === 'cross' && bestY >= AERIAL7.diveLow && bestY <= AERIAL7.diveHigh
+      && Math.hypot(p.vel.x, p.vel.z) >= AERIAL7.diveSpeed && Math.abs(this.attackDir(p.team) * PITCH.halfLength - p.pos.x) < AERIAL7.diveRange) {
+      this.header(p, true);
       return;
     }
     // A shot pressed as the ball drops to knee-to-chest height: struck on the volley.
@@ -3054,7 +3190,9 @@ export class Match {
     const rel = Math.hypot(b.vel.x - p.vel.x, b.vel.y, b.vel.z - p.vel.z);
     const capacity = 7 + 9 * p.a.control + (this.isHumanCarrier(p) ? 3 : 0);
     const scramble = this.inScramble() ? SCRAMBLE.control : 0;
-    const pClean = clamp(1.15 - Math.max(0, rel - capacity) / 12 - (bestY > PLAYER.controlHeight ? 0.25 : 0) - this.wplay.control - scramble, 0.2, 1);
+    // A human's own man brings a high ball down more surely, the more so with better control (19 Nov 2026).
+    const high = bestY > PLAYER.controlHeight ? (BC.chest && this.isHumanCarrier(p) ? 0.25 - 0.2 * p.a.control : 0.25) : 0;
+    const pClean = clamp(1.15 - Math.max(0, rel - capacity) / 12 - high - this.wplay.control - scramble, 0.2, 1);
     if (this.rng.chance(pClean)) this.takePossession(p, false);
     else this.deflect(p, 0.35, false);
   }
@@ -3249,19 +3387,20 @@ export class Match {
    * Volley: a shot pressed as a ball arrives between knee and chest height is struck first time, in the air.
    * The incoming pace adds power; a higher or faster ball is harder to keep down and on target.
    */
-  private volley(p: Player, height: number): void {
+  private volley(p: Player, height: number, overhead = false): void {
     const b = this.ball;
     this.creditFirstTime(p);
     const q = p.queued!;
     const dir = this.attackDir(p.team);
     const inSpeed = Math.hypot(b.vel.x, b.vel.y, b.vel.z);
-    const difficulty = 1.3 + clamp((height - 0.35) / 0.65, 0, 1) * 0.9 + clamp(inSpeed / 25, 0, 1) * 0.6;
+    const difficulty = (1.3 + clamp((height - 0.35) / 0.65, 0, 1) * 0.9 + clamp(inSpeed / 25, 0, 1) * 0.6) * (overhead ? AERIAL7.overheadError : 1);
     const ctx: KickContext = { kicker: p, ballPos: { ...b.pos }, pressure: pressureOn(p, this.players), rng: this.rng, accuracy: difficulty, help: this.helpFor(p) };
     const aimZ = aimFromInput(p, dir, q.dir.x, q.dir.z);
     const res = solveShot(ctx, { side: dir, aimZ, power: clamp(q.power + 0.15, 0, 1), placed: q.placed && !q.variant });
     // Pace on the ball carries into the strike.
     const boost = 1 + clamp(inSpeed / 60, 0, 0.25);
-    b.vel = { x: res.vel.x * boost, y: res.vel.y + (height - 0.5) * 1.5, z: res.vel.z * boost };
+    // Struck from above head height upside down, an overhead kick is aimed down at the goal.
+    b.vel = { x: res.vel.x * boost, y: overhead ? res.vel.y - 0.8 : res.vel.y + (height - 0.5) * 1.5, z: res.vel.z * boost };
     b.spin = res.spin;
     b.dip = 0;
     b.state = 'flight';
@@ -3285,12 +3424,12 @@ export class Match {
     if (onTarget) this.stats[p.team].onTarget++;
     this.lastShot = { team: p.team, player: p.id, onTarget, time: this.time };
     this.countShot(p, onTarget);
-    this.emit('kick', { player: p.id, team: p.team, power: Math.hypot(b.vel.x, b.vel.y, b.vel.z), x: b.pos.x, z: b.pos.z, text: 'volley' });
+    this.emit('kick', { player: p.id, team: p.team, power: Math.hypot(b.vel.x, b.vel.y, b.vel.z), x: b.pos.x, z: b.pos.z, text: overhead ? 'overhead' : 'volley' });
     this.offside.flagged.clear();
     if (this.indirectTaker >= 0 && this.indirectTaker !== p.id) this.indirectTaker = -1;
   }
 
-  private header(p: Player) {
+  private header(p: Player, diving = false) {
     const b = this.ball;
     if (this.checkOffsideInvolvement(p)) return;
     this.creditFirstTime(p);
@@ -3337,8 +3476,8 @@ export class Match {
     b.kickLock = 0.3;
     b.stillTime = 0;
     p.queued = null;
-    p.action = { type: 'header', t: 0, dur: 0.45 };
-    p.touchCooldown = 0.3;
+    p.action = { type: 'header', t: 0, dur: diving ? AERIAL7.diveTime : 0.45 };
+    p.touchCooldown = diving ? AERIAL7.diveTime : 0.3;
     this.emit('kick', { player: p.id, team: p.team, power: Math.hypot(res.vel.x, res.vel.y, res.vel.z) * 0.6, text: 'header' });
     this.evaluateOffside(p, false);
     if (this.indirectTaker >= 0 && this.indirectTaker !== p.id) this.indirectTaker = -1;
@@ -3403,7 +3542,11 @@ export class Match {
     if (b.lastTouchTeam !== p.team) this.wonBallAt[p.team] = this.time;
     b.dip = 0;
     const inVel = { ...b.vel };
-    const fromElsewhere = b.lastTouch !== p.id; // a first touch, not re-collecting their own push
+    const inY = b.pos.y;
+    // A first touch, not re-collecting their own push (a ball flicked over a defender is taken in stride like a pass).
+    const reFlick = this.flickOver.pid === p.id;
+    const fromElsewhere = b.lastTouch !== p.id || reFlick;
+    if (reFlick) this.flickOver.pid = -1;
     b.owner = p.id;
     b.state = gkHands ? 'held' : 'dribble';
     b.flight = 'none';
@@ -3416,12 +3559,14 @@ export class Match {
       this.holdT = 0;
       p.action = { type: 'catch', t: 0, dur: 0.35 };
       this.emit('catch', { player: p.id, team: p.team });
-    } else if (!fromElsewhere || !this.steerFirstTouch(p, inVel)) {
+    } else if (!fromElsewhere || !this.steerFirstTouch(p, inVel, inY)) {
       // Cushion the ball: settle it just ahead of the receiver.
       const f = dirOf(p.facing);
       b.vel = { x: p.vel.x * 0.9 + f.x * 0.4, y: 0, z: p.vel.z * 0.9 + f.z * 0.4 };
       b.pos.y = BALL.radius;
       p.touchCooldown = 0.18;
+      // A heavy first touch (19 Nov 2026): weaker players under pressure, off a fast ball or on a wet pitch.
+      if (fromElsewhere && !viaTackle && !p.queued) this.heavyFirstTouch(p, inVel, f);
     }
     this.offside.flagged.clear();
     if (this.indirectTaker >= 0 && this.indirectTaker !== p.id) this.indirectTaker = -1;
@@ -3450,34 +3595,41 @@ export class Match {
    * a fast pass is harder, and worse touch means a less accurate direction. Returns false when
    * the default cushion applies (computer players, or a first-time kick is queued).
    */
-  private steerFirstTouch(p: Player, inVel: V3): boolean {
+  private steerFirstTouch(p: Player, inVel: V3, inY: number = BALL.radius): boolean {
     const c = this.controlOf(p) ?? this.receivingControl(p.team, this.ball.kicker, p.id);
     if (!c || !c.human || p.role === 'GK' || p.queued) return false;
     const b = this.ball;
     const ctl = p.a.control;
     const m = Math.hypot(c.input.mx, c.input.mz);
+    const close = BC.close && !!c.input.close;
+    const inSp = Math.hypot(inVel.x, inVel.z);
+    const pSp = Math.hypot(p.vel.x, p.vel.z);
     b.pos.y = BALL.radius;
+    // Chest or thigh (19 Nov 2026): a dropping ball is brought down a stride ahead, into the run.
+    if (BC.chest && inY > 0.5) return this.aerialTouch(p, c, inVel, inY, m);
     if (m < 0.3) {
-      // Kill it dead: the ball stays at the feet.
+      // Kill it dead: the ball stays at the feet (closer still with close control held).
       const f = dirOf(p.facing);
-      b.pos.x = p.pos.x + f.x * 0.45;
-      b.pos.z = p.pos.z + f.z * 0.45;
+      const r = close ? BALLCTL.closeFoot : 0.45;
+      b.pos.x = p.pos.x + f.x * r;
+      b.pos.z = p.pos.z + f.z * r;
       b.vel = { x: p.vel.x * 0.5, y: 0, z: p.vel.z * 0.5 };
       p.touchCooldown = 0.18;
       this.firstTouch = { pid: p.id, until: this.time + 0.2 };
+      if (!close) this.heavyFirstTouch(p, inVel, f);
       return true;
     }
     const u = { x: c.input.mx / m, z: c.input.mz / m };
-    const inSp = Math.hypot(inVel.x, inVel.z);
     const against = inSp > 1 ? Math.max(0, -(inVel.x * u.x + inVel.z * u.z) / inSp) : 0;
     const err = this.rng.gauss() * (0.03 + 0.14 * (1 - ctl)) * (1 + inSp / 16) * (1 + 0.6 * against);
     const ang = angleOf(u.x, u.z) + err;
     const dir = { x: Math.cos(ang), z: Math.sin(ang) };
-    const pSp = Math.hypot(p.vel.x, p.vel.z);
+    // A gentle push of the stick takes a softer touch (19 Nov 2026), and so does close control.
+    const soft = BC.gentle ? clamp((m - 0.3) / 0.45, 0, 1) * (close ? 0.5 : 1) : 1;
     // Start from where the ball meets the foot.
     b.pos.x = p.pos.x + dir.x * 0.35;
     b.pos.z = p.pos.z + dir.z * 0.35;
-    if (c.input.sprint) {
+    if (c.input.sprint && !close) {
       // Push touch into space: a longer touch to run onto, still the receiver's ball (the
       // dribble picks it up again once they catch it). Heavier with worse touch or a faster ball.
       const sp = Math.max(pSp, 2) + 2.6 + 0.8 * (1 - ctl) + inSp * 0.04 + this.rng.next() * 0.4;
@@ -3487,13 +3639,64 @@ export class Match {
       this.emit('kick', { player: p.id, team: p.team, power: sp * 0.4, text: 'touch' });
     } else {
       // Set it a stride to the side the stick points, ready for the next touch.
-      const sp = Math.max(pSp, 1) + 0.9 + 0.4 * (1 - ctl) + inSp * 0.02;
+      const sp = Math.max(pSp, 1) * (BC.gentle ? 0.6 + 0.4 * soft : 1) + (BC.gentle ? 0.45 + 0.45 * soft : 0.9) + 0.4 * (1 - ctl) + inSp * 0.02;
       b.vel = { x: dir.x * sp, y: 0, z: dir.z * sp };
       this.firstTouch = { pid: p.id, until: this.time + 0.2 };
       this.emit('kick', { player: p.id, team: p.team, power: sp * 0.3, text: 'touch' });
     }
+    // The body opens up and turns with the touch; a defender on the other side is turned (19 Nov 2026).
+    if (BC.touch) {
+      p.facing = turnTowards(p.facing, ang, 0.9);
+      touchAway(this, p, dir);
+    }
     p.touchCooldown = 0.25;
     return true;
+  }
+
+  /**
+   * A human's chest or thigh control (19 Nov 2026). With the stick held the ball drops a stride ahead
+   * the way it points and he carries on running onto it; without, it drops at his feet. Close control
+   * cushions it dead. The ball bounces once before the dribble picks it up again.
+   */
+  private aerialTouch(p: Player, c: Control, inVel: V3, inY: number, m: number): boolean {
+    const b = this.ball;
+    const ctl = p.a.control;
+    const chest = inY > 1.12;
+    const close = BC.close && !!c.input.close;
+    const pSp = Math.hypot(p.vel.x, p.vel.z);
+    const inSp = Math.hypot(inVel.x, inVel.y, inVel.z);
+    const stick = m >= 0.3 && !close;
+    const base = stick ? angleOf(c.input.mx, c.input.mz) : p.facing;
+    const err = this.rng.gauss() * (0.04 + 0.2 * (1 - ctl)) * (1 + inSp / 20);
+    const dir = dirOf(base + err);
+    // Into the stride: about the runner's pace plus a little, so the ball is just ahead when it lands.
+    const sp = stick ? Math.max(pSp, 1.5) + 0.8 + 0.6 * (1 - ctl) + (c.input.sprint ? 1.2 : 0) : 0.4 + 0.5 * (1 - ctl);
+    b.pos.x = p.pos.x + dir.x * 0.3;
+    b.pos.z = p.pos.z + dir.z * 0.3;
+    b.pos.y = chest ? 1.05 : 0.55;
+    b.vel = { x: dir.x * sp + (stick ? 0 : p.vel.x * 0.5), y: chest ? 0.3 : 1.3, z: dir.z * sp + (stick ? 0 : p.vel.z * 0.5) };
+    this.firstTouch = { pid: p.id, until: this.time + (chest ? 0.45 : 0.36) };
+    p.touchCooldown = 0.3;
+    if (stick) p.facing = turnTowards(p.facing, angleOf(dir.x, dir.z), 0.8);
+    if (!close) this.heavyFirstTouch(p, inVel, dir);
+    return true;
+  }
+
+  /**
+   * Heavy first touch: a weaker player (control under BALLCTL.heavyFrom) under pressure, taking a fast
+   * ball or on a wet pitch sometimes lets it bounce off him, a couple of metres away.
+   */
+  private heavyFirstTouch(p: Player, inVel: V3, f: V2) {
+    const hc = heavyChance(this, p, { first: true, inSpeed: Math.hypot(inVel.x, inVel.y, inVel.z) });
+    if (hc <= 0 || !this.rng.chance(hc)) return;
+    const b = this.ball;
+    const a = angleOf(f.x, f.z) + this.rng.gauss() * 0.5;
+    const sp = 2.6 + 2.4 * this.rng.next();
+    b.vel = { x: Math.cos(a) * sp + p.vel.x * 0.5, y: 0, z: Math.sin(a) * sp + p.vel.z * 0.5 };
+    this.firstTouch = { pid: p.id, until: this.time + 0.3 };
+    p.touchCooldown = Math.max(p.touchCooldown, 0.3);
+    this.emit('kick', { player: p.id, team: p.team, power: sp * 0.3, text: 'touch' });
+    this.emit('call', { team: p.team, player: p.id, text: 'heavy' });
   }
 
   /**
@@ -3502,6 +3705,12 @@ export class Match {
    * and a sharp turn cushions the ball at the feet while they brake (better control = more
    * reach and quicker touches). Without this the ball ran straight on and was lost on a turn.
    */
+  /** A human's own player with close control held (whether or not he has the ball). */
+  closeHeld(p: Player): boolean {
+    const c = this.controlOf(p);
+    return !!c && !!c.input.close && p.role !== 'GK';
+  }
+
   /** The player a human is controlling (their own man, not a computer teammate). */
   private isHumanCarrier(p: Player): boolean {
     return !!this.controlOf(p) && p.role !== 'GK';
@@ -3510,6 +3719,8 @@ export class Match {
   private dribble(_dt: number) {
     const b = this.ball;
     const p = this.players[b.owner];
+    // Ball-control moves place the ball themselves (flicked up, juggled, under the sole).
+    if (p.action.type === 'skill' && placeBallForSkill(this, p)) return;
     const d = dist(p.pos, b.pos);
     if (d > 2.6 || p.action.type === 'stumble' || p.action.type === 'down' || b.pos.y > 1.2) {
       b.state = 'free';
@@ -3518,7 +3729,7 @@ export class Match {
     }
     if (p.action.type === 'kick' || p.action.type === 'throw') return;
     const sk = p.action.type === 'skill' ? p.action : null;
-    if (sk && (sk.skill === 'ballroll' || sk.skill === 'elastico' || sk.skill === 'dragturn')) {
+    if (sk && (sk.skill === 'ballroll' || sk.skill === 'elastico' || sk.skill === 'dragturn' || sk.skill === 'bodyfeint' || sk.skill === 'berba' || sk.skill === 'mcgeady')) {
       const o = skill6Ball(p, sk);
       b.pos.x = p.pos.x + o.x; b.pos.z = p.pos.z + o.z;
       b.vel = { x: p.vel.x, y: 0, z: p.vel.z };
@@ -3535,6 +3746,8 @@ export class Match {
     }
     // A steered first touch runs its course before the dribble takes over again.
     if (this.firstTouch.pid === p.id && this.time < this.firstTouch.until) return;
+    // Close control: the ball glued to the boot with little touches.
+    if (this.closeIds.has(p.id) && closeDribble(this, p)) return;
     const c = p.a.control;
     const human = this.isHumanCarrier(p);
     const f = dirOf(p.facing);
@@ -3563,9 +3776,12 @@ export class Match {
     const reach = 1.0 + 0.45 * c + (human ? 0.25 : 0);
     // Jogging keeps the ball close with more frequent, softer touches; sprinting knocks it further ahead.
     // The player's own man gets tighter close control, so the ball stays playable between touches.
+    // Better control keeps it closer still, with quicker touches (19 Nov 2026; the average player is unchanged).
     const sprinting = p.sprinting || p.wish.mode === 'sprint';
-    const full = PLAYER.touchCooldownBase * (1.3 - 0.6 * c) * (sprinting ? 1.25 : 0.85) * (human ? 0.8 : 1);
-    const lead = (sprinting ? 2.0 : 0.85) * (1.25 - 0.5 * c) * (human ? (sprinting ? 0.7 : 0.6) : 1);
+    // Gentle stick pressure (a human's own man): a slow jog with shorter, more frequent touches.
+    const gentle = BC.gentle && human && !sprinting && wl > 0.25 && wl < BALLCTL.gentle;
+    const full = PLAYER.touchCooldownBase * (BC.attr ? 1.4 - 0.75 * c : 1.3 - 0.6 * c) * (sprinting ? 1.25 : 0.85) * (human ? 0.8 : 1) * (gentle ? BALLCTL.gentleCd : 1);
+    const lead = (sprinting ? 2.0 : 0.85) * (BC.attr ? 1.35 - 0.65 * c : 1.25 - 0.5 * c) * (human ? (sprinting ? 0.7 : 0.6) : 1) * (gentle ? BALLCTL.gentleLead : 1);
     if (turn > 1.5 && d < reach) {
       // Sharp turn or stop: cushion the ball at the feet while braking, then set off with it.
       glue(0.3);
@@ -3574,8 +3790,10 @@ export class Match {
     }
     if (turn > 0.3 && d < reach && full - p.touchCooldown > 0.07) {
       // Cut: a quick redirecting touch along the new line, shorter than a running touch.
-      const dir = norm(md.x + wantDir.x, md.z + wantDir.z);
-      const ts = sp + lead * Math.max(0.25, 1 - turn / 1.2) * 0.7;
+      let dir = norm(md.x + wantDir.x, md.z + wantDir.z);
+      let ts = sp + lead * Math.max(0.25, 1 - turn / 1.2) * 0.7;
+      const hc = heavyChance(this, p, { sprinting });
+      if (hc > 0 && this.rng.chance(hc)) ({ dir, ts } = this.heavy(p, dir, ts, lead));
       b.pos.x += (foot.x - b.pos.x) * 0.5;
       b.pos.z += (foot.z - b.pos.z) * 0.5;
       b.vel = { x: dir.x * ts, y: 0, z: dir.z * ts };
@@ -3584,16 +3802,26 @@ export class Match {
       return;
     }
     if (p.touchCooldown > 0 || footDist > 0.9 + 0.2 * c + (human ? 0.25 : 0)) return;
-    const ts = sp + lead;
+    let ts = sp + lead, dir = md;
+    const hc = heavyChance(this, p, { sprinting });
+      if (hc > 0 && this.rng.chance(hc)) ({ dir, ts } = this.heavy(p, dir, ts, lead));
     b.pos.x += (foot.x - b.pos.x) * 0.5;
     b.pos.z += (foot.z - b.pos.z) * 0.5;
-    b.vel = { x: md.x * ts, y: 0, z: md.z * ts };
+    b.vel = { x: dir.x * ts, y: 0, z: dir.z * ts };
     p.touchCooldown = full;
     this.emit('kick', { player: p.id, team: p.team, power: ts * 0.25, text: 'touch' });
   }
 
+  /** A heavy dribbling touch (19 Nov 2026): the ball runs on further than meant and a little off the line. */
+  private heavy(p: Player, dir: V2, ts: number, lead: number): { dir: V2; ts: number } {
+    const a = angleOf(dir.x, dir.z) + this.rng.gauss() * 0.16;
+    this.emit('call', { team: p.team, player: p.id, text: 'heavy' });
+    return { dir: dirOf(a), ts: ts + lead * (0.9 + 0.8 * this.rng.next()) + 1.2 };
+  }
+
   private handleCrossing(c: Crossing) {
     const b = this.ball;
+    if (this.ctlDrill) { controlDrillOut(this, this.ctlDrill); return; }
     if (this.skill && this.drill) {
       // Skill games: score the attempt; the ball stops where it went out and the next one follows.
       skillCrossing(this, this.skill, c);

@@ -7,7 +7,9 @@ import type { Difficulty } from '../src/shared/config';
 import { mulberry } from './bench-rng';
 import { DIFFICULTY } from '../src/shared/config';
 import { laneBlock } from '../src/shared/kick';
-import { g6Off } from '../src/shared/switches';
+import { bcOff, g6Off } from '../src/shared/switches';
+// BC_OFF=attr,heavy,... turns the 19 Nov 2026 ball-control features off to compare.
+bcOff(process.env.BC_OFF);
 // G6_OFF=momentum,keeper,... turns the 19 Nov 2026 gameplay features off to compare.
 g6Off(process.env.G6_OFF);
 // `nohelp` as a 4th argument measures without the human help (as before 18 Nov).

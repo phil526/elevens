@@ -3,13 +3,14 @@
 // Offline only: the match is paused while one plays. Any key, tap or controller button skips.
 
 import * as THREE from 'three';
+import { introLights } from './render/haze';
 import type { GameRenderer } from './render/renderer';
 import { INTRO, INTRO_LENGTH, REPLAY, ReplayRecorder, goalSideOf, snapOf, introFrame, netCamShot, stageIntro, stageReplay, type Snap, type TunnelInfo } from './render/cinematic';
 import type { ViewState } from './view';
 import { TROPHY, stageTrophy, trophyShot } from './render/ceremony';
 import { AERIAL, AERIAL_LENGTH, aerialShot } from './render/blimp';
 import { VAR, varInfo, varShot, type VarInfo } from './render/var';
-import { PHOTO_FLASHES, PREMATCH_CUTS, PREMATCH_LENGTH, prematchPoses, prematchShot, preStage, stagePrematch } from './render/prematch';
+import { PHOTO_FLASHES, PREMATCH, PREMATCH_CUTS, PREMATCH_LENGTH, prematchPoses, prematchShot, preStage, stagePrematch } from './render/prematch';
 import { CELEB, celebKindFor, celebrationReactions, celebrationShot, planCelebration, stageCelebration, type CelebKind, type CelebPlan } from './render/celebration';
 import { HIGHLIGHTS, HighlightBook, MOMENT_TITLE, type Highlight, type MomentInfo } from './highlights';
 
@@ -295,7 +296,7 @@ export class CineDirector {
     if (this.trophy) { this.trophy.r.stopCeremony(); this.trophy.r.reactions.reset(); this.trophy = null; }
     if (this.celeb) { this.celeb.r.cineReactions = false; this.celeb = null; }
     if (this.varPlay) { this.varPlay.r.varLines.show(null); this.varPlay = null; this.tagEl.querySelector('span')!.textContent = 'REPLAY'; }
-    if (this.introR) { this.introR.cineReactions = false; this.introR.mascotMode = null; this.introR.reactions.reset(); this.introR = null; }
+    if (this.introR) { this.introR.cineReactions = false; this.introR.mascotMode = null; this.introR.officialStage = null; this.introR.reactions.reset(); this.introR = null; }
     this.flashEl.style.opacity = '0';
     this.el.className = 'cine';
     this.capEl.classList.remove('show');
@@ -341,6 +342,7 @@ export class CineDirector {
       if (this.mode === 'none') return null;
     }
     this.t += dt;
+    r.lightsOn = this.mode === 'intro' ? introLights(this.t) : 1;
     if (this.mode === 'intro') {
       // After the walk-out: the line-up, the handshakes and the team photos.
       if (this.ceremony && this.t >= INTRO_LENGTH) return this.ceremonyFrame(live, dt, r);
@@ -352,6 +354,9 @@ export class CineDirector {
       }
       const f = introFrame(this.t, this.tunnel, this.ceremony);
       if (f.stage === 'done') { this.end(true); r.cine = null; r.setTunnelShot(false); return null; }
+      // The referee and his assistants lead the teams out.
+      this.introR = r;
+      r.officialStage = f.stage === 'tunnel' ? { mode: 'tunnel', walk: f.walk, tunnel: this.tunnel } : { mode: 'hidden' };
       this.fadeEl.style.opacity = String(f.fade);
       this.capEl.classList.toggle('show', f.stage === 'fly' && this.t > 0.8 && this.t < INTRO.fly - 0.6);
       if (f.stage === 'tunnel' && !this.cheered && f.walk > 2.2) { this.cheered = true; this.onCue('walkout'); }
@@ -387,6 +392,8 @@ export class CineDirector {
     r.cineReactions = true;
     const st = preStage(s);
     r.mascotMode = st.stage === 'line' ? 'front' : null;
+    // The officials stand between the teams in the line-up, then wait by the centre circle.
+    r.officialStage = st.stage === 'huddle' ? { mode: 'line', z: -1.2 } : st.stage === 'photo' ? { mode: 'hidden' } : { mode: 'line', z: PREMATCH.rowZ };
     // Through black at each cut.
     let f = s < INTRO.fade ? 1 - s / INTRO.fade : 0;
     for (const c of [...PREMATCH_CUTS, PREMATCH_LENGTH]) { const d = Math.abs(s - c); if (d < INTRO.fade) f = Math.max(f, 1 - d / INTRO.fade); }
@@ -440,6 +447,7 @@ export class CineDirector {
     this.celeb = { plan, t: 0, pos: new THREE.Vector3(), look: new THREE.Vector3(), r, replay: replayAfter };
     r.cineReactions = true;
     celebrationReactions(plan, r.reactions);
+    r.handheld.reset();
     this.mode = 'celebration';
     this.t = 0;
     this.el.className = 'cine on celebration';
@@ -468,7 +476,7 @@ export class CineDirector {
     this.fadeEl.style.opacity = String(1 - Math.max(0, edge));
     const view = stageCelebration(live, c.plan, c.t);
     r.setTunnelShot(false);
-    r.cine = celebrationShot(c.plan, c.t, view, c, dt);
+    r.cine = r.handheldShot(celebrationShot(c.plan, c.t, view, c, dt), dt);
     return { view, dt };
   }
 
@@ -570,6 +578,7 @@ function instantShot(cam: number, ball: { x: number; y: number; z: number }, loo
   return { pos: { x: pos.x, y: pos.y, z: pos.z }, look: { x: look.x, y: look.y, z: look.z }, fov: cam === 2 ? 48 : 40, near: 0.1 };
 }
 
+/** Floodlights coming on bank by bank during the stadium fly-in: 0 (off) .. 1 (all on). */
 export function introCaption(home: string, away: string, ground = 'The Harbourside Ground') {
   const esc = (x: string) => x.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
   return `<b>${esc(home)}</b><span>v</span><b>${esc(away)}</b><small>${esc(ground)}</small>`;

@@ -32,7 +32,12 @@ export type ActionType = 'none' | 'kick' | 'tackle' | 'stumble' | 'dive' | 'cele
 export type MoveModeName = 'walk' | 'jog' | 'sprint' | 'jockey' | 'jockeyfast';
 export type SkillMove = 'stepover' | 'dragback' | 'knockon' | 'roulette' | 'fakeshot'
   // With the modifier held (19 Nov 2026): a sole roll across the body, an elastico (out, then in), a drag-back that turns away.
-  | 'ballroll' | 'elastico' | 'dragturn';
+  | 'ballroll' | 'elastico' | 'dragturn'
+  // Ball control (19 Nov 2026): a chop and a cut-back while sprinting, a stop under the sole, a flick up,
+  // a keepy-up while it is in the air, and a flick over a defender's head.
+  | 'chop' | 'cutback' | 'solestop' | 'flickup' | 'juggle' | 'flickover'
+  // Turns and feints (20 Nov 2026): a shoulder-drop body feint, a Berba spin and a McGeady spin.
+  | 'bodyfeint' | 'berba' | 'mcgeady';
 /** Alternative versions of a kick: driven ground pass, lofted through ball, chipped or low driven shot. */
 export type KickVariant = 'driven' | 'lofted' | 'chip' | 'low'
   // Crosses: a high floated ball, a fast whipped cross into the gap between keeper and defence, a low driven cross.
@@ -158,7 +163,7 @@ export interface InputEvent {
   k: 'pass' | 'through' | 'lob' | 'shoot' | 'switch' | 'skill' | 'press' | 'trap' | 'plan' | 'keeper' | 'instr'; // plan: p = game plan index / 4; instr: p = (slot * 3 + instruction + 1) / 32
   p?: number; // shot charge 0..1
   m?: boolean; // modifier held: placed shot, driven pass, lofted through ball
-  v?: 'chip' | 'low' | 'fake' | 'placed' | 'power'; // shot style chosen with a second button (lob = chip, through = low drive, switch = placed; modifier + sprint = power); on a skill event, 'fake' is a fake shot
+  v?: 'chip' | 'low' | 'fake' | 'placed' | 'power' | 'flick'; // shot style chosen with a second button (lob = chip, through = low drive, switch = placed; modifier + sprint = power); on a skill event, 'fake' is a fake shot and 'flick' (close control held) flicks the ball up, juggles it or flicks it over a defender
   x?: number; // switch/skill: world-space direction (or a point on the pitch when `at` is set)
   z?: number;
   at?: boolean; // switch: x, z is a point on the pitch (mouse click) rather than a direction
@@ -175,6 +180,7 @@ export interface InputFrame {
   sprint: boolean;
   jockey: boolean;
   contain?: boolean; // defending: the nearest teammate presses the ball carrier
+  close?: boolean; // close control held: small, slow touches on the ball; let go of the stick to stop it under the sole
   ev: InputEvent[];
 }
 
@@ -191,7 +197,7 @@ export interface MatchConfig {
   quickRestarts?: [boolean, boolean]; // humans may take throw-ins, corners and free kicks before everyone is set (default on)
   seed: number;
   /** Practice: no clock. 'free' is open play; 'freekick' and 'penalty' repeat that set piece for team 0. */
-  practice?: 'free' | 'freekick' | 'penalty' | 'crosses' | 'crossbar' | 'targets';
+  practice?: 'free' | 'freekick' | 'penalty' | 'crosses' | 'crossbar' | 'targets' | 'control';
   /** Practice challenge: this many attempts, then the session ends with a score (0 or unset: endless). */
   challenge?: number;
   /** Formation and slider instructions per team (default 4-3-3, all sliders 0). */

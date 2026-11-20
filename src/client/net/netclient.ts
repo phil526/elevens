@@ -3,8 +3,9 @@
 
 import { PROTOCOL_VERSION, type ClientMsg, type RoomState, type ServerMsg } from '../../shared/protocol';
 import { isSnapshot, type Snapshot } from '../../shared/snapshot';
+import { mayBeAsleep, serverBlocked, serverUrl, wakeServer } from './hosting';
 
-export type NetStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'unavailable';
+export type NetStatus = 'idle' | 'connecting' | 'waking' | 'connected' | 'reconnecting' | 'disconnected' | 'unavailable' | 'blocked';
 
 const TOKEN_KEY = 'elevens.token';
 
@@ -15,14 +16,7 @@ function storeToken(t: string | null) {
   try { if (t) sessionStorage.setItem(TOKEN_KEY, t); else sessionStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ }
 }
 
-export function serverUrl(): string {
-  const q = new URLSearchParams(location.search).get('server');
-  if (q) return q;
-  const env = (import.meta.env?.VITE_SERVER_URL as string | undefined) ?? '';
-  if (env) return env;
-  if (location.protocol === 'file:' || location.origin === 'null') return 'ws://localhost:8787/ws';
-  return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
-}
+export { serverUrl };
 
 export class NetClient {
   ws: WebSocket | null = null;
@@ -35,6 +29,8 @@ export class NetClient {
   private pingTimer = 0;
   private wantOpen = false;
   private everConnected = false;
+  /** Waited for a sleeping server already (only once per connect). */
+  private woke = false;
   private name = 'Player';
   onStatus: (s: NetStatus) => void = () => {};
   onRoom: (r: RoomState) => void = () => {};
@@ -47,6 +43,7 @@ export class NetClient {
   connect(name: string) {
     this.name = name;
     this.wantOpen = true;
+    this.woke = false;
     this.open();
   }
 
@@ -102,6 +99,18 @@ export class NetClient {
       this.ws = null;
       if (!this.wantOpen) { this.setStatus('idle'); return; }
       if (!this.everConnected) {
+        if (serverBlocked()) { this.setStatus('blocked'); this.wantOpen = false; return; }
+        if (!this.woke && mayBeAsleep(this.url)) {
+          // A free server sleeps when unused: wake it (up to about a minute and a half), then try again.
+          this.woke = true;
+          this.setStatus('waking');
+          void wakeServer(this.url).then((st) => {
+            if (!this.wantOpen || this.ws) return;
+            if (st === 'ready') this.open();
+            else { this.setStatus(st === 'blocked' ? 'blocked' : 'unavailable'); this.wantOpen = false; }
+          });
+          return;
+        }
         this.setStatus('unavailable');
         this.wantOpen = false;
         return;

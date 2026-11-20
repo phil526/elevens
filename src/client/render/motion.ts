@@ -30,9 +30,10 @@ export type GestureKind =
   | 'chest' | 'thigh' | 'cushion' | 'flick' // first touches
   | 'touch' | 'push' // dribbling: a running touch, a big touch into space
   | 'block' // body thrown in the way of a shot or pass
-  | 'stagger'; // knocked off balance but still on the feet (a foul with advantage)
+  | 'stagger' // knocked off balance but still on the feet (a foul with advantage)
+  | 'hurdle'; // jumping over a slide tackle or a keeper diving at the feet (20 Nov 2026)
 
-export const GESTURE_DUR: Record<GestureKind, number> = { chest: 0.6, thigh: 0.48, cushion: 0.36, flick: 0.34, touch: 0.22, push: 0.34, block: 0.6, stagger: 0.55 };
+export const GESTURE_DUR: Record<GestureKind, number> = { chest: 0.6, thigh: 0.48, cushion: 0.36, flick: 0.34, touch: 0.22, push: 0.34, block: 0.6, stagger: 0.55, hurdle: 0.5 };
 
 export interface Gesture {
   kind: GestureKind;
@@ -129,6 +130,16 @@ export function gesturePose(X: Float32Array, g: Gesture): number {
       X[NKX] = 0.1;
       return env(u, 0.18, 0.45) * k;
     }
+    case 'hurdle': {
+      // Over a slide tackle: take off from one foot, knees tucked up, arms up and out for balance.
+      const air = Math.sin(Math.PI * u);
+      X[BY] = 0.36 * air * k;
+      leg(X, s, -1.0 * air, 0.1, 1.45 * air + 0.2);
+      leg(X, o, -0.15 - 0.45 * air, 0.06, 1.2 * air + 0.2);
+      X[SPX] = 0.18 * air; X[NKX] = 0.3 * air;
+      arms(X, -0.95 * air - 0.2, 0.75 * air + 0.2, -0.6);
+      return env(u, 0.12, 0.25) * k;
+    }
     case 'stagger': {
       // Knocked off balance but stays up: lurch away from the contact, a quick catching step, arms out.
       const lurch = Math.sin(Math.PI * clamp01(u / 0.6));
@@ -220,7 +231,7 @@ export function tacklePose(X: Float32Array, style: TackleStyle, side: 1 | -1, t:
 // Falls.
 
 /** A fouled player goes down this way: forward (from behind or a trip) or onto his side. */
-export type FallDir = 'forward' | 'left' | 'right';
+export type FallDir = 'forward' | 'left' | 'right' | 'back';
 export function fallDirFor(facing: number, me: { x: number; z: number }, from: { x: number; z: number } | null): FallDir {
   if (!from) return 'forward';
   const fx = Math.cos(facing), fz = Math.sin(facing);
@@ -258,6 +269,14 @@ export function fallPose(X: Float32Array, dir: FallDir, t: number) {
     X[SLZ] = lerp(0.4, 0.75, ly); X[SRZ] = lerp(-0.4, -0.75, ly);
     X[ELX] = lerp(-0.3, -1.35, ly); X[ERX] = lerp(-0.3, -1.45, ly);
     X[NKX] = -0.55 * ly; // head up off the grass
+  } else if (dir === 'back') {
+    // Onto the back (after an overhead kick): arms out flat, one knee up, chin tucked.
+    const ly = drop * down;
+    X[BRX] = -1.42 * ly; X[BY] = -0.08 * ly - 0.12 * buckle * (1 - drop);
+    X[SPX] = 0.2 * buckle * (1 - drop) + 0.15 * ly;
+    X[HLX] = -0.75 * ly; X[KLX] = 1.2 * ly; X[HRX] = -0.15 * ly; X[KRX] = 0.2 * ly;
+    X[SLX] = -0.4 * ly; X[SRX] = -0.4 * ly; X[SLZ] = 1.15 * ly + 0.2; X[SRZ] = -1.15 * ly - 0.2; X[ELX] = -0.3; X[ERX] = -0.3;
+    X[NKX] = 0.45 * ly;
   } else {
     // Onto the side: hip and shoulder take it, knees drawn up.
     const sd = dir === 'right' ? 1 : -1;
@@ -295,7 +314,7 @@ export function fallPose(X: Float32Array, dir: FallDir, t: number) {
 // ---------------------------------------------------------------------------------------------
 // Kick styles.
 
-export type KickFlavour = 'toe' | 'outside' | 'backheel';
+export type KickFlavour = 'toe' | 'outside' | 'backheel' | 'overhead' | 'scissor';
 
 /**
  * Toe pokes, outside-of-the-boot passes and backheels, from where the kick goes relative to the

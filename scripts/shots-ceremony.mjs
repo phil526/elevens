@@ -40,7 +40,7 @@ try {
   // Half-time: the aerial shots.
   await sleep(1500);
   await M(() => { const m = window.__elevens.session.match; m.half = 1; m.clock = 45 * 60 - 0.5; m.addedTime = 0; });
-  check('half-time aerials start', await waitFor(() => window.__elevens.cine.mode === 'aerial', 120000));
+  check('half-time aerials start', await waitFor(() => window.__elevens.cine.mode === 'aerial', 300000)); // the added minute takes a while at SwiftShader speed
   await waitFor(() => window.__elevens.cine.time >= 2.4, 200000);
   await page.screenshot({ path: `${OUT}aerial-blimp.png`, timeout: 120000 });
   await waitFor(() => window.__elevens.cine.time >= 7.4 || window.__elevens.cine.mode !== 'aerial', 200000);

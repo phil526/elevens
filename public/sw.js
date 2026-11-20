@@ -15,7 +15,7 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.origin !== location.origin || url.pathname.startsWith('/ws')) return;
+  if (url.origin !== location.origin || url.pathname.startsWith('/ws') || url.pathname.endsWith('/health')) return;
   if (req.mode === 'navigate') {
     e.respondWith(fetch(req).then((res) => {
       const copy = res.clone();

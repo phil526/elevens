@@ -226,3 +226,45 @@ export type Half = 1 | 2 | 3 | 4; // 3 and 4 are the two halves of extra time
 export const halfLength = (h: number) => (h <= 2 ? 45 * 60 : 15 * 60);
 /** Football seconds on the clock when half h starts (0, 45:00, 90:00, 105:00). */
 export const halfStart = (h: number) => (h <= 2 ? (h - 1) * 45 * 60 : 90 * 60 + (h - 3) * 15 * 60);
+
+/**
+ * Ball control (19 Nov 2026, thread "Add 10 ball control improvements").
+ * - Close control (its own button): a slow, upright dribble with the ball glued to the boot, tighter turns
+ *   and a carrier who is harder to rob. Letting go of the stick with it held stops the ball under the sole;
+ *   pushing the stick again within `soleGo` seconds sets off with a burst.
+ * - Gentle stick pressure (below `gentle`) is a slow jog: shorter, more frequent touches.
+ * - Chops (stick turned `chopAngle` or more) and cut-backs (`cutAngle` or more) while sprinting with the ball.
+ * - Heavy touches: weaker players (control below `heavyFrom`) under pressure, sprinting or on a wet pitch.
+ * - Flick up and juggle with close control + skill; a flick with the stick forward lifts it over a defender.
+ */
+export const BALLCTL = {
+  closeSpeed: 0.48, // close control: top speed as a fraction of jogging pace
+  closeAccel: 1.35,
+  closeTurn: 1.85, // turn-rate multiplier with close control (better control a little more)
+  closeFoot: 0.36, // how far in front of the body the ball sits (m)
+  closeSteal: 0.6, // a challenger's chance of nicking it is multiplied by this
+  closeTouch: 0.2, // seconds between the little touches (for the animation and sound)
+  gentle: 0.62, // stick magnitude below this (not sprinting) is a slow jog dribble
+  gentleLead: 0.45, // touch length multiplier for a slow jog dribble
+  gentleCd: 0.75, // touch interval multiplier for a slow jog dribble
+  soleTime: 0.3, // seconds to stop the ball dead under the sole
+  soleMinSpeed: 1.6, // only a moving carrier does a sole stop (m/s)
+  soleGo: 1.1, // seconds after a sole stop in which pushing the stick sets off with a burst
+  soleOverrun: 3.2, // defenders following within this distance can overrun a sole stop
+  chopAngle: 1.05, // radians between the run and the stick for a chop while sprinting
+  cutAngle: 2.25, // ... and for a cut-back
+  chopTime: 0.3,
+  cutTime: 0.42,
+  chopCooldown: 0.55,
+  chopReach: 3.4, // defenders within this distance alongside or behind can be left for dead by a chop
+  heavyFrom: 0.8, // control at or above this never takes a heavy touch
+  heavyMax: 0.16, // most a single dribbling touch can be heavy
+  heavyFirst: 0.3, // most a first touch can be heavy
+  flickTime: 0.62, // a flick up: seconds the ball is in the air above the boot
+  juggleTime: 0.5, // each keepy-up
+  flickHeight: 0.95, // m above the ground at the top of a flick up
+  juggleHeight: 0.72,
+  juggleMax: 8, // keepy-ups in a row
+  overSpeed: 6.0, // flick over a defender: forward speed (m/s), plus a little with control
+  overLift: 4.7, // ... and upward speed
+} as const;

@@ -224,8 +224,8 @@ describe('roulette and fake shot', () => {
     m.startSkill(p, -0.6, -0.8); // roulette to the -z side
     const s = encodeSnapshot(m, 0, [], false);
     const code = s.p[p.id * 11 + 9];
-    expect(SKILLS[code & 7]).toBe('roulette');
-    expect(code & 8).toBe(8);
+    expect(SKILLS[code & 31]).toBe('roulette');
+    expect(code & 32).toBe(32);
   });
 
   it('the protocol accepts a fake-shot skill event and the right-stick switch reference', () => {

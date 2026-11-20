@@ -26,6 +26,7 @@ import { Hair, type HairStyle } from './hair';
 import { GaitTracker, gestureParts, solveLeg, type Gesture } from './motion';
 /** A call for the ball moves only the right arm. */
 const RIGHT_ARM: ReadonlySet<Seg> = new Set(['armR', 'foreR'] as Seg[]);
+const LEFT_ARM: ReadonlySet<Seg> = new Set(['armL', 'foreL'] as Seg[]);
 const ARMS: ReadonlySet<Seg> = new Set(['armL', 'foreL', 'armR', 'foreR'] as Seg[]);
 import { canvasTex, numberTexture } from './textures';
 import { readableOn } from './look';
@@ -50,7 +51,9 @@ const LOCO_SPEED = { walk: 1.7, jog: 5.0, sprint: 7.9 } as const;
 const SHOTS = ['dive', 'catch', 'header', 'cheera', 'cheerb', 'cheerc'] as const;
 const CHEERS = ['cheera', 'cheerb', 'cheerc'] as const;
 type ShotName = (typeof SHOTS)[number];
-type ClipName = (typeof LOCO)[number] | 'kick' | 'slide' | ShotName;
+// Motion-captured gaits used in place of the walk (20 Nov 2026): limping after a knock, walking backwards.
+const GAITS = ['limp', 'backwalk'] as const;
+type ClipName = (typeof LOCO)[number] | 'kick' | 'slide' | ShotName | (typeof GAITS)[number];
 
 interface ClipSrc {
   clip: THREE.AnimationClip;
@@ -249,8 +252,39 @@ export function faceDetail(mesh: THREE.SkinnedMesh, albedo: CanvasImageSource & 
     }
   }
   g.setAttribute('aFace', new THREE.BufferAttribute(a, 3));
+  // Expressions (aFace2): x = brows (raised in joy, knitted down in effort and frustration),
+  // y = mouth corners (up in a smile, down in a frown; +1 right, -1 left), z = cheeks and lower
+  // lids (pushed up in a grin or a squint).
+  const e = new Float32Array(n * 3);
+  const eyeY = noseY + 0.034, browY = noseY + 0.056;
+  for (let i = 0; i < n; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i), ax = Math.abs(x);
+    if (z < 0.0 || y < chinY - 0.02 || y > browY + 0.04) continue;
+    const front = sm01((z - 0.0) / 0.04);
+    // Brows: a band above the eyes, strongest over them, fading towards the temples and the forehead.
+    const bw = (1 - sm01(Math.abs(y - browY) / 0.022)) * (1 - sm01((ax - 0.05) / 0.02)) * sm01((ax - 0.004) / 0.01);
+    e[i * 3] = bw * front;
+    // Mouth corners: either side of the mouth line, the corner itself most.
+    const cw = (1 - sm01(Math.abs(y - (mouthY - 0.002)) / 0.016)) * sm01((ax - 0.008) / 0.016) * (1 - sm01((ax - 0.038) / 0.014));
+    e[i * 3 + 1] = cw * front * Math.sign(x || 1);
+    // Cheeks and lower lids: between the mouth and the eyes, out to the cheekbones.
+    const kw = (1 - sm01(Math.abs(y - (eyeY - 0.022)) / 0.022)) * sm01((ax - 0.012) / 0.012) * (1 - sm01((ax - 0.058) / 0.014));
+    e[i * 3 + 2] = kw * front;
+  }
+  g.setAttribute('aFace2', new THREE.BufferAttribute(e, 3));
   return face;
 }
+
+/** A face: brows (-1 knitted .. 1 raised), smile (-1 frown .. 1 grin), squint and gritted teeth (0..1). */
+export interface FaceExpr { brow: number; smile: number; squint: number; grit: number }
+
+/** What each mood looks like (render/realplayer.ts updateFace blends between them). */
+export const MOODS: Record<'calm' | 'joy' | 'effort' | 'anger', FaceExpr> = {
+  calm: { brow: 0, smile: 0, squint: 0, grit: 0 },
+  joy: { brow: 0.75, smile: 1, squint: 0.55, grit: 0 },
+  effort: { brow: -0.6, smile: -0.15, squint: 0.75, grit: 0.9 },
+  anger: { brow: -1, smile: -0.9, squint: 0.35, grit: 0.25 },
+};
 
 export interface PlayerAssets {
   bodies: Body[];
@@ -421,7 +455,7 @@ export function loadPlayerAssets(base = 'models/'): Promise<PlayerAssets | null>
     if (!bodies.length) throw (loaded[0] as PromiseRejectedResult).reason;
     const clips: PlayerAssets['clips'] = {};
     await Promise.all(
-      (['idle', 'walk', 'jog', 'sprint', 'kick', 'slide', ...SHOTS] as ClipName[]).map(async (name) => {
+      (['idle', 'walk', 'jog', 'sprint', 'kick', 'slide', ...SHOTS, ...GAITS] as ClipName[]).map(async (name) => {
         try {
           const g = await loadModel(loader, `${base}anim-${name}`);
           clips[name] = analyseClip(g.scene, g.animations[0]);
@@ -601,6 +635,8 @@ export interface PlayerLookUniforms {
   uMudFront: { value: number };
   uSweat: { value: number };
   uMouth: { value: number };
+  /** Expression: brows, smile, squint, gritted teeth (FaceExpr). */
+  uExpr: { value: THREE.Vector4 };
   /** Cloth: time, ground speed and a per-player phase (shirts and shorts ripple more the faster he runs). */
   uCloth: { value: THREE.Vector3 };
 }
@@ -617,7 +653,7 @@ function kitMaterial(body: Body, kit: Kit, keeper: boolean, boot = 0x15161a, per
   // Skin tone relative to the body's own scan, kept within a modest range so textures stay natural.
   const tone = new THREE.Color(person.skin ?? body.tone.getHex());
   const tint = new THREE.Vector3(...[tone.r / Math.max(0.05, body.tone.r), tone.g / Math.max(0.05, body.tone.g), tone.b / Math.max(0.05, body.tone.b)].map((v) => Math.max(0.78, Math.min(1.25, 1 + (v - 1) * 0.6))) as [number, number, number]);
-  const look: PlayerLookUniforms = { uMud: { value: 0 }, uMudFront: { value: 0.5 }, uSweat: { value: 0 }, uMouth: { value: 0 }, uCloth: { value: new THREE.Vector3() } };
+  const look: PlayerLookUniforms = { uMud: { value: 0 }, uMudFront: { value: 0.5 }, uSweat: { value: 0 }, uMouth: { value: 0 }, uExpr: { value: new THREE.Vector4() }, uCloth: { value: new THREE.Vector3() } };
   // The club crest on the left chest (render/badgetex.ts), when the kit's club is known.
   const club = kitClub(kit);
   const uniforms = {
@@ -649,16 +685,20 @@ function kitMaterial(body: Body, kit: Kit, keeper: boolean, boot = 0x15161a, per
   };
   const hasDetail = !!body.mesh.geometry.getAttribute('aKit');
   const hasFace = !!body.mesh.geometry.getAttribute('aFace');
+  const hasExpr = !!body.mesh.geometry.getAttribute('aFace2');
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uniforms);
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
 ${hasDetail ? 'attribute vec3 aKit;\nvarying vec3 vKit;' : ''}
 ${hasFace ? 'attribute vec3 aFace;' : ''}
+${hasExpr ? 'attribute vec3 aFace2;' : ''}
 varying vec3 vFace;
+varying vec3 vExpr;
 varying vec3 vBind;
 varying float vMirror;
 uniform float uMouth;
+uniform vec4 uExpr;
 uniform vec2 uHinge;
 uniform vec3 uCloth;
 uniform sampler2D kitMask;`)
@@ -689,7 +729,22 @@ if (aFace.y > 0.001 && uMouth > 0.001) {
   vec2 r = transformed.yz - uHinge;
   float c = cos(ang), s = sin(ang);
   transformed.yz = uHinge + vec2(r.x * c - r.y * s, r.x * s + r.y * c);
-}` : 'vFace = vec3(0.0);'}`);
+}` : 'vFace = vec3(0.0);'}
+${hasExpr ? `vExpr = aFace2;
+// Expression: brows up (joy) or knitted down and in (effort, frustration); mouth corners up in a
+// grin or down in a frown, wider for gritted teeth; cheeks and lower lids up in a grin or squint.
+if (dot(abs(uExpr), vec4(1.0)) > 0.01) {
+  float knit = max(0.0, -uExpr.x);
+  transformed.y += aFace2.x * (uExpr.x * 0.009 - knit * 0.0015);
+  transformed.x -= aFace2.x * knit * 0.006 * sign(transformed.x) * (1.0 - smoothstep(0.015, 0.045, abs(transformed.x)));
+  transformed.z += aFace2.x * knit * 0.002;
+  float cy = abs(aFace2.y);
+  transformed.y += cy * uExpr.y * 0.009;
+  transformed.x += aFace2.y * (max(0.0, uExpr.y) * 0.006 + uExpr.w * 0.006);
+  transformed.z -= cy * max(0.0, uExpr.y) * 0.0015;
+  transformed.y += aFace2.z * (uExpr.z * 0.005 + max(0.0, uExpr.y) * 0.004);
+  transformed.z += aFace2.z * (uExpr.z + max(0.0, uExpr.y)) * 0.0012;
+}` : 'vExpr = vec3(0.0);'}`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
 uniform vec3 kitShirt, kitSleeves, kitShorts, kitSocks, kitTrim, kitBoot, kitGlove, kitSecond, kitSponsorCol;
@@ -700,8 +755,10 @@ varying float vMirror;
 ${KIT_PATTERN_GLSL}
 uniform vec3 uSkinTint, uHairCol;
 uniform float uHairLum, uMud, uMudFront, uSweat, uMouth;
+uniform vec4 uExpr;
 ${hasDetail ? 'varying vec3 vKit;' : ''}
 varying vec3 vFace;
+varying vec3 vExpr;
 varying vec3 vBind;
 float kHash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
 float kNoise(vec3 p) {
@@ -763,6 +820,8 @@ float kNoise(vec3 p) {
           diffuseColor.rgb = mix(diffuseColor.rgb, hc, hairW * 0.9);
           // Open mouth: the stretched lips show the dark inside of the mouth.
           diffuseColor.rgb *= 1.0 - clamp(uMouth * vFace.z * 1.6, 0.0, 0.88);
+          // A frown or a knitted brow creases the skin; a grin or a squint deepens the lines by the eyes.
+          diffuseColor.rgb *= 1.0 - (max(0.0, -uExpr.x) * vExpr.x * 0.16 + abs(vExpr.y) * max(0.0, -uExpr.y) * 0.1 + vExpr.z * uExpr.z * 0.08) * skinW;
           // Sweat darkens the shirt down the chest, under the arms, at the collar and down the back.
           if (uSweat > 0.01) {
             float chest = exp(-(b.x * b.x / 0.005 + (b.y - 1.32) * (b.y - 1.32) / 0.009)) * step(0.0, b.z);
@@ -915,6 +974,22 @@ export function nearestBody(assets: PlayerAssets, skin: number) {
   return best;
 }
 
+/** Share of a backpedal (solver backW, 0..1) played by the captured backwards walk at ground speed
+ * `speed`: all of it at walking pace, none above about 3.6 m/s, where the procedural quick steps take over. */
+export function backwalkShare(backW: number, speed: number) {
+  return backW * (1 - sm01((speed - 2.6) / 1.0));
+}
+
+/** Weights of the captured gaits at smoothed ground speed `gs`: the backwards walk (its share from
+ * backwalkShare) and the limp (limp strength 0..1, from walking pace up to a slow jog). Standing
+ * still plays neither; the backwards walk wins when both apply. */
+export function gaitClipWeights(backShare: number, limp: number, gs: number) {
+  const moving = sm01((gs - 0.1) / 0.5);
+  const backwalk = backShare * moving;
+  const limpW = Math.min(1, limp * 1.6) * moving * (1 - sm01((gs - 2.8) / 1.2));
+  return { backwalk, limp: limpW * (1 - backwalk) };
+}
+
 export class RealPlayerModel {
   root = new THREE.Group();
   private body = new THREE.Group();
@@ -926,6 +1001,9 @@ export class RealPlayerModel {
   private rig: BoneRig[] = [];
   private top: THREE.Object3D;
   private phase = Math.random();
+  /** Gait phases of the captured limp and backwards walk, and their weights now. */
+  private gaitPhase = { limp: Math.random(), backwalk: Math.random() };
+  private gaitW = { limp: 0, backwalk: 0 };
   private spd = 0; // smoothed ground speed for the locomotion blend
   private yaw: number | null = null; // smoothed facing drawn on screen
   private bank = 0; // lean into turns
@@ -971,6 +1049,11 @@ export class RealPlayerModel {
   /** Mud and sweat, 0..1 (render/wear.ts KitWear); the mouth is worked out here from what the player is doing. */
   wear = { mud: 0, front: 0.5, sweat: 0 };
   private mouth = 0;
+  private expr: FaceExpr = { brow: 0, smile: 0, squint: 0, grit: 0 };
+  /** Force a mood (photo tests); null lets the match decide. */
+  moodOverride: keyof typeof MOODS | null = null;
+  /** The mood the face is showing now (tests). */
+  mood: keyof typeof MOODS = 'calm';
   private headYaw = 0;
   private headPitch = 0;
   /** Heads follow the ball (the renderer turns it off for a cinematic that has its own look). */
@@ -1010,7 +1093,7 @@ export class RealPlayerModel {
     this.src = assets.clips;
     this.scale = body.hipsRest.y / (assets.clips.idle!.hipsRest.y || body.hipsRest.y);
     this.mixer = new THREE.AnimationMixer(this.model);
-    for (const name of [...LOCO, 'kick', 'slide', ...SHOTS] as ClipName[]) {
+    for (const name of [...LOCO, 'kick', 'slide', ...SHOTS, ...GAITS] as ClipName[]) {
       const s = assets.clips[name];
       if (!s) continue;
       const a = this.mixer.clipAction(retarget(s, body, (SHOTS as readonly string[]).includes(name) ? 'xz' : name !== 'idle'));
@@ -1183,13 +1266,17 @@ export class RealPlayerModel {
     this.diveW += ((this.dive && this.dive.stage !== 'out' ? 1 : 0) - this.diveW) * (1 - Math.exp(-dt * (this.dive?.stage === 'out' ? 7 : 30)));
     if (this.dive?.stage === 'out' && this.diveW < 0.01) this.dive = null;
     const sliding = !!this.actions.slide && (a === 'slide' || (a === 'stumble' && this.gettingUp));
-    // A backheel has no captured clip: the procedural kick plays it.
-    const backheel = a === 'kick' && this.solver.kickFlavour.flavour === 'backheel';
+    // A backheel, an overhead kick or a scissor volley has no captured clip: the procedural kick plays it.
+    const fl0 = this.solver.kickFlavour.flavour;
+    const backheel = a === 'kick' && (fl0 === 'backheel' || fl0 === 'overhead' || fl0 === 'scissor');
     const actP = (a !== 'none' || this.holdThrow || this.solver.gkLayer || this.solver.overlay) && (a !== 'kick' || backheel) && !sliding ? this.solver.actW : 0;
     // Captured one-shots ease in and out over about a tenth of a second.
     this.shotW += ((this.shot ? 1 : 0) - this.shotW) * (1 - Math.exp(-dt * 14));
     if (!this.shot && this.shotW < 0.01) this.lastShot = null;
-    this.procW = Math.max(actP, this.solver.jockW, this.keeperW, ballHeldByMe ? 1 : 0) * (1 - this.shotW) * (1 - this.diveW);
+    // Backpedalling at walking pace plays the captured backwards walk (below) instead of the
+    // procedural one; faster backpedals keep the procedural quick steps.
+    const backK = this.src.backwalk ? backwalkShare(this.solver.backW, Math.hypot(p.vel.x, p.vel.z)) : 0;
+    this.procW = Math.max(actP, this.solver.jockW, Math.max(0, this.solver.moveW - backK), this.keeperW, ballHeldByMe ? 1 : 0) * (1 - this.shotW) * (1 - this.diveW);
 
     // Locomotion weights by a smoothed ground speed (the simulation's velocity steps every tick,
     // which made the clip weights flicker) between neighbouring clips. Each clip sits at the game
@@ -1245,6 +1332,17 @@ export class RealPlayerModel {
       this.phase = (this.phase + (speed * dt) / strideLen + this.turnStep * dt * Math.min(1.6, spin / 3)) % 1;
     }
     this.idleT += dt;
+    // Captured gaits in place of the walk/jog: a limp after a knock (walking to slow jogging pace)
+    // and the backwards walk. Each has its own phase, advanced by distance over its stride.
+    const gw = gaitClipWeights(backK, this.src.limp && !this.solver.injury ? this.solver.limp : 0, gs);
+    this.gaitW.backwalk = gw.backwalk;
+    this.gaitW.limp = gw.limp;
+    const gaitSum = this.gaitW.backwalk + this.gaitW.limp;
+    if (gaitSum > 0) for (const n of LOCO) if (w[n]) w[n]! *= 1 - gaitSum;
+    for (const n of GAITS) {
+      const s = this.src[n];
+      if (s && this.gaitW[n] > 0) this.gaitPhase[n] = (this.gaitPhase[n] + (speed * dt) / Math.max(0.3, this.strideAt(n, s, Math.max(gs, 0.3)))) % 1;
+    }
 
     // Kick: warp the clip so the boot meets the ball at the simulation's release time.
     const kick = this.actions.kick, ks = this.src.kick;
@@ -1288,20 +1386,35 @@ export class RealPlayerModel {
       act.time = n === 'idle' ? this.idleT % s.clip.duration : (s.phase0 + this.phase * s.cycle) % s.clip.duration;
       act.setEffectiveWeight((w[n] ?? 0) * locoW);
     }
+    for (const n of GAITS) {
+      const act = this.actions[n];
+      if (!act) continue;
+      const s = this.src[n]!;
+      act.time = (s.phase0 + this.gaitPhase[n] * s.cycle) % s.clip.duration;
+      act.setEffectiveWeight(this.gaitW[n] * locoW);
+    }
+    const gaitOff = 1 - Math.min(1, this.gaitW.limp + this.gaitW.backwalk);
     kick?.setEffectiveWeight(kickW);
     slide?.setEffectiveWeight(slideW);
     for (const n of SHOTS) this.actions[n]?.setEffectiveWeight(n === shotName ? Math.min(shotW, 1 - kickW - slideW) : 0);
     this.mixer.update(0);
     this.applyProcedural();
     // Running style layer over the motion-captured run (see applyRunLayer).
-    const runW = Math.min(1, Math.max(0, (speed - 1.2) / 2)) * (1 - this.procW) * (1 - kickW) * (1 - slideW) * (1 - shotW);
+    const runW = Math.min(1, Math.max(0, (speed - 1.2) / 2)) * gaitOff * (1 - this.procW) * (1 - kickW) * (1 - slideW) * (1 - shotW);
     this.dribW += ((this.dribbling ? 1 : 0) - this.dribW) * (1 - Math.exp(-dt * 6));
     const dW = this.dribW * Math.min(1, speed / 0.6) * (1 - this.procW) * (1 - kickW) * (1 - slideW) * (1 - shotW);
     if (runW > 0.001) this.applyRunLayer(runW, speed);
     if (dW > 0.001) this.applyDribbleArms(dW, speed);
     // Walking: arms hang close to the body with a small, soft swing (see applyWalkArms).
-    const wW = sm01((this.spd - 0.25) / 0.45) * (1 - sm01((this.spd - 2.1) / 1.2)) * (1 - this.procW) * (1 - kickW) * (1 - slideW) * (1 - shotW) * (1 - this.dribW);
+    const armFree = (1 - this.procW) * (1 - kickW) * (1 - slideW) * (1 - shotW) * (1 - this.dribW);
+    const wW = sm01((this.spd - 0.25) / 0.45) * (1 - sm01((this.spd - 2.1) / 1.2)) * gaitOff * armFree;
     if (wW > 0.001) { this.applyWalkPosture(wW); this.applyWalkArms(wW, this.spd); }
+    // The captured limp and backwards walk keep their own hunch and lean, but their arms come out
+    // forward with the palms up on our bodies: hang them like the walk's, swinging with that gait.
+    for (const n of GAITS) {
+      const g = this.gaitW[n] * armFree;
+      if (g > 0.001) this.applyWalkArms(g, this.spd, this.gaitPhase[n]);
+    }
     if (kickW > 0.001) { this.applyKickStyle(p, kickW); this.applyKickFlavour(p, kickW); }
     const free = (1 - this.procW) * (1 - kickW) * (1 - slideW) * (1 - shotW);
     // Gestures: first touches, dribbling touches, blocks (only the bones each one needs).
@@ -1328,7 +1441,7 @@ export class RealPlayerModel {
       this.reactPose.set(this.solver.pose);
       for (const c of rc.only ?? UPPER) this.reactPose[c] = rc.pose[c];
       if (legs) for (const c of LEGS) this.reactPose[c] = rc.pose[c];
-      this.applyPoseOver(this.reactPose, reactW, !legs, rc.only ? RIGHT_ARM : undefined);
+      this.applyPoseOver(this.reactPose, reactW, !legs, rc.only ? (rc.only.includes(SLX) ? LEFT_ARM : RIGHT_ARM) : undefined);
       if (legs) this.body.position.y += rc.pose[BY] * reactW * Math.max(0, 1 - speed / 0.8);
     }
     if (this.dive && this.diveW > 0.001) this.applyDive(p, ballHeldByMe, dt);
@@ -1337,13 +1450,27 @@ export class RealPlayerModel {
     this.updateScan(p, ballPos, dt, speed, ballHeldByMe);
     this.applyHeadLook(p, ballPos, dt, lookW);
     // Planted feet stay where they are on the grass.
-    const ikWant = this.footIK && this.body.scale.x > 0 && this.root.position.y < 0.005 && !this.solver.falling ? (1 - this.diveW) * (1 - shotW) * (1 - slideW) : 0;
+    const ikWant = this.footIK && this.body.scale.x > 0 && this.root.position.y < 0.005 && !this.solver.falling && !this.solver.airborne ? (1 - this.diveW) * (1 - shotW) * (1 - slideW) : 0;
     this.ikOn += (ikWant - this.ikOn) * (1 - Math.exp(-dt * 12));
     this.plantFeet(dt, this.ikOn);
     // Face and kit: open mouth when shouting, celebrating or out of breath; mud and sweat.
     this.updateFace(p, dt, time, speed, rc && reactW > 0.05 ? rc.kind : null, shotW > 0.3 && !!this.shot && (CHEERS as readonly string[]).includes(this.shot.name));
     if (this.hair?.active && this.root.visible) this.hair.update(dt, this.root);
   }
+
+  /** Injured and down / being treated, and how badly he limps afterwards (render/moves7.ts), set by the renderer. */
+  get injury() { return this.solver.injury; }
+  set injury(v: PlayerModel['injury']) { this.solver.injury = v; }
+  get limp() { return this.solver.limp; }
+  set limp(v: number) { this.solver.limp = v; }
+  /** Star block or foot save being played (tests). */
+  get quickSave() { return this.solver.quickSave; }
+  /** Backpedal / side-step weight (tests). */
+  get moveW() { return this.solver.moveW; }
+  /** Weights of the captured limp and backwards walk this frame (tests). */
+  get gaitWeights() { return { ...this.gaitW }; }
+  /** The kick flavour being played: toe, outside, backheel, overhead, scissor (tests). */
+  get kickFlavour() { return this.solver.kickFlavour.flavour; }
 
   /** How tired the player looks (0..1), set by the renderer. */
   get tired() { return this.solver.tired; }
@@ -1552,6 +1679,23 @@ export class RealPlayerModel {
   }
 
   /** How far the head is turned to follow the ball (yaw, pitch in radians), for tests. */
+  /** A camera in front of his face, for close-up tests: where to stand and where to look. */
+  faceView(dist = 0.7): { pos: [number, number, number]; look: [number, number, number] } | null {
+    const sm = (this.meshes as THREE.SkinnedMesh[]).find((m) => m.isSkinnedMesh);
+    const head = this.model.getObjectByName('Head');
+    if (!sm || !head) return null;
+    this.model.updateWorldMatrix(true, true);
+    // Skinned like the face itself: the head bone's world matrix times its inverse bind times the bind matrix.
+    const bi = sm.skeleton.bones.indexOf(head as THREE.Bone);
+    if (bi < 0) return null;
+    const m = new THREE.Matrix4().copy(head.matrixWorld).multiply(sm.skeleton.boneInverses[bi]).multiply(sm.bindMatrix);
+    const nose = new THREE.Vector3(0, 1.66, 0.1).applyMatrix4(m);
+    const f = new THREE.Vector3(0, 0, 1).transformDirection(m);
+    const look = nose.clone().addScaledVector(f, -0.06);
+    const pos = look.clone().addScaledVector(f, dist).add(new THREE.Vector3(0, 0.02, 0));
+    return { pos: [pos.x, pos.y, pos.z], look: [look.x, look.y, look.z] };
+  }
+
   get headTurn() {
     return { yaw: this.headYaw, pitch: this.headPitch };
   }
@@ -1568,8 +1712,28 @@ export class RealPlayerModel {
     else if (reaction === 'highFive' || reaction === 'clap') target = 0.25 + 0.3 * w(5);
     else if (reaction === 'headInHands' || reaction === 'crouch') target = 0.35;
     else if (speed > 5.5) target = 0.12 + 0.25 * (1 - Math.max(0, Math.min(1, p.stamina))) + 0.08 * w(5);
-    this.mouth += (target - this.mouth) * (1 - Math.exp(-dt * 10));
+    // The rest of the face: joy when celebrating, effort when straining (a sprint on tired legs, a
+    // shot, a tackle, a header), frustration after a miss or a decision against him.
+    const a = p.action.type;
+    let mood: keyof typeof MOODS = 'calm', amt = 1;
+    if (cheering || a === 'celebrate' || reaction === 'armsUp' || reaction === 'fistPump' || reaction === 'kneeSlide' || reaction === 'huddle' || reaction === 'highFive' || reaction === 'clap' || reaction === 'badgeKiss' || reaction === 'lift') mood = 'joy';
+    else if (reaction === 'protest' || reaction === 'appeal' || reaction === 'headInHands' || reaction === 'crouch' || reaction === 'dejected' || reaction === 'handsOnHips') { mood = 'anger'; amt = reaction === 'handsOnHips' ? 0.6 : 1; }
+    else if (a === 'kick' || a === 'tackle' || a === 'slide' || a === 'header' || a === 'dive' || a === 'barge' || a === 'jump' || a === 'catch') mood = 'effort';
+    else if (speed > 5.5) { mood = 'effort'; amt = Math.min(1, 0.25 + (speed - 5.5) * 0.25 + 0.5 * (1 - Math.max(0, Math.min(1, p.stamina)))); }
+    else if (p.stamina < 0.35) { mood = 'effort'; amt = 0.35; }
+    if (this.moodOverride) { mood = this.moodOverride; amt = 1; }
+    this.mood = mood;
+    const want = MOODS[mood], ek = this.moodOverride ? 1 : 1 - Math.exp(-dt * (mood === 'effort' ? 9 : 5));
+    this.expr.brow += (want.brow * amt - this.expr.brow) * ek;
+    this.expr.smile += (want.smile * amt - this.expr.smile) * ek;
+    this.expr.squint += (want.squint * amt - this.expr.squint) * ek;
+    this.expr.grit += (want.grit * amt - this.expr.grit) * ek;
+    if (this.moodOverride) { target = mood === 'joy' ? 0.7 : mood === 'anger' ? 0.3 : 0; }
+    // Gritted teeth keep the mouth nearly shut.
+    if (mood === 'effort' && a !== 'none') target = Math.min(target, 0.12);
+    this.mouth += (target - this.mouth) * (this.moodOverride ? 1 : 1 - Math.exp(-dt * 10));
     this.look.uMouth.value = this.mouth;
+    this.look.uExpr.value.set(this.expr.brow, this.expr.smile, this.expr.squint, this.expr.grit);
     this.look.uCloth.value.set(time, this.spd, this.id * 1.37);
     this.look.uMud.value = this.wear.mud;
     this.look.uMudFront.value = this.wear.front;
@@ -1618,7 +1782,7 @@ export class RealPlayerModel {
 
   /** Track a keeper dive (and the time down after it) that the skeleton-driven dive will play. */
   private startDive(p: ViewPlayer, a: string) {
-    if (a === 'dive' && p.action.target && this.shot?.name !== 'catch') {
+    if (a === 'dive' && p.action.target && this.shot?.name !== 'catch' && !this.solver.quickSave) {
       const T = p.action.target;
       const lat = (T.x - p.pos.x) * -Math.sin(p.facing) + (T.z - p.pos.z) * Math.cos(p.facing);
       // Standing hips in the root's frame, from the bind pose scaled like the clips.
@@ -1724,6 +1888,14 @@ export class RealPlayerModel {
       P[be] = lerp(P[be], high ? -1.15 : -0.05, one);
       P[tx] = lerp(P[tx], high ? -2.95 : -2.7, one);
     }
+    // Fingertip save (20 Nov 2026): a parried high or full-stretch dive is a one-handed tip over the
+    // bar or round the post, the top arm at full length and the other folding in.
+    const tip = d.parry * (high || kind === 'full' ? 1 : 0) * launch * (1 - land) * (1 - rise);
+    if (tip > 0.001) {
+      const [bx, be, tx, te] = top === 'R' ? [SLX, ELX, SRX, ERX] : [SRX, ERX, SLX, ELX];
+      P[bx] = lerp(P[bx], -1.5, tip); P[be] = lerp(P[be], -1.3, tip);
+      P[tx] = lerp(P[tx], -3.05, tip); P[te] = lerp(P[te], 0, tip);
+    }
     // Legs: push leg straightens through the launch; the far knee drives up then both fold.
     // Collapse: no spring, both knees fold and the near leg slides away; high: a bigger knee drive.
     const pushH = lerp(lerp(-0.35, collapse ? -0.6 : 0.12, launch), -0.55, fall), pushK = lerp(lerp(0.75, collapse ? 1.25 : 0.15, launch), 1.0, fall);
@@ -1735,6 +1907,8 @@ export class RealPlayerModel {
     P[SPX] = lerp(lerp(lerp(0.25, 0.08, launch), 0.3, fall * d.held), 0.25, rise);
     P[NKX] = lerp(-0.18 * launch, 0, rise);
     this.applyPoseOver(P, W);
+    // The wrist flicks the ball on its way.
+    if (tip > 0.001) this.turnChar(top === 'R' ? 'RightHand' : 'LeftHand', AXIS_X, -1.0 * tip * Math.sin(Math.PI * Math.min(1, d.parryT / 0.25)) * W);
     // Body roll about the forward axis, then place it so the hips follow the path.
     const rq = _q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -s * roll);
     this.body.quaternion.slerp(rq, W);
@@ -1811,10 +1985,10 @@ export class RealPlayerModel {
    * (the forward hand reaches the front of the thigh, the back one just behind the hip), the
    * forearm bending a little more on the forward swing, palms towards the thighs.
    */
-  private applyWalkArms(W: number, speed: number) {
+  private applyWalkArms(W: number, speed: number, phase = this.phase) {
     const P = this.walkP;
     P.set(this.solver.pose);
-    const c = Math.cos(this.phase * Math.PI * 2); // +1 when the left foot is furthest forward
+    const c = Math.cos(phase * Math.PI * 2); // +1 when the left foot is furthest forward
     const amp = 0.17 + 0.08 * Math.min(1, Math.max(0, (speed - 1) / 1.5));
     // Left arm back as the left leg goes forward (positive X swings an arm back).
     P[SLX] = 0.04 + amp * c; P[SRX] = 0.04 - amp * c;
@@ -1995,7 +2169,7 @@ export class RealPlayerModel {
   }
 
   /** Stride length (m per gait cycle) to play a locomotion clip at a given ground speed. */
-  private strideAt(n: 'walk' | 'jog' | 'sprint', s: ClipSrc, v: number) {
+  private strideAt(n: ClipName, s: ClipSrc, v: number) {
     const own = Math.max(0.3, s.speed * this.scale);
     const ownStride = Math.max(0.4, own * s.cycle);
     if (s.speed < 0.3) return Math.max(0.4, v * s.cycle); // speed unknown: keep the clip's cadence
@@ -2120,6 +2294,7 @@ export class RealPlayerModel {
     const W = this.procW;
     const P = this.solver.pose;
     this.body.position.y = P[BY] * W;
+    this.body.position.z = this.solver.bodyShift * W;
     this.body.rotation.set(P[BRX] * W, 0, P[BRZ] * W);
     if (W < 0.001) return;
     this.applyPoseOver(P, W);

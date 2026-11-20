@@ -28,6 +28,7 @@ import { attachKeyboard, KeyboardState } from './input/keyboard';
 import { attachMouse, MouseSource } from './input/mouse';
 import { isTouchDevice, TouchControls, TouchModel, type TouchContext } from './input/touch';
 import { NetClient } from './net/netclient';
+import { isLocalHost, onServerState, PLAY_URL, serverState, wakeServer } from './net/hosting';
 import { OnlineSession, type StartInfo } from './net/online';
 import { AUTO_RES_MIN, GameRenderer, realisticPlayers } from './render/renderer';
 import { MOW_NAMES, MOW_PATTERNS, type MowSetting } from './render/vfx';
@@ -57,6 +58,7 @@ import { Announcer, lineupLines, welcomeLines, type AnnounceTeam } from './audio
 import { captainIndex } from './render/look';
 import { loadChoice, loadMenuOpen, saveChoice, saveMenuOpen, type MatchChoice } from './quickmatch';
 import { ModeScreens, type ModeMatch } from './modes/screens';
+import { clearModes } from './modes/store';
 import { ClipTheatre, makeClip, saveClip, shareVideo, type GoalClip } from './modes/clips';
 import { Commentator } from './commentator';
 import { loadRanked, rankedHtml, rankedResultHtml, saveRanked } from './modes/ranked';
@@ -143,6 +145,9 @@ export class App {
   private screenName = 'mode';
   private last = performance.now();
   private fps = 60;
+  private touchCovered = false;
+  /** The frame-rate readout: frames since the last refresh (twice a second), their total and the slowest. */
+  private fpsWin = { n: 0, sum: 0, worst: 0, at: 0, text: '' };
   /** The last frame's real duration in ms (auto resolution). */
   private rawMs = 16.7;
   private autoResOn = !new URLSearchParams(location.search).has('test') || new URLSearchParams(location.search).has('autores');
@@ -369,6 +374,10 @@ export class App {
     this.hud.setHighContrast(this.settings.highContrast);
     this.hud.restartCaptions = this.settings.restartCaptions;
     this.audio.setMusic(true); // menu music, from the first click or key press
+    // Wake the online match server now (a free server sleeps when unused), so it is ready by the
+    // time anyone opens Online; the Online screen shows its state.
+    onServerState(() => { const el = this.ui.querySelector('.server-state'); if (el) el.innerHTML = this.serverStateText(); });
+    setTimeout(() => void wakeServer(), 1500);
     const room = new URLSearchParams(location.search).get('room');
     if (room && ROOM_CODE_RE.test(room.toUpperCase())) this.showOnline(room.toUpperCase());
     else this.showMode();
@@ -387,6 +396,7 @@ export class App {
     this.frameMs = this.frameMs * 0.9 + Math.min(raw, 2000) * 0.1;
     this.fps = 1000 / Math.max(1, this.frameMs);
     this.rawMs = raw;
+    if (raw < 2000) { const w = this.fpsWin; w.worst = Math.max(w.worst, raw); w.n++; w.sum += raw; }
     if (this.session && this.renderer && this.overlay === 'photo') {
       this.photoFrame(dt);
     } else if (this.session && this.renderer) {
@@ -405,6 +415,14 @@ export class App {
       else if (this.backdrop.active && this.renderer) this.backdrop.frame(this.renderer, dt, this.settings.camera);
       if (this.screenName === 'sides') this.pollSides();
       else this.menuGamepad(now);
+    }
+    // A menu over the match (pause, half-time, full-time, photo mode): the on-screen controls sit
+    // above the menus, so they go while it is open or their stick area and buttons take its taps.
+    const covered = this.overlay !== 'none';
+    if (covered !== this.touchCovered) {
+      this.touchCovered = covered;
+      document.body.classList.toggle('menu-over', covered);
+      if (covered) this.touchModel.clear();
     }
     requestAnimationFrame((t) => this.frame(t));
   }
@@ -474,6 +492,8 @@ export class App {
     this.cine.varScreens = this.settings.varChecks !== false;
     this.cine.varChecks = s instanceof OfflineSession && this.settings.varChecks !== false && !this.cineOff && !s.cfg.practice && !v.shootout && this.overlay === 'none';
     this.cine.celebrate = s instanceof OfflineSession && this.settings.celebrations !== false && !this.cineOff && !s.cfg.practice && !v.shootout && this.overlay === 'none';
+    // Online the celebration cinematic doesn't play: the live match cuts to the pitchside camera instead.
+    this.renderer!.liveHandheld = !(s instanceof OfflineSession) && this.settings.celebrations !== false && !v.shootout;
     const cv = this.cine.frame(v, dt, this.renderer!, allowReplay);
     if (cv) {
       this.renderer!.render(cv.view, cv.dt, this.settings.camera, { localTeams: s.localTeams, receiver: -1, showNext: false, playerRing: this.settings.playerRing, highContrast: false });
@@ -549,7 +569,8 @@ export class App {
     const info = this.renderer!.info();
     this.hud.update(v, {
       localTeams: s.localTeams, charge, chargeLabel, chargeTicks, powerAt, ringAt, conn: s.conn(), extraPower,
-      guide: this.settings.highContrast || !this.touchMode ? guideLine(this.actions.lastDevice === 'keyboard' && this.mouseMode ? 'mouse' : this.actions.lastDevice, this.gamepad.style, attacking, this.settings.controls) : '',
+      guide: this.settings.controlHints !== false && (this.settings.highContrast || !this.touchMode) ? guideLine(this.actions.lastDevice === 'keyboard' && this.mouseMode ? 'mouse' : this.actions.lastDevice, this.gamepad.style, attacking, this.settings.controls) : '',
+      fps: this.settings.showFps ? this.fpsReadout(now) : null,
       debug: this.debugOverlay ? `fps ${this.fps.toFixed(0)}  frame ${this.frameMs.toFixed(1)} ms  res ${Math.round(this.renderer!.resolutionScale * 100)}%  draw calls ${info.calls}  tris ${info.tris}\n${s.debugText()}` : null,
     });
     this.tv.update(v);
@@ -1111,6 +1132,8 @@ export class App {
       <p class="note">Ten attempts, then your score. Best scores are kept on this device.</p>
       <div class="stack">
         ${(['freekick', 'penalty', 'crosses'] as const).map((d) => `<button class="btn" data-ch="${d}">${{ freekick: 'Free-kick challenge', penalty: 'Penalty challenge', crosses: 'Finishing challenge' }[d]}${this.bestScore(d) !== null ? ` · best ${this.bestScore(d)}/10` : ''}</button>`).join('')}
+        <button class="btn" data-a="p-control">Ball control drill${this.bestScore('control') !== null ? ` · best ${this.bestScore('control')} pts` : ''}</button>
+        <p class="note">60 seconds with a coach: dribble through the gates (quicker and closer for more points), pass to him and control what he plays back, on the ground and in the air. Keepy-ups count too. Losing the ball costs 30.</p>
       </div>
       <div class="row end" style="margin-top:12px"><button class="btn" data-a="back">Back</button></div></div>`, 'scroll');
     this.on('[data-a=p-tutorial]', () => this.startTutorial());
@@ -1118,6 +1141,7 @@ export class App {
     this.on('[data-a=p-freekick]', () => this.startOffline('freekick'));
     this.on('[data-a=p-penalty]', () => this.startOffline('penalty'));
     this.on('[data-a=p-crosses]', () => this.startOffline('crosses'));
+    this.on('[data-a=p-control]', () => this.startOffline('control', 60));
     this.ui.querySelectorAll<HTMLElement>('[data-ch]').forEach((b) => b.addEventListener('click', () => this.startOffline(b.dataset.ch as 'freekick', 10)));
     this.on('[data-a=back]', () => this.showMode());
   }
@@ -1264,6 +1288,8 @@ export class App {
     if (!this.renderer) {
       const canvas = document.getElementById('game') as HTMLCanvasElement;
       this.renderer = new GameRenderer(canvas, this.settings.graphics);
+      // The match intro's floodlights clunking on, bank by bank.
+      this.renderer.onFloodlight = (pan) => this.audio.floodlight(pan);
       // Click or tap on the pitch: switch to the teammate nearest that point.
       canvas.addEventListener('pointerdown', (e) => { if (this.overlay === 'photo') this.photoDrag = { x: e.clientX, y: e.clientY }; });
       window.addEventListener('pointermove', (e) => {
@@ -1413,7 +1439,7 @@ export class App {
     // The realistic players (several MB) must be in before kick-off, or the tunnel walk-out shows
     // the simple stand-in figures: wait for them here (they start downloading on the title screen).
     const diffName = ({ casual: 'Casual', pro: 'Pro', elite: 'Elite', adaptive: 'Adaptive' } as Record<string, string>)[c.difficulty] ?? c.difficulty;
-    const detail = seats && seats.length ? `Local · ${this.sideLabel(seats, 0)} v ${this.sideLabel(seats, 1)} · ${c.minutes} min` : practice ? `Practice · ${({ free: 'Free play', freekick: 'Free kicks', penalty: 'Penalties', crosses: 'Crossing and finishing' } as Record<string, string>)[practice] ?? 'Practice'}${challenge ? ' challenge' : ''}`
+    const detail = seats && seats.length ? `Local · ${this.sideLabel(seats, 0)} v ${this.sideLabel(seats, 1)} · ${c.minutes} min` : practice ? `Practice · ${({ free: 'Free play', freekick: 'Free kicks', penalty: 'Penalties', crosses: 'Crossing and finishing', control: 'Ball control drill' } as Record<string, string>)[practice] ?? 'Practice'}${challenge && practice !== 'control' ? ' challenge' : ''}`
       : `${comp ? (this.comp?.kind === 'league' ? 'League · ' : 'Cup · ') : ''}${diffName} · ${c.minutes} min`;
     const detailText = mode ? mode.detail : detail;
     const info = this.loadInfo(cfg.teams as [string, string], cfg.kits, detailText);
@@ -1613,6 +1639,18 @@ export class App {
     // Back on the menus: the stadium carries on behind them with the same two clubs (no rebuild).
     const last = this.lastTeams;
     setTimeout(() => this.startBackdrop(last?.teams, last?.kits), 0);
+  }
+
+  /** "58 fps · 17 ms · slowest 24 ms · Medium 90%", refreshed twice a second so it can be read. */
+  private fpsReadout(now: number): string {
+    const w = this.fpsWin;
+    if (now - w.at >= 500 && w.n > 0) {
+      const avg = w.sum / w.n;
+      const q = ({ low: 'Low', medium: 'Medium', high: 'High', ultra: 'Ultra' } as Record<string, string>)[this.settings.graphics.preset] ?? '';
+      w.text = `${Math.round(1000 / avg)} fps · ${avg.toFixed(1)} ms · slowest ${Math.round(w.worst)} ms · ${q} ${Math.round((this.renderer?.resolutionScale ?? 1) * 100)}%`;
+      w.n = 0; w.sum = 0; w.worst = 0; w.at = now;
+    }
+    return w.text || '…';
   }
 
   /** Shows or hides the on-screen controls when a controller connects or disconnects. */
@@ -2008,9 +2046,10 @@ export class App {
       let text = '', cls = '';
       if (e.type === 'call' && e.text?.startsWith('skill:')) {
         const [, pts, what] = e.text.split(':');
-        text = Number(pts) > 0 ? `${what} +${pts}` : what;
+        text = Number(pts) > 0 ? `${what} +${pts}` : Number(pts) < 0 ? `${what} ${pts}` : what;
         cls = Number(pts) > 0 ? 'good' : 'bad';
-        if (Number(pts) > 0) this.audio.react('goal'); else this.audio.react('ooh');
+        // Keepy-ups in the ball control drill come thick and fast: no crowd roar for each one.
+        if (what !== 'Keepy-up') { if (Number(pts) > 0) this.audio.react('goal'); else this.audio.react('ooh'); }
       } else if (e.type === 'injury') {
         const [kind, named] = (e.text ?? '').split(':');
         const who = named || (v.players[e.player ?? -1]?.def.short ?? '');
@@ -2018,6 +2057,8 @@ export class App {
         cls = kind === 'up' ? 'good' : 'bad';
       }
       if (!text) continue;
+      // The newest message replaces any still showing (they sit in the same spot).
+      document.querySelectorAll('#hud .match-toast').forEach((o) => o.remove());
       const el = document.createElement('div');
       el.className = `match-toast ${cls}`;
       el.textContent = text;
@@ -2029,19 +2070,19 @@ export class App {
   /** End of a practice challenge: the score, and the best on this device. */
   private openChallengeResult(v: ViewState, cfg: MatchConfig) {
     this.overlay = 'fulltime';
-    const d = cfg.practice as 'freekick' | 'penalty' | 'crosses';
+    const d = cfg.practice as 'freekick' | 'penalty' | 'crosses' | 'control';
     const prev = this.bestScore(d);
     const score = v.score[0];
     if (this.resultsNote === null) {
       this.resultsNote = '';
       if (prev === null || score > prev) this.profile.challengeBest[d] = score;
-      if (score >= 10 && (cfg.challenge ?? 0) >= 10) this.announce(unlock(this.profile, ['perfect-ten']));
+      if (d !== 'control' && score >= 10 && (cfg.challenge ?? 0) >= 10) this.announce(unlock(this.profile, ['perfect-ten']));
       this.saveProfile();
     }
-    const name = { freekick: 'Free-kick challenge', penalty: 'Penalty challenge', crosses: 'Finishing challenge' }[d];
+    const name = { freekick: 'Free-kick challenge', penalty: 'Penalty challenge', crosses: 'Finishing challenge', control: 'Ball control drill' }[d];
     this.ui.innerHTML = `<div class="screen translucent"><div class="panel narrow">
       <h3 style="text-align:center">${name}</h3>
-      <div class="final">${score} / ${cfg.challenge}</div>
+      <div class="final">${d === 'control' ? `${score} points` : `${score} / ${cfg.challenge}`}</div>
       <p class="note" style="text-align:center">${prev === null ? 'First try: this is your best so far.' : score > prev ? `New best! (was ${prev})` : `Best: ${prev}`}</p>
       <div class="row end"><button class="btn" data-a="menu">Practice menu</button><button class="btn primary" data-a="again">Try again</button></div>
     </div></div>`;
@@ -2391,6 +2432,9 @@ export class App {
       if (this.slotConfirm !== i) { this.slotConfirm = i; this.showProfile(); return; }
       this.slotConfirm = -1;
       this.store.slots[i] = null;
+      // The slot's career, Be a Pro, cabinet and club history go with it.
+      clearModes(i);
+      this.modes.syncSlot(true);
       if (!this.store.slots.some(Boolean)) this.store.slots[i] = newProfile('Player 1');
       if (!this.store.slots[this.store.active]) this.store.active = this.store.slots.findIndex(Boolean);
       this.useSlot(this.store.active);
@@ -2776,6 +2820,7 @@ export class App {
         <div class="row between"><span class="lbl">Quality</span>${this.seg('preset', [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['ultra', 'Ultra']], s.graphics.preset)}</div>
         <div class="row between"><span class="lbl">Render scale</span>${range('scale', s.graphics.renderScale, 0.5, 1.5, 0.05)}</div>
         <div class="row between"><span class="lbl">Auto resolution</span>${this.seg('autores', [['on', 'On'], ['off', 'Off']], s.graphics.autoRes !== false ? 'on' : 'off')}</div>
+        <div class="row between"><span class="lbl">Frame rate</span>${this.seg('showfps', [['on', 'Show'], ['off', 'Hide']], s.showFps ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Shadows</span>${this.seg('shadows', [['on', 'On'], ['off', 'Off']], s.graphics.shadows ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Players</span>${this.seg('players', [['realistic', 'Realistic'], ['classic', 'Classic']], s.graphics.players ?? 'realistic')}</div>
         ${realisticPlayers(s.graphics) ? `<p class="note players-status">${({ idle: 'Realistic players: not loaded yet', loading: 'Realistic players: loading…', ready: 'Realistic players: loaded', failed: `Realistic players could not load, so simple players are shown (${esc(playerAssetStatus.detail)})` } as const)[playerAssetStatus.state]}</p>` : s.graphics.preset === 'low' && (s.graphics.players ?? 'realistic') === 'realistic' ? '<p class="note players-status">Low quality always uses the simple players. Choose Medium or higher for realistic players.</p>' : ''}
@@ -2788,7 +2833,7 @@ export class App {
         <div class="row between wrapline"><span class="lbl">Mowing</span>${this.seg('mowing', [['random', 'Random'], ...MOW_PATTERNS.map((m): [string, string] => [m, MOW_NAMES[m].replace(' stripes', '')])], s.graphics.mowing ?? 'random').replace('class="seg"', 'class="seg wrap"')}</div>
         <div class="row between"><span class="lbl">TV graphics</span>${this.seg('tvg', [['on', 'On'], ['off', 'Off']], s.tvGraphics !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Menu background</span>${this.seg('menubg', [['on', 'Live stadium'], ['off', 'Plain']], s.menuBackdrop !== false ? 'on' : 'off')}</div>
-        <p class="note">Weather starts with the next match; Random picks clear, rain or snow each time. It changes how the ball plays: on a wet pitch it skids on and rolls further and keepers spill more, snow slows it down, and wind (shown by the arrow on the radar) carries crosses, long balls and shots. Wind Off keeps every match still. Pitch and kit wear: the grass scuffs and churns to mud where play goes (more in the rain), and kits pick up mud from slides, falls and dives and darken with sweat as the match goes on (realistic players). TV graphics shows the team line-ups before kick-off and match stats along the bottom of the screen. Menu background Live stadium shows a computer match in the stadium behind the menus (30 frames a second on phones and tablets); Plain saves battery. TV colour grade gives the picture a broadcast look: softer shadows, richer colour in the grass and kits, and on High and Ultra a soft glow round the floodlights. Big screens Live pictures shows play on the two big screens (Medium and up), with a slowed replay after each goal; Scores only shows the score and sponsors, which is a little faster. Mowing picks the pattern cut into the grass for the next match (Random changes it each time). Auto resolution draws slightly fewer pixels (never below ${Math.round(AUTO_RES_MIN * 100)}% of the render scale) when the frame rate drops during a match, and goes back up when it recovers.</p>
+        <p class="note">Weather starts with the next match; Random picks clear, rain or snow each time. It changes how the ball plays: on a wet pitch it skids on and rolls further and keepers spill more, snow slows it down, and wind (shown by the arrow on the radar) carries crosses, long balls and shots. Wind Off keeps every match still. Pitch and kit wear: the grass scuffs and churns to mud where play goes (more in the rain), and kits pick up mud from slides, falls and dives and darken with sweat as the match goes on (realistic players). TV graphics shows the team line-ups before kick-off and match stats along the bottom of the screen. Menu background Live stadium shows a computer match in the stadium behind the menus (30 frames a second on phones and tablets); Plain saves battery. TV colour grade gives the picture a broadcast look: softer shadows, richer colour in the grass and kits, and on High and Ultra a soft glow round the floodlights. Big screens Live pictures shows play on the two big screens (Medium and up), with a slowed replay after each goal; Scores only shows the score and sponsors, which is a little faster. Mowing picks the pattern cut into the grass for the next match (Random changes it each time). Auto resolution draws slightly fewer pixels (never below ${Math.round(AUTO_RES_MIN * 100)}% of the render scale) when the frame rate drops during a match, and goes back up when it recovers. Frame rate Show puts a small readout at the top of the match screen: frames a second, the average and slowest frame time over the last half second, the quality and the resolution in use.</p>
       </div>
       <h3>Camera</h3>
       <div class="stack">
@@ -2798,13 +2843,14 @@ export class App {
         <div class="row between"><span class="lbl">Match intro</span>${this.seg('intro', [['on', 'On'], ['off', 'Off']], s.matchIntro ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Pre-match ceremony</span>${this.seg('ceremony', [['on', 'On'], ['off', 'Off']], s.ceremony !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Goal celebrations</span>${this.seg('celebs', [['on', 'On'], ['off', 'Off']], s.celebrations !== false ? 'on' : 'off')}</div>
+        <div class="row between"><span class="lbl">Celebration camera</span>${this.seg('handheld', [['on', 'Handheld'], ['off', 'Steady']], s.graphics.handheld !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Goal replays</span>${this.seg('replays', [['on', 'On'], ['off', 'Off']], s.goalReplays ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Offside checks</span>${this.seg('varchk', [['on', 'On'], ['off', 'Off']], s.varChecks !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Half-time aerials</span>${this.seg('aerials', [['on', 'On'], ['off', 'Off']], s.aerials !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Half-time highlights</span>${this.seg('hlights', [['on', 'On'], ['off', 'Off']], s.highlights ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Big moments</span>${this.seg('bigm', [['on', 'On'], ['off', 'Off']], s.graphics.bigMoments !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Reduced camera motion</span>${this.seg('reduced', [['off', 'Off'], ['on', 'On']], s.camera.reducedMotion ? 'on' : 'off')}</div>
-        <p class="note">These play in matches against the computer, and any button skips them. Pre-match ceremony: mascots walk out holding the players' hands, then the handshake line and both team photos. Goal celebrations: the scorer's knee slide, crest kiss, huddle or cheer, before the replay. Offside checks: the moment is shown again with the offside lines drawn, full screen and on the big screens. Half-time aerials: blimp and drone shots over the ground before the highlights.</p>
+        <p class="note">These play in matches against the computer, and any button skips them. Pre-match ceremony: mascots walk out holding the players' hands, then the handshake line and both team photos. Goal celebrations: the scorer's knee slide, crest kiss, huddle or cheer, before the replay. Celebration camera Handheld films them from a camera on the operator's shoulder by the touchline (online it cuts to it live after a goal); Steady keeps the shots smooth. Offside checks: the moment is shown again with the offside lines drawn, full screen and on the big screens. Half-time aerials: blimp and drone shots over the ground before the highlights.</p>
       </div>
       <h3>Gameplay and accessibility</h3>
       <div class="stack">
@@ -2823,6 +2869,7 @@ export class App {
         <p class="note">${this.gamepad.index < 0 ? 'Connect a controller to check rumble.' : this.gamepad.canRumble() ? 'This controller and browser support rumble.' : 'This browser does not offer rumble for this controller, so it stays still.'}</p>
         <div class="row between"><span class="lbl">Player ring</span>${this.seg('pring', [['on', 'On'], ['off', 'Off']], s.playerRing ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Next-switch marker</span>${this.seg('nextm', [['on', 'On'], ['off', 'Off']], s.showNextMarker ? 'on' : 'off')}</div>
+        <div class="row between"><span class="lbl">Button hints</span>${this.seg('chints', [['on', 'On'], ['off', 'Off']], s.controlHints !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Restart captions</span>${this.seg('rcap', [['on', 'On'], ['off', 'Off']], s.restartCaptions ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">High-contrast markers</span>${this.seg('hc', [['off', 'Off'], ['on', 'On']], s.highContrast ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Colour-blind kits</span>${this.seg('cvd', COLOUR_VISION, s.colourVision ?? 'off')}</div>
@@ -2839,7 +2886,7 @@ export class App {
           ? 'Home-screen app: this copy of the game runs inside the claude.ai page, which cannot be installed as an app or work offline (the page keeps that to itself). To get an ELEVENS icon on your iPad home screen that opens full screen and works without a connection, the game needs its own web address: the built game folder can be put on any free static web host, then open it in Safari and choose Share, Add to Home Screen.' + (i.canFullscreen ? '' : ' Full screen is not allowed from inside the claude.ai page either.')
           : `Home-screen app: ${i.ios ? 'in Safari choose Share, then Add to Home Screen' : 'use your browser\'s Install or Add to Home Screen option'} to get an ELEVENS icon that opens full screen. ${i.offline ? 'Offline play is ready: files you have loaded are kept, so matches against the computer work with no connection.' : 'Offline play starts once the game has been opened from its own web address over https.'}`}</p>`; })()}
       </div>
-      <p class="note">Tracking slides along the touchline with play; Wide and Panoramic sit higher and further back to show more of the pitch. Broadcast is a fixed TV camera above the halfway line that pans and zooms; movement stays relative to the screen. Match intro flies over the stadium and follows the teams out of the tunnel before kick-off; Goal replays show each goal again from inside the net. Half-time highlights shows the goals, saves, near misses and shots off the woodwork at half-time and full time (the Highlights button on those screens shows them again). Both are for matches against the computer and any button skips them. Big moments shakes the camera for goals, saves and shots off the woodwork, slows play down for a moment after a goal or the woodwork (against the computer), and on High and Ultra softens the background in replays and goal celebrations; Reduced camera motion turns the shake and slow motion off. Pass receiver Late picks the teammate when you release the button (a longer hold looks further away); Early locks the teammate when you press it, and the hold sets how firm the pass is. Pass assistance Assisted picks the teammate and weighs the pass for you; Semi aims at a teammate near where you point, but the hold alone sets how far the ball goes; Manual sends the ball exactly where you point, as far as the hold says. Right-stick switch: when defending, flick the right stick towards a teammate to take control of them, measured from your player or from the ball. Player ring shows a circle and facing arrow on the grass under your player; the pointer above the head always shows. Quality preset and player changes apply fully at the next kick-off. Low quality always uses the classic players.</p>
+      <p class="note">Tracking slides along the touchline with play; Wide and Panoramic sit higher and further back to show more of the pitch. Broadcast is a fixed TV camera above the halfway line that pans and zooms; movement stays relative to the screen. Match intro flies over the stadium and follows the teams out of the tunnel before kick-off; Goal replays show each goal again from inside the net. Half-time highlights shows the goals, saves, near misses and shots off the woodwork at half-time and full time (the Highlights button on those screens shows them again). Both are for matches against the computer and any button skips them. Big moments shakes the camera for goals, saves and shots off the woodwork, slows play down for a moment after a goal or the woodwork (against the computer), and on Medium and up softens the background in close-ups, replays and goal celebrations; Reduced camera motion turns the shake and slow motion off. Pass receiver Late picks the teammate when you release the button (a longer hold looks further away); Early locks the teammate when you press it, and the hold sets how firm the pass is. Pass assistance Assisted picks the teammate and weighs the pass for you; Semi aims at a teammate near where you point, but the hold alone sets how far the ball goes; Manual sends the ball exactly where you point, as far as the hold says. Right-stick switch: when defending, flick the right stick towards a teammate to take control of them, measured from your player or from the ball. Player ring shows a circle and facing arrow on the grass under your player; the pointer above the head always shows. Quality preset and player changes apply fully at the next kick-off. Low quality always uses the classic players.</p>
       <div class="row end"><button class="btn primary" data-a="back">Done</button></div></div>`, overlay ? 'translucent' : '');
     const save = () => {
       saveSettings(s);
@@ -2876,6 +2923,7 @@ export class App {
     this.bindSeg('menusfx', (v) => { s.audio.menuSounds = v === 'on'; save(); redraw(); });
     this.bindSeg('preset', (v) => { s.graphics.preset = v as Settings['graphics']['preset']; save(); redraw(); });
     this.bindSeg('autores', (v) => { s.graphics.autoRes = v === 'on'; save(); redraw(); });
+    this.bindSeg('showfps', (v) => { s.showFps = v === 'on'; save(); redraw(); });
     this.bindSeg('shadows', (v) => { s.graphics.shadows = v === 'on'; save(); redraw(); });
     this.bindSeg('players', (v) => { s.graphics.players = v as 'realistic' | 'classic'; save(); redraw(); });
     this.bindSeg('matchTime', (v) => { s.graphics.matchTime = v as 'day' | 'dusk' | 'night'; save(); redraw(); });
@@ -2900,6 +2948,7 @@ export class App {
     this.bindSeg('intro', (v) => { s.matchIntro = v === 'on'; save(); redraw(); });
     this.bindSeg('replays', (v) => { s.goalReplays = v === 'on'; save(); redraw(); });
     this.bindSeg('ceremony', (v) => { s.ceremony = v === 'on'; save(); redraw(); });
+    this.bindSeg('handheld', (v) => { s.graphics.handheld = v === 'on'; save(); redraw(); });
     this.bindSeg('celebs', (v) => { s.celebrations = v === 'on'; save(); redraw(); });
     this.bindSeg('varchk', (v) => { s.varChecks = v === 'on'; save(); redraw(); });
     this.bindSeg('aerials', (v) => { s.aerials = v === 'on'; save(); redraw(); });
@@ -2916,6 +2965,7 @@ export class App {
     this.bindSeg('rumble', (v) => { s.rumble = v === 'on'; save(); redraw(); if (s.rumble) this.gamepad.rumble(0.6, 0.6, 180); });
     this.bindSeg('pring', (v) => { s.playerRing = v === 'on'; save(); redraw(); });
     this.bindSeg('nextm', (v) => { s.showNextMarker = v === 'on'; save(); redraw(); });
+    this.bindSeg('chints', (v) => { s.controlHints = v === 'on'; save(); redraw(); });
     this.bindSeg('rcap', (v) => { s.restartCaptions = v === 'on'; this.hud.restartCaptions = s.restartCaptions; save(); redraw(); });
     this.bindSeg('hc', (v) => { s.highContrast = v === 'on'; save(); redraw(); });
     this.bindSeg('cvd', (v) => { s.colourVision = v as ColourVision; save(); redraw(); });
@@ -2997,7 +3047,8 @@ export class App {
     const name = this.settings.name;
     this.set(`<div class="panel narrow">
       <h2>Online match</h2>
-      <p class="note">Play one other person. You each control one club; the computer runs your teammates. A match server must be running (see the README).</p>
+      <p class="note">Play one other person. You each control one club; the computer runs your teammates.</p>
+      <p class="note server-state">${this.serverStateText()}</p>
       <button class="btn big" data-a="ranked">Ranked match<small class="note"> · climb the divisions</small></button>
       <div class="field"><label for="nm">Your name</label><input id="nm" type="text" maxlength="16" value="${esc(name)}" placeholder="Player" autocomplete="nickname"></div>
       <h3>Create</h3>
@@ -3009,6 +3060,7 @@ export class App {
       <div class="row end"><button class="btn" data-a="back">Back</button></div></div>`);
     const nameEl = this.ui.querySelector<HTMLInputElement>('#nm')!;
     const codeEl = this.ui.querySelector<HTMLInputElement>('#code')!;
+    if (serverState() !== 'ready' && serverState() !== 'blocked') void wakeServer();
     const getName = () => { this.settings.name = nameEl.value.trim().slice(0, 16); saveSettings(this.settings); return this.settings.name || 'Player'; };
     this.on('[data-a=create]', () => this.connectAnd(getName(), () => this.net!.send({ t: 'create', name: getName() })));
     this.on('[data-a=ranked]', () => { getName(); this.showRanked(); });
@@ -3024,14 +3076,31 @@ export class App {
     }
   }
 
+  /** One line on the Online screen: is the match server awake? */
+  private serverStateText(): string {
+    const st = serverState();
+    const elsewhere = PLAY_URL && !location.href.startsWith(PLAY_URL) && !isLocalHost(location.hostname);
+    const link = elsewhere ? ` Online play works at <a href="${PLAY_URL}" target="_blank" rel="noopener">${PLAY_URL.replace(/^https:\/\//, '').replace(/\/$/, '')}</a>.` : '';
+    if (st === 'ready') return '<span class="badge ok">Match server ready</span>';
+    if (st === 'waking') return '<span class="badge warn">Waking up the match server</span> It sleeps when nobody has played for a while and takes up to a minute to wake.';
+    if (st === 'blocked') return `<span class="badge bad">Can't go online from here</span> This page blocks connections to the match server.${link}`;
+    if (st === 'unreachable') return `<span class="badge bad">Match server not answering</span> Check your connection, then try again.${link}`;
+    return '<span class="badge">Checking the match server…</span>';
+  }
+
   /** Ranked online: division, record, club, the queue and the top players. */
   private showRanked(error = '') {
     this.screenName = 'ranked';
     const connected = this.net?.status === 'connected';
-    const status = error || (this.rankQueued ? 'Searching for an opponent of about your level…' : connected ? '' : 'You need the match server (see the README) to play ranked.');
+    const status = error || (this.rankQueued ? 'Searching for an opponent of about your level…' : connected ? '' : 'Find a match to connect to the match server.');
     this.set(rankedHtml(this.ranked, status, this.rankQueued, this.rankWaiting, connected), 'scroll');
     const name = () => this.settings.name || 'Player';
-    const join = () => { this.rankRes = null; this.net!.send({ t: 'ranked', id: this.ranked.id, key: this.ranked.key, name: name(), club: this.ranked.club }); this.net!.send({ t: 'board' }); };
+    const join = () => {
+      this.rankRes = null;
+      const { id, key, club, rec, sig } = this.ranked;
+      this.net!.send(rec && sig ? { t: 'ranked', id, key, name: name(), club, saved: { rec, sig } } : { t: 'ranked', id, key, name: name(), club });
+      this.net!.send({ t: 'board' });
+    };
     this.on('[data-rclub]', (el) => { this.ranked.club = el.dataset.rclub!; saveRanked(this.ranked); if (this.rankQueued && this.net) join(); else this.showRanked(); });
     this.on('[data-a=rfind]', () => this.connectAnd(name(), join));
     this.on('[data-a=rcancel]', () => { this.net?.send({ t: 'unranked' }); this.rankQueued = false; this.showRanked(); });
@@ -3058,8 +3127,14 @@ export class App {
     this.net = net;
     let sentFirst = false;
     net.onStatus = (st) => {
-      if (st === 'connecting') this.setNetStatus(`Connecting to ${net.url}…`);
-      if (st === 'unavailable') { this.onlineError = `Could not reach the match server at ${net.url}. Is it running?`; this.net = null; if (this.screenName === 'online') this.showOnline(); if (this.screenName === 'ranked') { this.rankQueued = false; this.showRanked(this.onlineError); } }
+      if (st === 'connecting') this.setNetStatus('Connecting to the match server…');
+      if (st === 'waking') this.setNetStatus('Waking up the match server. The first match of the day can take up to a minute…');
+      if (st === 'unavailable' || st === 'blocked') {
+        this.onlineError = st === 'blocked' ? 'This copy of the game can\'t go online (the page it runs in blocks connections). Use the link below.' : 'Could not reach the match server. Check your connection and try again in a minute.';
+        this.net = null;
+        if (this.screenName === 'online') this.showOnline();
+        if (this.screenName === 'ranked') { this.rankQueued = false; this.showRanked(this.onlineError); }
+      }
       if (st === 'reconnecting') { this.setNetStatus('Connection lost. Reconnecting…'); if (this.screenName === 'lobby') this.renderLobby(); }
       if (st === 'disconnected') this.connectionLost('Connection to the server was lost.');
       if (st === 'connected' && this.screenName === 'lobby') this.renderLobby();
@@ -3098,6 +3173,7 @@ export class App {
         break;
       case 'rank':
         this.ranked.rec = m.rec;
+        if (m.sig) this.ranked.sig = m.sig;
         this.rankQueued = m.queued;
         this.rankWaiting = m.waiting;
         saveRanked(this.ranked);
@@ -3110,6 +3186,7 @@ export class App {
         break;
       case 'rankres': {
         this.ranked.rec = m.after;
+        if (m.sig) this.ranked.sig = m.sig;
         this.rankRes = m;
         saveRanked(this.ranked);
         const el = this.ui.querySelector('.rank-note');
