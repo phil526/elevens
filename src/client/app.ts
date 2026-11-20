@@ -413,6 +413,8 @@ export class App {
   // ------------------------------------------------------------- frame loop
 
   private frame(now: number) {
+    // Battery saver: 30 frames a second (on a 60 Hz or 120 Hz screen, skip the frames in between).
+    if (this.settings.graphics.batterySaver && now - this.last < 28) { requestAnimationFrame((t) => this.frame(t)); return; }
     const raw = Math.max(0, now - this.last);
     const dt = Math.min(0.1, raw / 1000);
     this.last = now;
@@ -1551,7 +1553,7 @@ export class App {
     try {
       const r = this.ensureRenderer();
       // Phones, tablets and Low quality draw the menus at 30 fps.
-      this.backdrop.halfRate = this.touchDevice || this.settings.graphics.preset === 'low';
+      this.backdrop.halfRate = (this.touchDevice || this.settings.graphics.preset === 'low') && !this.settings.graphics.batterySaver;
       this.backdrop.start(r, teams, kits);
     } catch (err) {
       console.warn('menu background unavailable', err);
@@ -3074,6 +3076,8 @@ export class App {
         <div class="row between"><span class="lbl">Quality</span>${this.seg('preset', [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['ultra', 'Ultra']], s.graphics.preset)}</div>
         <div class="row between"><span class="lbl">Render scale</span>${range('scale', s.graphics.renderScale, 0.5, 1.5, 0.05)}</div>
         <div class="row between"><span class="lbl">Auto resolution</span>${this.seg('autores', [['on', 'On'], ['off', 'Off']], s.graphics.autoRes !== false ? 'on' : 'off')}</div>
+        <div class="row between"><span class="lbl">Battery saver</span>${this.seg('battery', [['on', 'On'], ['off', 'Off']], s.graphics.batterySaver ? 'on' : 'off')}</div>
+        <p class="note">Battery saver plays at 30 frames a second with a little less detail, so phones and tablets stay cooler and last longer.</p>
         <div class="row between"><span class="lbl">Frame rate</span>${this.seg('showfps', [['on', 'Show'], ['off', 'Hide']], s.showFps ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Shadows</span>${this.seg('shadows', [['on', 'On'], ['off', 'Off']], s.graphics.shadows ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Players</span>${this.seg('players', [['realistic', 'Realistic'], ['classic', 'Classic']], s.graphics.players ?? 'realistic')}</div>
@@ -3187,6 +3191,7 @@ export class App {
     this.bindSeg('menusfx', (v) => { s.audio.menuSounds = v === 'on'; save(); redraw(); });
     this.bindSeg('preset', (v) => { s.graphics.preset = v as Settings['graphics']['preset']; save(); redraw(); });
     this.bindSeg('autores', (v) => { s.graphics.autoRes = v === 'on'; save(); redraw(); });
+    this.bindSeg('battery', (v) => { s.graphics.batterySaver = v === 'on'; save(); this.backdrop.halfRate = (this.touchDevice || s.graphics.preset === 'low') && v !== 'on'; redraw(); });
     this.bindSeg('showfps', (v) => { s.showFps = v === 'on'; save(); redraw(); });
     this.bindSeg('shadows', (v) => { s.graphics.shadows = v === 'on'; save(); redraw(); });
     this.bindSeg('players', (v) => { s.graphics.players = v as 'realistic' | 'classic'; save(); redraw(); });

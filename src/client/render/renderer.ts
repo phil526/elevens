@@ -108,6 +108,8 @@ export interface GraphicsSettings {
   tvGrade?: boolean;
   /** Big screens: live pictures and goal replays (Medium and up), or the score pages only. */
   bigScreen?: 'live' | 'scores';
+  /** Battery saver: 30 frames a second, at most 1.5x pixel density, big screens show scores only. */
+  batterySaver?: boolean;
   /** Big moments: camera shake, a moment of slow motion on goals and the woodwork, and depth of field in replays and celebrations (default on). */
   bigMoments?: boolean;
   /** Celebration camera: a handheld pitchside camera for goal celebrations (default), or steady shots. */
@@ -424,7 +426,7 @@ export class GameRenderer {
     this.wantPlayers();
     const q = QUALITY[gfx.preset];
     const scale = q >= 3 ? gfx.renderScale : Math.min(1, gfx.renderScale);
-    this.baseDpr = Math.min(MAX_DPR, Math.min(window.devicePixelRatio || 1, DPR_CAP[gfx.preset]) * scale);
+    this.baseDpr = Math.min(gfx.batterySaver ? 1.5 : MAX_DPR, Math.min(window.devicePixelRatio || 1, DPR_CAP[gfx.preset]) * scale);
     if (gfx.autoRes === false) this.dyn.reset();
     this.renderer.setPixelRatio(this.baseDpr * this.dyn.scale);
     // Safe level 1 and up: no shadows (the graphics check saw this browser refuse draws).
@@ -666,7 +668,8 @@ export class GameRenderer {
   /** Auto resolution (render/autores.ts), fed each match frame's real duration. */
   autoResolution(frameMs: number) {
     if (this.gfx.autoRes === false) return;
-    if (this.dyn.feed(frameMs, performance.now()) === null) return;
+    // Battery saver draws every other frame on purpose: judge the speed against 30 fps, not 60.
+    if (this.dyn.feed(this.gfx.batterySaver ? frameMs / 2 : frameMs, performance.now()) === null) return;
     this.renderer.setPixelRatio(this.baseDpr * this.dyn.scale);
     this.resize();
   }
@@ -1599,7 +1602,7 @@ export class GameRenderer {
   private updateFeed(view: ViewState, dt: number) {
     const q = QUALITY[this.gfx.preset];
     const arena = this.stadium?.userData.arena as Arena | undefined;
-    if (q === 0 || this.gfx.bigScreen === 'scores' || !arena || this.glCheck.level >= 2) {
+    if (q === 0 || this.gfx.bigScreen === 'scores' || this.gfx.batterySaver || !arena || this.glCheck.level >= 2) {
       if (this.feed) { this.feed.dispose(); this.feed = null; }
       return;
     }
