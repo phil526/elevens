@@ -106,6 +106,8 @@ export class GameAudio {
   private speaking: { until: number; prio: number; src: AudioBufferSourceNode; gain: GainNode } | null = null;
   private lastSaid = new Map<CommentKind, number>();
   /** Lines loaded and the total (Settings > Audio). */
+  /** Practice sessions keep the commentator quiet. */
+  commentaryMuted = false;
   commentaryStatus = { loaded: 0, total: COMMENT_KINDS.reduce((n, k) => n + COMMENTARY[k].length, 0) };
   private nextStomp = 0;
   private musicFade: GainNode | null = null;
@@ -243,7 +245,7 @@ export class GameAudio {
    */
   say(kind: CommentKind, delay = 0.3): boolean {
     const ctx = this.ctx;
-    if (!ctx || this.settings.commentary === false) return false;
+    if (!ctx || this.settings.commentary === false || this.commentaryMuted) return false;
     const files = COMMENTARY[kind].map((_, i) => commentFile(kind, i)).filter((f) => this.lines.has(f));
     if (!files.length) {
       // No recorded pack (yet): the older calls cover goals, saves and the woodwork.

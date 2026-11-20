@@ -1791,6 +1791,9 @@ export class App {
     this.welcomed = false;
     this.commentator.reset();
     this.commentator.mode = s instanceof OfflineSession && s.cfg.practice ? 'off' : this.settings.commentator ?? 'captions';
+    this.audio.commentaryMuted = s instanceof OfflineSession && !!s.cfg.practice;
+    // The recorded commentator takes over from the device's speech voice; the captions still show.
+    if (this.commentator.mode === 'voice' && this.settings.audio.commentary !== false) this.commentator.mode = 'captions';
     this.commentator.volume = this.settings.audio.muted ? 0 : this.settings.audio.master;
     this.savedGoals.clear();
     if (s instanceof OfflineSession && !s.cfg.practice && this.settings.matchIntro && !this.cineOff && this.renderer && !(this.modeMatch && !this.modeMatch.intro)) {
@@ -3123,8 +3126,9 @@ export class App {
         <div class="row between"><span class="lbl">Menu music</span>${range('music', s.audio.music)}</div>
         <div class="row between"><span class="lbl">Music</span>${this.seg('music', [['on', 'On'], ['off', 'Off']], s.audio.musicOn ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Commentary</span>${this.seg('commentator', [['voice', 'Voice and captions'], ['captions', 'Captions'], ['off', 'Off']], s.commentator ?? 'captions')}</div>
-        <p class="note">A commentator talks you through the whole match. The voice is your device's own speech voice.</p>
-        <div class="row between"><span class="lbl">Goal calls</span>${this.seg('commentary', [['on', 'On'], ['off', 'Off']], s.audio.commentary !== false ? 'on' : 'off')}</div>
+        <p class="note">Captions talk you through the whole match. With the commentator voice off, "Voice" reads them in your device's own speech voice.</p>
+        <div class="row between"><span class="lbl">Commentator voice</span>${this.seg('commentary', [['on', 'On'], ['off', 'Off']], s.audio.commentary !== false ? 'on' : 'off')}</div>
+        <p class="note">A recorded commentator calls goals, saves, cards, corners and more (${this.audio.commentaryStatus.loaded ? `${this.audio.commentaryStatus.loaded} of ${this.audio.commentaryStatus.total} lines ready` : 'lines load when a match starts'}).</p>
         <div class="row between"><span class="lbl">Stadium announcer</span>${this.seg('announcer', [['on', 'On'], ['off', 'Off']], s.audio.announcer === true ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Menu sounds</span>${this.seg('menusfx', [['on', 'On'], ['off', 'Off']], s.audio.menuSounds !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Announcer voice</span><button class="btn small" data-a="voicetest">Test voice</button></div>
