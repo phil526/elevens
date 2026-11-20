@@ -8,7 +8,7 @@ import { SWITCH_SENS, SWITCH_STYLES, type InputEvent, type InputFrame, type Swit
 import { ALL_CLUBS, TEAMS } from './teams';
 import type { RankedRecord } from './ranked';
 
-export const PROTOCOL_VERSION = 15;
+export const PROTOCOL_VERSION = 16; // 16: solid bodies, timed tackles (20 Nov 2026)
 
 export type ClientMsg =
   | { t: 'hello'; v: number; token?: string; name?: string }

@@ -12,7 +12,9 @@ import { carrierAI } from './carrier';
 import { gameState, scoreMentality } from './gamestate';
 import { applyPlayStyle, styleOf } from '../playstyle';
 import { SP_ON, aiPenalty, favouriteSide, setPieceRatings, takerSideZ, techVariant } from '../setpieces';
-import { G6 } from '../switches';
+import { G6, P20 } from '../switches';
+import { tackleTiming } from '../contact';
+import { dropDeep, laneShift, showSide } from './habits';
 import { updateHumanKeeper, updateKeeper } from './keeper';
 import { LINK, applySetPiece, bestPartner, forwardRestartOption, blindRun, blindTarget, boxMarkSpot, linkLevel, overlapAround, secondBalls, setPieceDefence, setPieceMarkSpot, shotLine, trackBoxRunners, underlapInside, underlapTo, unseenRunner, wantUnderlap, MATES3 } from './mates3';
 
@@ -285,6 +287,12 @@ export function formationTarget(m: Match, p: Player, plan: TeamPlan): V2 {
   if (!attack && ment.dropBack && p.role !== 'GK') x -= ment.dropBack * (isForward(p.role) ? 1 : isMidfielder(p.role) ? 0.5 : 0.15);
   if (!attack && ment.stayHigh && isForward(p.role)) x = Math.max(x, Math.min(plan.bx - 6, -3));
   if (!attack && ment.narrow) z *= 1 - ment.narrow;
+  // Habits (20 Nov 2026): against a human side, slide over to the side its attacks come down,
+  // and drop the back line off when it keeps playing through balls.
+  if (!attack && p.role !== 'GK') {
+    z += laneShift(m, p.team) * dir;
+    if (isDefender(p.role)) x -= dropDeep(m, p.team);
+  }
   if (!attack && isDefender(p.role)) {
     // Offside trap: the back four step up together towards the ball.
     if (m.offsideTrap[p.team] > m.time) x += 9;
@@ -1192,7 +1200,7 @@ function offBall(m: Match, p: Player, dt: number) {
     const g = norm(ownGoal.x - carrier.pos.x, ownGoal.z - carrier.pos.z);
     // Contain: the human asked this teammate to press the carrier.
     if (m.contain[p.team] === p.id) {
-      const approach = { x: carrier.pos.x + g.x * 1.5, z: carrier.pos.z + g.z * 1.5 };
+      const approach = { x: carrier.pos.x + g.x * 1.5, z: carrier.pos.z + g.z * 1.5 + showSide(m, p.team, carrier) };
       const d = dist(p.pos, carrier.pos);
       m.arrive(p, approach, d > 4 ? 'sprint' : 'jockey', d > 4 ? null : fb);
       maybeTackle(m, p, carrier, dt, lvl.tackleEagerness * 0.6);
@@ -1219,7 +1227,8 @@ function offBall(m: Match, p: Player, dt: number) {
       return;
     }
     if (plan.pressers[0] === p.id) {
-      const approach = { x: carrier.pos.x + g.x * 1.3, z: carrier.pos.z + g.z * 1.3 };
+      // Habits: stand over to the side a human winger likes to go, to show him the other way.
+      const approach = { x: carrier.pos.x + g.x * 1.3, z: carrier.pos.z + g.z * 1.3 + showSide(m, p.team, carrier) };
       const d = dist(p.pos, carrier.pos);
       if (d > 5) m.arrive(p, approach, 'sprint');
       else m.arrive(p, approach, 'jockey', fb);
@@ -1367,6 +1376,9 @@ export function receivePoint(m: Match, p: Player, eager = false): V2 | null {
   return m.meetPoint(p);
 }
 
+/** Computer tackles wait for the touch: rate multiplier = base + k * timing (see contact.ts). */
+export const AI_TIMING = { base: 0.3, k: 6 } as const;
+
 function maybeTackle(m: Match, p: Player, carrier: Player, dt: number, eagerness: number) {
   if (p.tackleCooldown > 0 || p.action.type !== 'none') return;
   const b = m.ball;
@@ -1390,7 +1402,10 @@ function maybeTackle(m: Match, p: Player, carrier: Player, dt: number, eagerness
   if (facingBall > 1.0) return;
   if (behind && (booked || !m.rng.chance(0.1))) return; // AI rarely tackles from behind, never when booked
   let rate = eagerness * 1.2 * (booked ? 0.7 : 1);
-  if (dist(carrier.pos, b.pos) > 0.55) rate *= 4; // timing: the ball is off the carrier's foot
+  // Timing: go in as the touch takes the ball off the carrier's foot (timed tackles, 20 Nov 2026).
+  // (From behind, where the fouls come from, they still go in as before.)
+  if (P20.timing && !behind) rate *= AI_TIMING.base + AI_TIMING.k * tackleTiming(p, carrier, b.pos, m.closeIds.has(carrier.id));
+  else if (dist(carrier.pos, b.pos) > 0.55) rate *= 4; // timing: the ball is off the carrier's foot
   if (m.rng.chance(rate * dt)) m.startTackle(p);
 }
 

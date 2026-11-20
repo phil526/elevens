@@ -35,7 +35,9 @@ import { aerialWin, holdOffChance, strengthOf, DUEL } from './physical';
 import { Momentum, MOMENTUM } from './momentum';
 import { habitStreak, SETPIECE, SP_ON, bestBy, ratingError, chosenTaker, danceError, directFreeKick, matchPressure, nerveError, readEarlyKeeper, ringShake, setPieceRatings, shakyRing, shootoutWinnerOf, variantTech, type PenTech } from './setpieces';
 import { manualShotAim } from './kick';
-import { BC, G6, SW, SWITCH } from './switches';
+import { BC, G6, P20, SW, SWITCH } from './switches';
+import { BODY, separateBodies, tackleTiming, timedTackleChance, TIMING } from './contact';
+import { habitKick, stepHabits, type HabitBook } from './ai/habits';
 import { closeDribble, heavyChance, humanCarrierInput, isJuggle, placeBallForSkill, startFlick, stepBallSkill, touchAway } from './ballcontrol';
 
 export interface Control {
@@ -260,6 +262,8 @@ export class Match {
   plans: [TeamPlan | null, TeamPlan | null] = [null, null];
   /** Offside: players flagged at the last teammate pass, and their team. */
   offside = { team: -1, flagged: new Set<number>() };
+  /** What the computer has learned about each human side's attacking habits (ai/habits.ts). */
+  habits: [HabitBook | null, HabitBook | null] = [null, null];
   /** Set by an indirect free kick until someone other than the taker touches the ball. */
   indirectTaker = -1;
   lastKickTime = -10;
@@ -1857,6 +1861,7 @@ export class Match {
     this.checkAdvantage();
     if (this.phase !== 'play') return;
     this.updateSwitchCandidates();
+    if (P20.habits) stepHabits(this);
     const pt = this.possessionTeam();
     if (pt >= 0) this.stats[pt].possessionTicks++;
   }
@@ -3019,9 +3024,11 @@ export class Match {
       if (onTarget) this.stats[team].onTarget++;
       this.lastShot = { team, player: p.id, onTarget, time: this.time };
       this.countShot(p, onTarget);
+      if (P20.habits && !isRestartTaker) habitKick(this, p, 'shot', cross ? cross.z : null);
     } else if (KICK_STATES.includes(kind) || kind === 'clear') {
       this.stats[team].passes++;
       this.pstats[p.id].passes++;
+      if (P20.habits && !isRestartTaker && !isHolder) habitKick(this, p, flight === 'cross' ? 'cross' : kind, null);
     }
 
     // Offside is judged at the moment a teammate plays the ball (not from throw-ins, goal kicks or corners).
@@ -3106,22 +3113,37 @@ export class Match {
     const fromBehind = Math.abs(wrapAngle(angleOf(t.pos.x - owner.pos.x, t.pos.z - owner.pos.z) - owner.facing)) > (110 * Math.PI) / 180;
     this.stats[t.team].tackles++;
     if (ballReachable) {
-      const separated = dist(owner.pos, b.pos) > 0.6 ? 0.2 : 0;
       // A standing tackle from a set jockey stance (side-on, already matching the carrier) is better timed.
       const set = a.jockeySet ? 0.12 : 0;
-      const pClean = clamp(0.45 + 0.45 * t.a.tackling - 0.25 * owner.a.control + separated + set - (fromBehind ? 0.25 : 0) - 0.6 * this.shieldBonus(owner, t), 0.08, 0.92);
+      // Timed tackles (20 Nov 2026): timing the touch decides it; ratings only shade it.
+      const timing = P20.timing ? tackleTiming(t, owner, b.pos, this.closeIds.has(owner.id)) : 0;
+      const separated = dist(owner.pos, b.pos) > 0.6 ? 0.2 : 0;
+      // From behind you go through the man to reach it: timing helps only half as much.
+      const base = P20.timing ? timedTackleChance(fromBehind ? timing * 0.5 : timing, t, owner) : 0.45 + 0.45 * t.a.tackling - 0.25 * owner.a.control + separated;
+      const pClean = clamp(base + set - (fromBehind ? 0.25 : 0) - 0.6 * this.shieldBonus(owner, t), P20.timing ? 0.04 : 0.08, P20.timing ? 0.96 : 0.92);
+      const human = this.isHumanControlled(t);
       if (this.rng.chance(pClean)) {
         a.missed = false;
         this.emit('tackle', { player: t.id, team: t.team });
       this.pstats[t.id].tackles++;
         owner.action = { type: 'stumble', t: 0, dur: 0.3 };
-        if (this.rng.chance(0.35 + 0.4 * t.a.tackling)) this.takePossession(t, true);
+        // Perfectly timed: the ball is won cleanly at the tackler's feet.
+        const perfect = P20.timing && timing >= TIMING.perfect;
+        if (perfect && human) this.emit('call', { team: t.team, player: t.id, text: 'tacklegood' });
+        if (perfect || this.rng.chance(0.35 + 0.4 * t.a.tackling)) this.takePossession(t, true);
         else this.pokeBall(t, 4 + this.rng.next() * 3);
         return;
       }
       if (fromBehind && carrierDist < 1.3) { this.foul(t, owner, { fromBehind: true }); return; }
       a.missed = true; // failed tackle from the front: carrier keeps the ball, tackler stumbles
       if (a.jockeySet) a.quickRecover = true; // a poke from the jockey stance doesn't commit the body
+      // Went in while the ball was under his foot: he skips past the lunge.
+      if (P20.timing && timing < TIMING.early && !fromBehind && Math.hypot(owner.vel.x, owner.vel.z) > 3) {
+        // ...or the lunge catches his ankles on the way past.
+        if (carrierDist < TIMING.tripReach && this.rng.chance(TIMING.trip)) { this.foul(t, owner, {}); return; }
+        t.beaten = Math.max(t.beaten, PLAYER.beatenTime * 0.7);
+        if (human) this.emit('call', { team: t.team, player: t.id, text: 'tackleearly' });
+      }
       return;
     }
     if (carrierDist < 1.1) { this.foul(t, owner, { fromBehind }); return; }
@@ -3382,6 +3404,16 @@ export class Match {
       // The home crowd's lift: the home side's running costs them a little less.
       if (p.stamina < st0) { const k = this.momentum.staminaDrain(p.team); if (k < 1) p.stamina = st0 - (st0 - p.stamina) * k; }
       if (p.action.type === 'skill' && p.action.skill === 'roulette') p.facing = this.rouletteFacing(p.action);
+    }
+    // Solid bodies (20 Nov 2026): pushed apart by weight, and nobody runs through a man.
+    if (P20.bodies) {
+      const carrier = this.ball.state === 'dribble' ? this.ball.owner : -1;
+      separateBodies(this.players, PLAYER.radius, (loser, winner, speed) => {
+        // A hard bump with a human's man: for his rumble and thud (power < 0 when he came off worse).
+        const h = this.isHumanControlled(loser) ? loser : this.isHumanControlled(winner) ? winner : null;
+        if (h) this.emit('call', { team: h.team, player: h.id, power: h === loser ? -speed : speed, text: 'bump', x: h.pos.x, z: h.pos.z });
+      }, carrier, carrier >= 0 && this.isHumanControlled(this.players[carrier]) ? BODY.humanCarrier : BODY.carrier);
+      return;
     }
     // Player-player separation and simple contact reactions.
     const n = this.players.length;

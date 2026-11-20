@@ -743,6 +743,8 @@ export class App {
     switch (e.type) {
       case 'kick': if (me && (e.text === 'shot' || e.text === 'volley')) this.buzz(0.35 + Math.min(0.5, (e.power ?? 15) / 60), 0.5, 140); break;
       case 'tackle': if (me) this.buzz(0.55, 0.3, 160); else if (!mine) this.buzz(0.4, 0.15, 140); break;
+      // Solid bodies: your man bumping into someone (harder when he came off worse).
+      case 'call': if (me && e.text === 'bump') this.buzz((e.power ?? 0) < 0 ? 0.45 : 0.3, 0.2, 90); break;
       case 'foul': this.buzz(0.7, 0.35, 220); break;
       case 'post': case 'bar': this.buzz(0.8, 0.8, 260); break;
       case 'goal': if (mine) this.buzz(1, 1, 700); else this.buzz(0.6, 0.15, 350); break;
@@ -788,6 +790,7 @@ export class App {
         case 'save': this.audio.react('gasp'); if (greatShot()) this.audio.call('shot', 0.45); break;
         case 'chance': this.audio.react('ooh'); break;
         case 'tackle': this.audio.tackle(e.x ?? 0, false); break;
+        case 'call': if (e.text === 'bump' && Math.abs(e.power ?? 0) > 4) this.audio.bump(e.x ?? 0, (Math.abs(e.power ?? 0) - 4) / 4); break;
         case 'foul': this.audio.tackle(e.x ?? 0, true); if (Math.random() < 0.45) this.audio.react('boo'); break;
         case 'card': this.audio.react('boo'); break;
         case 'bounce': if ((e.power ?? 0) > 5) this.audio.kick((e.power ?? 0) * 0.5, e.x ?? 0, 'touch'); break;
@@ -1542,6 +1545,7 @@ export class App {
       draw: practice ? 'stand' : c.draw,
       mentality: [c.mentality, 'balanced'], autoSwitch: [this.settings.autoSwitch, false], ...this.switchCfg(), quickRestarts: [this.settings.quickRestarts, true], seed: (Math.random() * 2 ** 31) | 0, practice, challenge,
       momentum: this.settings.momentum !== false,
+      habits: this.settings.habits !== false,
       weather: this.matchWeather(!!practice),
     });
     // Injuries (and stretchers) in offline matches against the computer; the modes add their own settings.
@@ -3021,6 +3025,8 @@ export class App {
         <p class="note">Manual is for experts: passes go exactly where the stick points and as far as you charge them, with no teammate picked and no help with accuracy. Manual shots go where the stick points too, so you can miss the target.</p>
         <div class="row between"><span class="lbl">Home crowd momentum</span>${this.seg('mom', [['on', 'On'], ['off', 'Off']], s.momentum !== false ? 'on' : 'off')}</div>
         <p class="note">When your side is on top at home (shots, corners, pressure), the crowd lifts your players: they tire a little more slowly and strike the ball a little cleaner. The bar under the score shows who is on top.</p>
+        <div class="row between"><span class="lbl">Opponent learns your habits</span>${this.seg('habits', [['on', 'On'], ['off', 'Off']], s.habits !== false ? 'on' : 'off')}</div>
+        <p class="note">Against the computer, it watches how you attack: which wing you use, whether your wingers cut inside or go down the line, which corner you shoot for, and how often you play through balls. Once it spots a habit (a message says so) its team slides over to that side, the defender shows you the other way, the keeper cheats towards your favourite corner and the back line drops off for through balls. Mix it up and it forgets within a few attacks. It learns more on the harder levels.</p>
         <div class="row between"><span class="lbl">Right-stick switch from</span>${this.seg('sswitch', [['player', 'Your player'], ['ball', 'The ball']], s.stickSwitch ?? 'player')}</div>
         <div class="row between"><span class="lbl">Controller rumble</span>${this.seg('rumble', [['on', 'On'], ['off', 'Off']], s.rumble ? 'on' : 'off')}</div>
         <p class="note">${this.gamepad.index < 0 ? 'Connect a controller to check rumble.' : this.gamepad.canRumble() ? 'This controller and browser support rumble.' : 'This browser does not offer rumble for this controller, so it stays still.'}</p>
@@ -3126,6 +3132,7 @@ export class App {
     this.bindSeg('assist', (v) => { s.passAssist = v as 'assisted' | 'semi' | 'manual'; this.actions.passAssist = s.passAssist; save(); redraw(); });
     this.bindSeg('sassist', (v) => { s.shotAssist = v as 'assisted' | 'manual'; this.actions.shotAssist = s.shotAssist; save(); redraw(); });
     this.bindSeg('mom', (v) => { s.momentum = v === 'on'; save(); redraw(); });
+    this.bindSeg('habits', (v) => { s.habits = v === 'on'; save(); redraw(); });
     this.bindSeg('recv', (v) => { s.receiver = v as 'early' | 'late'; this.actions.receiverMode = s.receiver; save(); redraw(); });
     this.bindSeg('sswitch', (v) => { s.stickSwitch = v as 'player' | 'ball'; this.actions.stickSwitch = s.stickSwitch; save(); redraw(); });
     this.bindSeg('rumble', (v) => { s.rumble = v === 'on'; save(); redraw(); if (s.rumble) this.gamepad.rumble(0.6, 0.6, 180); });

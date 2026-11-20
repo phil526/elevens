@@ -27,6 +27,8 @@ export interface Settings {
   shotAssist: 'assisted' | 'manual';
   /** Home crowd momentum: the home crowd lifts your side when it is on top (offline; 19 Nov 2026). */
   momentum: boolean;
+  /** The computer learns how you attack over a match and adapts (offline; 20 Nov 2026). */
+  habits?: boolean;
   /** Right-stick switching: a flick picks the teammate in that direction from your player, or from the ball. */
   stickSwitch: 'player' | 'ball';
   /** Your team instructions (formation and sliders), used offline and sent to the server online. */
@@ -125,6 +127,7 @@ export function defaultSettings(): Settings {
     passAssist: 'assisted',
     shotAssist: 'assisted',
     momentum: true,
+    habits: true,
     stickSwitch: 'player',
     tactics: defaultTactics(),
     adaptiveLevel: 2,

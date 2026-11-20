@@ -236,6 +236,8 @@ export interface MatchConfig {
   draw?: 'stand' | 'extra' | 'pens';
   /** Weather: rain or snow change how the ball runs and bounces, wind moves it in the air (default clear and still). */
   weather?: import('./weather').MatchWeather;
+  /** The computer learns a human side's attacking habits over the match and adapts (default on; 20 Nov 2026). */
+  habits?: boolean;
   /** Home crowd momentum: pressure builds a swing that the home crowd turns into a lift for the home side (default on). */
   momentum?: boolean;
   /** Be a Pro: the slot (0-10) each team's human controls all match, -1 for normal switching. */
