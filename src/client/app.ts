@@ -745,6 +745,8 @@ export class App {
         case 'whistle':
           this.audio.whistle(e.text && e.text in WHISTLES ? (e.text as WhistleKind) : (e.power ?? 1));
           if (e.text === 'halftime' || e.text === 'fulltime' || (e.text === 'kickoff' && v.clock < 1 && v.half === 1)) this.audio.react('applause');
+          // An away penalty (the home end is behind the goal in a shootout): boos and whistles.
+          if (e.text === 'penalty' && v.restart?.team === 1) this.audio.penaltyWhistles(v.shootout ? 1.2 : 0.9);
           break;
         case 'goal':
           this.audio.net(e.x ?? 0); this.audio.react('goal');
@@ -2965,6 +2967,8 @@ export class App {
         <div class="row between"><span class="lbl">Half-time aerials</span>${this.seg('aerials', [['on', 'On'], ['off', 'Off']], s.aerials !== false ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Half-time highlights</span>${this.seg('hlights', [['on', 'On'], ['off', 'Off']], s.highlights ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Big moments</span>${this.seg('bigm', [['on', 'On'], ['off', 'Off']], s.graphics.bigMoments !== false ? 'on' : 'off')}</div>
+        <div class="row between"><span class="lbl">Set-piece camera</span>${this.seg('spcam', [['on', 'On'], ['off', 'Off']], s.camera.setPiece !== false ? 'on' : 'off')}</div>
+        <p class="note">Set-piece camera: for penalties, shootouts and free kicks in shooting range the view moves behind the ball, then follows the shot.</p>
         <div class="row between"><span class="lbl">Reduced camera motion</span>${this.seg('reduced', [['off', 'Off'], ['on', 'On']], s.camera.reducedMotion ? 'on' : 'off')}</div>
         <p class="note">These play in matches against the computer, and any button skips them. Pre-match ceremony: mascots walk out holding the players' hands, then the handshake line and both team photos. Goal celebrations: the scorer's knee slide, crest kiss, huddle or cheer, before the replay. Celebration camera Handheld films them from a camera on the operator's shoulder by the touchline (online it cuts to it live after a goal); Steady keeps the shots smooth. Offside checks: the moment is shown again with the offside lines drawn, full screen and on the big screens. Half-time aerials: blimp and drone shots over the ground before the highlights.</p>
       </div>
@@ -3065,6 +3069,7 @@ export class App {
     this.bindSeg('replays', (v) => { s.goalReplays = v === 'on'; save(); redraw(); });
     this.bindSeg('ceremony', (v) => { s.ceremony = v === 'on'; save(); redraw(); });
     this.bindSeg('handheld', (v) => { s.graphics.handheld = v === 'on'; save(); redraw(); });
+    this.bindSeg('spcam', (v) => { s.camera.setPiece = v === 'on'; save(); redraw(); });
     this.bindSeg('celebs', (v) => { s.celebrations = v === 'on'; save(); redraw(); });
     this.bindSeg('varchk', (v) => { s.varChecks = v === 'on'; save(); redraw(); });
     this.bindSeg('aerials', (v) => { s.aerials = v === 'on'; save(); redraw(); });

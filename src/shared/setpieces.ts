@@ -9,7 +9,7 @@ import type { PlayerDef, Tactics } from './teams';
 import type { Player, TeamIndex } from './types';
 
 /** Feature switches for benches and tests (all on in the game). */
-export const SP_ON = { ratings: true, takers: true, pressure: true, techniques: true, duel: true, habits: true, knuckle: true, routines: true, wall: true, referee: true };
+export const SP_ON = { ratings: true, takers: true, pressure: true, techniques: true, duel: true, habits: true, knuckle: true, routines: true, wall: true, referee: true, shootout: true };
 
 /** Tuning. */
 export const SETPIECE = {

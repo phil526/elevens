@@ -964,8 +964,12 @@ export class Match {
     this.award('penalty', t, spot, false, this.penTaker(t, so.kicks[t].length));
     const r = this.restart!;
     const targets = restartTargets(this, r);
+    this.shootoutSpots(r, targets);
     for (const p of this.players) if (!p.off) { p.pos = { ...targets[p.id] }; p.facing = angleOf(r.spot.x - p.pos.x, r.spot.z - p.pos.z); }
-    this.players[r.taker].facing = 0;
+    // The taker walks up on his own from the group on the halfway line (20 Nov 2026).
+    const tk = this.players[r.taker];
+    if (SP_ON.shootout) { tk.pos = { x: 18, z: 0.5 }; tk.facing = 0; }
+    else this.players[r.taker].facing = 0;
     this.resetBall(r.spot);
     this.soRestart = r;
     this.soT = 0;
@@ -1163,6 +1167,7 @@ export class Match {
     if (r.type === 'penalty') this.humanPenaltyKeeper(r, dt);
     const targets = restartTargets(this, r);
     if (r.type === 'penalty') this.penaltyKeeperSpot(r, targets);
+    if (this.shootout && r.type === 'penalty') this.shootoutSpots(r, targets);
     // Set pieces are struck after a run-up: the taker sets up a few strides back from the ball.
     const kickPos = { ...targets[r.taker] };
     const rs = r.type === 'freekick' ? r.runStyle ?? 0 : 0;
@@ -1186,10 +1191,16 @@ export class Match {
         const T = targets[p.id];
         // Opponents caught inside the area at a goal kick hurry out of it.
         const clearing = r.type === 'goalkick' && p.team !== r.team && this.inPenaltyArea(r.team, p.pos, 1);
-        this.arrive(p, T, p.id === r.taker || clearing ? 'sprint' : 'jog');
-        if (dist(p.pos, T) > 1.2) allIn = false;
+        this.arrive(p, T, this.shootout && p.id === r.taker ? 'jog' : p.id === r.taker || clearing ? 'sprint' : 'jog');
+        if (dist(p.pos, T) > 1.2 && (!this.shootout || p.id === r.taker)) allIn = false;
       }
       this.moveAll(dt);
+      // Shootouts: the taker walks up from the halfway line (a kick button hurries a human taker up).
+      if (this.shootout && SP_ON.shootout && r.type === 'penalty' && !allIn && r.t < 7.5) {
+        const tc = this.ctrl[r.team];
+        if (tc.human && tc.pid === r.taker && this.pendingEvents[r.team].some(isKickEvent)) { this.pendingEvents[r.team] = []; this.players[r.taker].pos = { ...targets[r.taker] }; }
+        return;
+      }
       if (allIn || r.t > MATCH.restartSetupMax || this.phase === 'kickoff') {
         let snapped = 0;
         // Kick-offs line everyone up. Otherwise stragglers keep running into position after the
@@ -1617,6 +1628,24 @@ export class Match {
     const pg = this.penGuess && this.penGuess.team === team && this.penGuess.early ? this.penGuess.side : 0;
     const lean = r.gk?.commit ? r.gk.commit.side : pg;
     targets[gk.id] = { x: T.x, z: clamp((r.gk?.shift ?? 0) + lean * 0.45, -1.4, 1.4) };
+  }
+
+  /**
+   * Shootout positions: everyone but the taker and the keeper in goal stands arm in arm on the
+   * halfway line (each side together), the other keeper waits by the edge of the area.
+   */
+  private shootoutSpots(r: Restart, targets: V2[]) {
+    if (!SP_ON.shootout) return;
+    const gkIn = this.keeper(1 - r.team);
+    for (const t of [0, 1] as TeamIndex[]) {
+      const squad = this.teamPlayers(t).filter((p) => p.id !== r.taker && p.id !== gkIn.id);
+      let i = 0;
+      for (const p of squad) {
+        if (p.role === 'GK') { targets[p.id] = { x: PITCH.halfLength - 17, z: -19 }; continue; }
+        targets[p.id] = { x: 0.6, z: (t === 0 ? -1 : 1) * (0.9 + i * 0.62) };
+        i++;
+      }
+    }
   }
 
   /** The taker checks in his run-up: a computer keeper may go first (a good one waits). */
@@ -2821,9 +2850,11 @@ export class Match {
       if (rs === 2) { power *= 0.93; ctx.accuracy = (ctx.accuracy ?? 1) * 0.9; }
       const curve = rs === 3 && a.curve !== undefined ? a.curve * 0.6 : a.curve;
       // A low drive is kept under the wall's jump rather than lifted over it.
-      const clear = wall && style !== 'low' && !a.knuckle ? { d: MATCH.freeKickDistance + 0.4 - (r!.wall?.creep ?? 0), h: 2.3 } : undefined;
-      res = solveShot(ctx, { side: dir, aimZ, power, placed: style === 'finesse', style, clear, curve, dip: a.dip });
-      if (a.knuckle && wall) {
+      // A knuckleball still has to get over the wall: it is solved with its late dip and no curl.
+      const knuckle = !!a.knuckle && !!wall;
+      const clear = wall && style !== 'low' ? { d: MATCH.freeKickDistance + 0.4 - (r!.wall?.creep ?? 0), h: 2.3 } : undefined;
+      res = solveShot(ctx, { side: dir, aimZ, power, placed: style === 'finesse', style, clear, curve: knuckle ? 0 : curve, dip: knuckle ? 3.5 / 9 : a.dip });
+      if (knuckle) {
         res = { ...res, spin: 0, dip: 3.5 };
         this.knuckle = { kicker: p.id, t0: this.time, amp: this.rng.range(6, 10) * (rs === 3 ? 1.3 : 1), freq: this.rng.range(8, 11), phase: this.rng.range(0, Math.PI * 2) };
         this.emit('call', { team, player: p.id, text: 'knuckle' });

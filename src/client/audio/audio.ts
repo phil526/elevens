@@ -471,6 +471,37 @@ export class GameAudio {
     }
   }
 
+  /**
+   * The home end tries to put an away penalty taker off (20 Nov 2026): a boo with dozens of fans
+   * whistling through their fingers, scattered across the stand behind the goal.
+   */
+  penaltyWhistles(level = 1) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    this.react('boo');
+    const t0 = ctx.currentTime + 0.05;
+    for (let i = 0; i < 14; i++) {
+      const t = t0 + Math.random() * 1.6;
+      const len = 0.35 + Math.random() * 0.7;
+      const o = ctx.createOscillator();
+      const f = 1900 + Math.random() * 1300;
+      o.frequency.setValueAtTime(f * 0.92, t);
+      o.frequency.linearRampToValueAtTime(f, t + 0.08);
+      o.frequency.setValueAtTime(f, t + len * 0.6);
+      o.frequency.linearRampToValueAtTime(f * (Math.random() < 0.5 ? 0.85 : 1.06), t + len);
+      const g = ctx.createGain();
+      const peak = 0.012 * level * (0.5 + Math.random());
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(peak, t + 0.05);
+      g.gain.setValueAtTime(peak, t + len - 0.08);
+      g.gain.linearRampToValueAtTime(0, t + len);
+      const pan = ctx.createStereoPanner();
+      pan.pan.value = Math.random() * 1.6 - 0.8;
+      o.connect(g).connect(pan).connect(this.crowdBus);
+      o.start(t); o.stop(t + len + 0.02);
+    }
+  }
+
   /** One blast of a pea whistle: two close tones, a fast rattle from the pea, a sharp attack. */
   private blast(t: number, len: number, level: number) {
     const ctx = this.ctx!;

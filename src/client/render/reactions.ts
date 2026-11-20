@@ -26,6 +26,8 @@ export type ReactionKind =
   // 20 Nov 2026 (render/moves7.ts pack): a hand on an opponent's shirt and a hand-off in a duel,
   // the keeper organising his wall, and the officials' signals (render/officials.ts).
   | 'grabL' | 'grabR' | 'fendL' | 'fendR' | 'organise'
+  // Shootouts: the rest of the team arm in arm on the halfway line.
+  | 'armsLinked'
   | 'refPoint' | 'refCard' | 'refAdvantage' | 'refSpot' | 'flagUp' | 'flagPoint';
 
 /** When the pre-match huddle breaks up (seconds into the 'teamHuddle' reaction). */
@@ -224,6 +226,15 @@ export function reactionPose(kind: ReactionKind, t: number, seed: number, P: Flo
       P[SPX] = -0.03 + b * 0.4 + 0.12 * glance; P[NKX] = -0.04 + 0.35 * glance;
       if (clasp) { P[SLX] = -0.42; P[SLZ] = -0.12; P[ELX] = -0.85 + b; P[SRX] = -0.42; P[SRZ] = 0.12; P[ERX] = -0.85 + b; }
       else { P[SLX] = -0.12 + b; P[SLZ] = 0.07; P[ELX] = -0.3; P[SRX] = -0.12 - b; P[SRZ] = -0.07; P[ERX] = -0.3; }
+      break;
+    }
+    case 'armsLinked': {
+      // Arm in arm on the halfway line during a shootout: arms out round the neighbours' shoulders,
+      // a nervous sway and the odd bounce on the toes.
+      const sway = 0.04 * s(0.9), bob = Math.max(0, s(2.2, 1)) ** 4 * 0.03;
+      P[BY] = bob; P[SPX] = 0.06 + sway * 0.5; P[NKX] = 0.05;
+      P[SLX] = -0.35; P[SLZ] = 1.3; P[ELX] = -0.55 + sway;
+      P[SRX] = -0.35; P[SRZ] = -1.3; P[ERX] = -0.55 - sway;
       break;
     }
     case 'teamHuddle': {
