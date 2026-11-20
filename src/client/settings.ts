@@ -58,6 +58,8 @@ export interface Settings {
   menuBackdrop: boolean;
   /** Set once a tablet's old Low default has been moved up to Medium (18 Nov 2026). */
   tabletMedium?: boolean;
+  /** Set once commentary has been turned off on phones and tablets (Philip, 20 Nov 2026: the captions sit over the middle of the pitch). */
+  commentaryOffTouch?: boolean;
   /** Set once an old saved Tracking camera has been moved to the new Broadcast default (18 Nov 2026). */
   broadcastDefault?: boolean;
   /** Set once old saved settings have been moved to the new Player ring Off default (18 Nov 2026). */
@@ -99,6 +101,8 @@ export function defaultSettings(): Settings {
     audio: { master: 0.8, effects: 0.9, crowd: 0.6, muted: false, music: 0.5, musicOn: true, commentary: true, menuSounds: true, announcer: false },
     graphics: { preset: mobile ? (isTablet() ? 'medium' : 'low') : 'high', renderScale: mobile ? 0.85 : 1, shadows: !mobile, players: 'realistic', autoRes: true, wear: true, bigMoments: true },
     camera: { mode: 'broadcast', height: 'standard', zoom: mobile ? 'near' : 'standard', reducedMotion: false },
+    // Phones and tablets: commentary off (its captions cover the middle of a small screen).
+    commentator: mobile ? 'off' : 'captions',
     autoSwitch: true,
     quickRestarts: true,
     receiver: 'late',
@@ -137,6 +141,7 @@ export function defaultSettings(): Settings {
     broadcastDefault: true,
     ringOffDefault: true,
     announcerOffDefault: true,
+    commentaryOffTouch: true,
   };
 }
 
@@ -164,6 +169,11 @@ export function loadSettings(): Settings {
     if (!s.ringOffDefault) {
       out.playerRing = false;
       out.ringOffDefault = true;
+    }
+    // Philip asked for commentary off on phones and tablets (20 Nov): turn it off there once.
+    if (!s.commentaryOffTouch) {
+      if (typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches) out.commentator = 'off';
+      out.commentaryOffTouch = true;
     }
     // Philip asked for the stadium announcer to be off by default (19 Nov): turn it off once.
     if (!s.announcerOffDefault) {

@@ -137,3 +137,32 @@ describe('realistic players on phones', () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe('commentary on phones and tablets (20 Nov 2026)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const touch = (coarse: boolean, saved: unknown) => {
+    const store: Record<string, string> = saved === undefined ? {} : { 'elevens.settings.v1': JSON.stringify(saved) };
+    vi.stubGlobal('matchMedia', () => ({ matches: coarse }));
+    vi.stubGlobal('screen', { width: 800, height: 360 });
+    vi.stubGlobal('localStorage', { getItem: (k: string) => store[k] ?? null, setItem: (k: string, v: string) => { store[k] = v; } });
+  };
+
+  it('is off by default on a touch screen, captions on a computer', async () => {
+    const { defaultSettings } = await import('../src/client/settings');
+    touch(true, undefined);
+    expect(defaultSettings().commentator).toBe('off');
+    touch(false, undefined);
+    expect(defaultSettings().commentator).toBe('captions');
+  });
+
+  it('is turned off once on phones that saved settings before, then the choice is kept', async () => {
+    const { loadSettings } = await import('../src/client/settings');
+    touch(true, { commentator: 'captions' });
+    const moved = loadSettings();
+    expect(moved.commentator).toBe('off');
+    touch(true, { ...moved, commentator: 'voice' });
+    expect(loadSettings().commentator).toBe('voice');
+    touch(false, { commentator: 'captions' });
+    expect(loadSettings().commentator).toBe('captions');
+  });
+});

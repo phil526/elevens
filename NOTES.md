@@ -79,3 +79,4 @@ Philip: "Optimize the game for mobile phone. Ensure all the character models loa
 
 - Playable v80 = index-2r2x2cmd.js (published 20 Nov 08:17 UTC, Philip OKed the card).
 - 20 Nov 08:20 UTC: Philip tested on a Samsung Android phone via the GitHub Pages address, which was still the 19 Nov build (main) -> still hiss in matches and classic players. v81: synthesised crowd murmur and noise-burst reaction fallbacks removed entirely (recordings or silence), sfx fetch retries, Settings > Audio "Crowd and match sounds" load status. Pushed to main so Pages rebuilds; keep Pages in step with the shared link from now on.
+- 20 Nov 08:42 UTC: Philip (Samsung phone, now seeing realistic players) found the commentary captions over the middle of the pitch distracting. Commentary now defaults to Off on phones and tablets (pointer: coarse), with a one-time move to Off there (settings.commentaryOffTouch); computers keep Captions. Build index-lqlHS3Sl.js, tests 600.
