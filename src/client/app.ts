@@ -68,6 +68,8 @@ import { loadChoice, loadMenuOpen, saveChoice, saveMenuOpen, type MatchChoice } 
 import { ModeScreens, type ModeMatch } from './modes/screens';
 import { TournamentScreens } from './modes/tournament';
 import { StreetScreens } from './modes/street';
+import { addResult, friendsListHtml, leagueHtml, loadLeagues, mergeLeague, missingChunks, placeIn, saveLeagues, type LocalLeague } from './modes/friends';
+import { LEAGUE_CODE_RE, newLeagueCode } from '../shared/friends';
 import { clearModes } from './modes/store';
 import { ClipTheatre, makeClip, saveClip, shareVideo, type GoalClip } from './modes/clips';
 import type { SwitchSens, SwitchStyle } from '../shared/types';
@@ -405,7 +407,9 @@ export class App {
     onServerState(() => { const el = this.ui.querySelector('.server-state'); if (el) el.innerHTML = this.serverStateText(); });
     setTimeout(() => void wakeServer(), 1500);
     const room = new URLSearchParams(location.search).get('room');
+    const league = (new URLSearchParams(location.search).get('league') ?? '').toUpperCase();
     if (room && ROOM_CODE_RE.test(room.toUpperCase())) this.showOnline(room.toUpperCase());
+    else if (LEAGUE_CODE_RE.test(league)) this.openLeague(league);
     else this.showMode();
     requestAnimationFrame((t) => this.frame(t));
     // The live stadium starts once the title is on screen (building it takes a moment).
@@ -717,8 +721,16 @@ export class App {
   /** Club level, weekly challenges and rewards for the active save slot (20 Nov 2026). */
   private levels: LevelStore = loadLevels(0);
   private levelSlot = -1;
-  /** A friends league fixture is being played (it counts as a competition). */
-  private friendsMatch: { league: string } | null = null;
+  /** Friends leagues this device belongs to (20 Nov 2026), and the screen's state. */
+  private leagues: LocalLeague[] = loadLeagues();
+  private lgOpen: string | null = null;
+  private lgStatus = '';
+  private lgError = '';
+  private lgLeaving = false;
+  /** The line on the full-time panel once the league result is in. */
+  private lgNote = '';
+  /** Results already handed to the server this connection (so a refused one isn't sent again and again). */
+  private lgPushed = new Set<string>();
   /** World tournament (20 Nov 2026). */
   private tour = new TournamentScreens({
     set: (h, c) => this.set(h, c), on: (sel, fn) => this.on(sel, fn), seg: (n, v, c) => this.seg(n, v, c), bindSeg: (n, fn) => this.bindSeg(n, fn),
@@ -2370,6 +2382,7 @@ export class App {
       ${this.motm(v)}
       ${this.scorers(v)}${this.statsBlock(v)}
       <p class="note rematch-note">${online && !this.room?.ranked ? ((this.room?.format ?? '1v1') === '1v1' ? 'A rematch starts when both players choose it.' : 'A rematch starts when everyone chooses it.') : ''}</p>
+      ${online && this.room?.league ? `<p class="note lg-note">${esc(this.lgNote || 'Friends league match: the result goes into the table.')}</p>` : ''}
       ${online && this.room?.ranked ? `<div class="rank-note">${this.rankRes ? rankedResultHtml(this.rankRes) : '<p class="note">Updating your division…</p>'}</div>` : ''}
       ${compNote}
       ${this.levelNote}
@@ -2465,7 +2478,7 @@ export class App {
     // Club level and weekly challenges.
     this.syncLevels();
     const mp = this.analysis.passes.filter((x) => x.team === me);
-    const facts: MatchFacts = { ...m, passPct: mp.length >= 10 ? mp.filter((x) => x.ok).length / mp.length : NaN, kind: this.modeMatch?.kind ?? (this.friendsMatch ? 'friends' : mode) };
+    const facts: MatchFacts = { ...m, passPct: mp.length >= 10 ? mp.filter((x) => x.ok).length / mp.length : NaN, kind: this.modeMatch?.kind ?? (this.session instanceof OnlineSession && this.room?.league ? 'friends' : mode) };
     const lr = recordLevels(this.levels, facts);
     saveLevels(this.levelSlot, this.levels);
     this.levelNote = levelNoteHtml(this.levels, lr);
@@ -3335,12 +3348,14 @@ export class App {
 
   private showOnline(code = '') {
     this.screenName = 'online';
+    this.lgOpen = null;
     const name = this.settings.name;
     this.set(`<div class="panel narrow">
       <h2>Online match</h2>
       <p class="note">Play one other person, two against two, or team up with a friend against the computer. Each person controls one player at a time; the computer runs the rest of the team.</p>
       <p class="note server-state">${this.serverStateText()}</p>
       <button class="btn big" data-a="ranked">Ranked match<small class="note"> · climb the divisions</small></button>
+      <button class="btn big" data-a="friends">Friends league<small class="note"> · a table just for you and your friends</small></button>
       <div class="field"><label for="nm">Your name</label><input id="nm" type="text" maxlength="16" value="${esc(name)}" placeholder="Player" autocomplete="nickname"></div>
       <h3>Create</h3>
       <button class="btn primary" data-a="create">Create private room</button>
@@ -3355,6 +3370,7 @@ export class App {
     const getName = () => { this.settings.name = nameEl.value.trim().slice(0, 16); saveSettings(this.settings); return this.settings.name || 'Player'; };
     this.on('[data-a=create]', () => this.connectAnd(getName(), () => this.net!.send({ t: 'create', name: getName() })));
     this.on('[data-a=ranked]', () => { getName(); this.showRanked(); });
+    this.on('[data-a=friends]', () => { getName(); this.showFriends(); });
     this.on('[data-a=join]', () => {
       const c = codeEl.value.trim().toUpperCase();
       if (!ROOM_CODE_RE.test(c)) { this.onlineError = 'Room codes are 5 letters/numbers (no 0, O, 1, I or L).'; this.showOnline(c); return; }
@@ -3377,6 +3393,87 @@ export class App {
     if (st === 'blocked') return `<span class="badge bad">Can't go online from here</span> This page blocks connections to the match server.${link}`;
     if (st === 'unreachable') return `<span class="badge bad">Match server not answering</span> Check your connection, then try again.${link}`;
     return '<span class="badge">Checking the match server…</span>';
+  }
+
+  // ------------------------------------------------------------- friends league
+
+  private showFriends() {
+    this.screenName = 'friends';
+    this.lgOpen = null;
+    this.set(friendsListHtml(this.leagues, this.ranked.id, this.lgStatus, this.lgError), 'scroll');
+    this.on('[data-lg]', (el) => this.openLeague(el.dataset.lg!));
+    this.on('[data-a=lgmake]', () => {
+      const name = (this.ui.querySelector<HTMLInputElement>('#lgname')?.value ?? '').replace(/[^\p{L}\p{N} ._'&-]/gu, '').trim().slice(0, 24);
+      if (!name) { this.lgError = 'Give your league a name.'; this.showFriends(); return; }
+      let code = newLeagueCode();
+      while (this.leagues.some((l) => l.code === code)) code = newLeagueCode();
+      this.leagues = [...this.leagues, { code, name, members: [], results: [], synced: 0 }];
+      saveLeagues(this.leagues);
+      this.openLeague(code);
+    });
+    this.on('[data-a=lgjoin]', () => {
+      const code = (this.ui.querySelector<HTMLInputElement>('#lgcode')?.value ?? '').trim().toUpperCase();
+      if (!LEAGUE_CODE_RE.test(code)) { this.lgError = 'League codes are 6 letters/numbers (no 0, O, 1, I or L).'; this.showFriends(); return; }
+      this.openLeague(code);
+    });
+    this.on('[data-a=lgback]', () => { this.lgError = ''; this.lgStatus = ''; this.net?.close(); this.net = null; this.showOnline(); });
+  }
+
+  /** Open a league's screen (joining it if this device isn't a member yet) and bring it up to date. */
+  private openLeague(code: string) {
+    if (!this.leagues.some((l) => l.code === code)) {
+      this.leagues = [...this.leagues, { code, name: `League ${code}`, members: [], results: [], synced: 0 }];
+      saveLeagues(this.leagues);
+    }
+    this.lgOpen = code;
+    this.lgError = '';
+    this.lgLeaving = false;
+    history.replaceState(null, '', location.pathname + location.search.replace(/[?&]league=[^&]*/, '').replace(/^&/, '?'));
+    this.lgStatus = 'Bringing the league up to date…';
+    this.showLeague();
+    this.connectAnd(this.settings.name || 'Player', () => this.syncLeague(code, []));
+  }
+
+  private syncLeague(code: string, results: import('../shared/friends').LeagueResult[]) {
+    const l = this.leagues.find((x) => x.code === code);
+    if (!l || !this.net) return;
+    for (const r of results) this.lgPushed.add(r.id);
+    const named = l.name !== `League ${code}`;
+    this.net.send({ t: 'lg', code, id: this.ranked.id, key: this.ranked.key, me: this.settings.name || 'Player', results, ...(named ? { name: l.name } : {}) });
+  }
+
+  private showLeague() {
+    const l = this.leagues.find((x) => x.code === this.lgOpen);
+    if (!l) { this.showFriends(); return; }
+    this.screenName = 'league';
+    const q = new URLSearchParams(location.search);
+    q.delete('test'); q.delete('room');
+    q.set('league', l.code);
+    const link = `${location.origin}${location.pathname}?${q.toString()}`;
+    this.set(leagueHtml(l, this.ranked.id, link, this.lgStatus, this.lgError), 'scroll');
+    if (this.lgLeaving) { const b = this.ui.querySelector('[data-a=lgleave]'); if (b) b.textContent = 'Tap again to leave'; }
+    const name = () => this.settings.name || 'Player';
+    const tag = { code: l.code, id: this.ranked.id };
+    this.on('[data-a=lgcopy]', () => {
+      const el = this.ui.querySelector<HTMLInputElement>('#lglink')!;
+      el.select();
+      void navigator.clipboard?.writeText(link).then(() => this.hud.toast('Invite link copied'), () => {});
+    });
+    this.on('[data-a=lgplay]', () => this.connectAnd(name(), () => this.net!.send({ t: 'create', name: name(), lg: tag })));
+    this.on('[data-a=lgroomjoin]', () => {
+      const c = (this.ui.querySelector<HTMLInputElement>('#lgroom')?.value ?? '').trim().toUpperCase();
+      if (!ROOM_CODE_RE.test(c)) { this.lgError = 'Room codes are 5 letters/numbers.'; this.showLeague(); return; }
+      this.connectAnd(name(), () => this.net!.send({ t: 'join', code: c, name: name(), lg: tag }));
+    });
+    this.on('[data-a=lgleave]', () => {
+      if (!this.lgLeaving) { this.lgLeaving = true; this.showLeague(); return; }
+      // Leaving only forgets the league on this device; your results stay in the others' tables.
+      this.leagues = this.leagues.filter((x) => x.code !== l.code);
+      saveLeagues(this.leagues);
+      this.lgLeaving = false;
+      this.showFriends();
+    });
+    this.on('[data-a=lglist]', () => { this.lgError = ''; this.lgStatus = ''; this.showFriends(); });
   }
 
   /** Ranked online: division, record, club, the queue and the top players. */
@@ -3471,6 +3568,35 @@ export class App {
         saveRanked(this.ranked);
         if (this.screenName === 'ranked') this.showRanked();
         break;
+      case 'lg': {
+        const mineBefore = this.leagues.find((l) => l.code === m.league.code)?.results ?? [];
+        this.leagues = mergeLeague(this.leagues, m.league);
+        saveLeagues(this.leagues);
+        // Hand over (a chunk at a time) the results the server didn't have: it restarted, or this
+        // device saw matches the others haven't brought back yet.
+        const next = missingChunks(mineBefore.filter((r) => !this.lgPushed.has(r.id)), m.league.results)[0];
+        if (next) this.syncLeague(m.league.code, next);
+        else if (this.lgOpen === m.league.code) this.lgStatus = '';
+        if (this.screenName === 'league' && this.lgOpen === m.league.code) this.showLeague();
+        break;
+      }
+      case 'lgerr':
+        if (this.lgOpen === m.code) { this.lgError = m.msg; this.lgStatus = ''; if (this.screenName === 'league') this.showLeague(); }
+        break;
+      case 'lgres': {
+        this.leagues = addResult(this.leagues, m.code, m.r);
+        saveLeagues(this.leagues);
+        const l = this.leagues.find((x) => x.code === m.code);
+        if (l) {
+          const pos = placeIn(l, this.ranked.id);
+          const text = `Friends league: result saved. You are ${ordinal(pos)} in ${l.name}.`;
+          this.hud.toast(text, 5000);
+          this.lgNote = text;
+          const note = this.ui.querySelector('.lg-note');
+          if (note) note.textContent = text;
+        }
+        break;
+      }
       case 'board':
         this.ranked.board = m.top;
         saveRanked(this.ranked);
@@ -3490,6 +3616,7 @@ export class App {
         break;
       }
       case 'start': {
+        this.lgNote = '';
         this.onlineStart = { side: m.side, slot: m.slot, format: m.format, teams: m.teams, kits: m.kits, minutes: m.minutes, mentality: m.mentality, weather: m.weather };
         const info = this.onlineStart;
         if (this.session instanceof OnlineSession) this.session.dispose();
@@ -3636,6 +3763,7 @@ export class App {
       <div class="row"><input type="text" readonly value="${esc(link)}" style="flex:1;min-width:200px;font-size:14px" id="link"><button class="btn small" data-a="copy">Copy link</button></div>
       <div class="row between" style="margin-top:12px"><span class="lbl">Format${host ? '' : ' (host chooses)'}</span>${host ? this.seg('fmt', (['1v1', '2v2', 'coop'] as RoomFormat[]).map((f) => [f, fmtWord[f]]), fmt) : `<span>${fmtWord[fmt]}</span>`}</div>
       <p class="note">${fmtNote}</p>
+      ${r.league ? `<p class="note lobby-league"><span class="badge ok">Friends league</span> ${esc(this.leagues.find((l) => l.code === r.league)?.name ?? `League ${r.league}`)}: this match counts in the table.</p>` : ''}
       <div class="grid2 lobby-sides" style="margin-top:10px">${sideCol(0)}${sideCol(1)}</div>
       <div class="stack" style="margin-top:14px">
         <div class="row between"><span class="lbl">Clubs${host ? '' : ' (host chooses)'}</span>${host ? `<button class="btn small" data-a="swap">Swap clubs</button>` : `<span>${esc(teamById(clubOf(mySide)).name)}</span>`}</div>
@@ -3661,7 +3789,11 @@ export class App {
     this.bindSeg('fmt', (v) => n.send({ t: 'lobby', format: v as RoomFormat }));
     this.bindSeg('aidiff', (v) => n.send({ t: 'lobby', aiDiff: v as AiDiff }));
     this.on('[data-a=ready]', () => n.send({ t: 'lobby', ready: !me.ready, sw: [this.settings.switchStyle ?? 'full', this.settings.switchSens ?? 'normal'] }));
-    this.on('[data-a=leave]', () => { this.net?.close(); this.net = null; this.room = null; history.replaceState(null, '', location.pathname); this.showOnline(); });
+    this.on('[data-a=leave]', () => {
+      const lg = this.lgOpen;
+      if (lg) { this.net?.send({ t: 'leave' }); this.room = null; this.openLeague(lg); return; }
+      this.net?.close(); this.net = null; this.room = null; history.replaceState(null, '', location.pathname); this.showOnline();
+    });
   }
 }
 

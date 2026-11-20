@@ -10,6 +10,8 @@ import { parseClientMsg, PROTOCOL_VERSION, ROOM_CODE_RE, type ServerMsg } from '
 import { newCode, newToken, Room, type Conn } from './room';
 import { RankQueue, RankStore } from './ranked';
 import { TransferStore } from './transfer';
+import { FriendsStore } from './friends';
+import { randomBytes } from 'node:crypto';
 
 export interface ServerOptions {
   port: number;
@@ -61,11 +63,17 @@ export class GameServer {
   /** Saves on their way to another device (held in memory for 30 minutes). */
   transfer = new TransferStore();
   queue = new RankQueue<Client>();
+  /** Friends leagues (in memory; members' devices keep the signed results). */
+  friends: FriendsStore;
   private lastPair = 0;
 
   constructor(private opts: ServerOptions) {
     this.log = opts.log ?? ((m) => console.log(`[elevens] ${m}`));
-    this.ranks = new RankStore(opts.rankedFile ?? null, this.log, opts.rankedSecret ?? null);
+    // One secret signs ranked records and friends league results (random if none is set: then
+    // signatures only last as long as this process).
+    const secret = opts.rankedSecret || randomBytes(32).toString('hex');
+    this.ranks = new RankStore(opts.rankedFile ?? null, this.log, secret);
+    this.friends = new FriendsStore(secret);
     this.http = createServer((req, res) => this.serveHttp(req, res));
     // Snapshots are similar from one to the next, so compression with a shared window cuts them
     // to about a tenth (bandwidth matters on free hosting plans).
@@ -277,7 +285,13 @@ export class GameServer {
         this.rooms.set(code, room);
         this.byToken.set(c.token, room);
         c.room = room;
-        room.join(c.token, msg.name, c.conn);
+        room.onLeagueEnd = (r, lg, ids, clubs, score) => {
+          const res = this.friends.record(lg, ids[0], ids[1], clubs[0], clubs[1], score);
+          if (!res) return;
+          for (const i of [0, 1]) r.seats[i]?.conn?.send({ t: 'lgres', code: lg, r: res });
+          this.log(`room ${r.code}: friends league ${lg} result ${score.join('-')}`);
+        };
+        room.join(c.token, msg.name, c.conn, msg.lg);
         this.log(`room ${code} created`);
         return;
       }
@@ -286,8 +300,8 @@ export class GameServer {
         const room = this.rooms.get(msg.code);
         if (!room || room.closed) { c.conn.send({ t: 'err', code: 'not_found', msg: 'No room with that code. It may have expired.' }); return; }
         if (c.room && c.room !== room) c.room.leave(c.token);
-        const seat = room.join(c.token, msg.name, c.conn);
-        if (seat < 0) { c.conn.send({ t: 'err', code: 'room_full', msg: 'That room already has two players.' }); return; }
+        const seat = room.join(c.token, msg.name, c.conn, msg.lg);
+        if (seat < 0) { c.conn.send({ t: 'err', code: 'room_full', msg: 'That room is full.' }); return; }
         c.room = room;
         this.byToken.set(c.token, room);
         return;
@@ -318,6 +332,12 @@ export class GameServer {
       case 'board':
         c.conn.send({ t: 'board', top: this.ranks.top(20) });
         return;
+      case 'lg': {
+        const out = this.friends.open(msg.code, msg.name, msg.id, msg.key, msg.me, msg.results);
+        if (typeof out === 'string') c.conn.send({ t: 'lgerr', code: msg.code, msg: out });
+        else c.conn.send({ t: 'lg', league: out });
+        return;
+      }
       default:
         if (!c.room) { c.conn.send({ t: 'err', code: 'not_in_room', msg: 'Not in a room' }); return; }
         c.room.handle(c.token, msg);

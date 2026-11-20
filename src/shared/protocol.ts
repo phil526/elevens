@@ -7,13 +7,14 @@ import { cleanTactics, type Tactics } from './teams';
 import { SWITCH_SENS, SWITCH_STYLES, type InputEvent, type InputFrame, type SwitchSens, type SwitchStyle } from './types';
 import { ALL_CLUBS, TEAMS } from './teams';
 import type { RankedRecord } from './ranked';
+import { cleanLeagueName, cleanResult, LEAGUE, LEAGUE_CODE_RE, type LeagueInfo, type LeagueResult } from './friends';
 
-export const PROTOCOL_VERSION = 16;
+export const PROTOCOL_VERSION = 17;
 
 export type ClientMsg =
   | { t: 'hello'; v: number; token?: string; name?: string }
-  | { t: 'create'; name: string }
-  | { t: 'join'; code: string; name: string }
+  | { t: 'create'; name: string; lg?: LeagueTag }
+  | { t: 'join'; code: string; name: string; lg?: LeagueTag }
   | { t: 'lobby'; club?: string; kit?: 'home' | 'away'; mentality?: Mentality; minutes?: number; ready?: boolean; swap?: boolean; sw?: [SwitchStyle, SwitchSens]; format?: RoomFormat; aiDiff?: AiDiff }
   | { t: 'in'; f: InputFrame[] }
   | { t: 'ping'; c: number }
@@ -24,7 +25,12 @@ export type ClientMsg =
   /** Ranked (19 Nov 2026): join the queue with your device's id and key and your club; leave it; the top of the table. */
   | { t: 'ranked'; id: string; key: string; name: string; club: string; saved?: { rec: RankedRecord; sig: string } }
   | { t: 'unranked' }
-  | { t: 'board' };
+  | { t: 'board' }
+  /** Friends league (20 Nov 2026): open a league (made if new), hand over the results you keep, get the rest. */
+  | { t: 'lg'; code: string; name?: string; id: string; key: string; me: string; results: LeagueResult[] };
+
+/** A private room opened from a friends league: the league and your id in it. */
+export interface LeagueTag { code: string; id: string }
 
 /**
  * Private room formats (20 Nov 2026): one against one; two against two (each side two people,
@@ -69,6 +75,8 @@ export interface RoomState {
   host: number;
   /** A ranked match (no lobby settings; the result moves both players' division points). */
   ranked?: boolean;
+  /** Both players opened this room from the same friends league: the result counts there. */
+  league?: string;
 }
 
 export type ServerMsg =
@@ -83,7 +91,12 @@ export type ServerMsg =
   | { t: 'rank'; rec: RankedRecord; queued: boolean; waiting: number; sig?: string }
   /** Ranked: a match result, your record before and after. */
   | { t: 'rankres'; before: RankedRecord; after: RankedRecord; delta: number; opp: string; sig?: string }
-  | { t: 'board'; top: RankedRecord[] };
+  | { t: 'board'; top: RankedRecord[] }
+  /** Friends league: the league as the server now knows it (or why it can't be opened). */
+  | { t: 'lg'; league: LeagueInfo }
+  | { t: 'lgerr'; code: string; msg: string }
+  /** Friends league: the result of the match just played (signed). */
+  | { t: 'lgres'; code: string; r: LeagueResult };
 
 export type ErrCode = 'bad_code' | 'not_found' | 'room_full' | 'bad_msg' | 'rate_limited' | 'version' | 'not_in_room' | 'server';
 
@@ -102,6 +115,11 @@ function cleanSaved(x: unknown, id: string): { rec: RankedRecord; sig: string } 
   const elo = n(r.elo, 5000), points = n(r.points, 100000), w = n(r.w, 1e6), d = n(r.d, 1e6), l = n(r.l, 1e6), best = n(r.best, 100000);
   if (r.id !== id || typeof r.name !== 'string' || elo === null || points === null || w === null || d === null || l === null || best === null) return undefined;
   return { rec: { id, name: cleanName(r.name), elo, points, w, d, l, best }, sig: x.sig };
+}
+
+function cleanTag(x: unknown): LeagueTag | undefined {
+  if (!isObj(x) || typeof x.code !== 'string' || typeof x.id !== 'string') return undefined;
+  return LEAGUE_CODE_RE.test(x.code) && /^[a-f0-9]{32}$/.test(x.id) ? { code: x.code, id: x.id } : undefined;
 }
 
 export const cleanName = (x: unknown) => (typeof x === 'string' ? x.replace(/[^\p{L}\p{N} ._-]/gu, '').trim().slice(0, 16) : '') || 'Player';
@@ -157,11 +175,23 @@ export function parseClientMsg(raw: string): ClientMsg | null {
       const token = typeof x.token === 'string' && /^[a-f0-9]{32}$/.test(x.token) ? x.token : undefined;
       return { t: 'hello', v, token, name: cleanName(x.name) };
     }
-    case 'create':
-      return { t: 'create', name: cleanName(x.name) };
+    case 'create': {
+      const lg = cleanTag(x.lg);
+      return lg ? { t: 'create', name: cleanName(x.name), lg } : { t: 'create', name: cleanName(x.name) };
+    }
     case 'join': {
       const code = typeof x.code === 'string' ? x.code.toUpperCase().trim() : '';
-      return { t: 'join', code, name: cleanName(x.name) };
+      const lg = cleanTag(x.lg);
+      return lg ? { t: 'join', code, name: cleanName(x.name), lg } : { t: 'join', code, name: cleanName(x.name) };
+    }
+    case 'lg': {
+      const code = typeof x.code === 'string' ? x.code.toUpperCase().trim() : '';
+      const id = typeof x.id === 'string' && /^[a-f0-9]{32}$/.test(x.id) ? x.id : null;
+      const key = typeof x.key === 'string' && /^[a-f0-9]{32}$/.test(x.key) ? x.key : null;
+      if (!LEAGUE_CODE_RE.test(code) || !id || !key || !Array.isArray(x.results) || x.results.length > LEAGUE.chunk) return null;
+      const results = x.results.map(cleanResult).filter((r): r is LeagueResult => !!r);
+      const name = cleanLeagueName(x.name);
+      return { t: 'lg', code, id, key, me: cleanName(x.me), results, ...(name ? { name } : {}) };
     }
     case 'lobby': {
       const out: Extract<ClientMsg, { t: 'lobby' }> = { t: 'lobby' };

@@ -7,7 +7,7 @@ import type { Mentality } from '../shared/config';
 import { MATCH, NET, SIM } from '../shared/config';
 import { Match, defaultConfig } from '../shared/match';
 import { rollWeatherKind, rollWind } from '../shared/weather';
-import { FORMAT_SEATS, ROOM_CODE_ALPHABET, type AiDiff, type ClientMsg, type LobbySeat, type RoomFormat, type RoomState, type ServerMsg } from '../shared/protocol';
+import { FORMAT_SEATS, ROOM_CODE_ALPHABET, type AiDiff, type ClientMsg, type LobbySeat, type RoomFormat, type RoomState, type ServerMsg, type LeagueTag } from '../shared/protocol';
 import { encodeSnapshot } from '../shared/snapshot';
 import { TEAMS, defaultTactics, teamById, type Tactics } from '../shared/teams';
 import type { InputFrame, MatchEvent, SwitchSens, SwitchStyle, TeamIndex } from '../shared/types';
@@ -42,6 +42,8 @@ export interface Seat {
   slot: 0 | 1;
   /** Gave up waiting for this seat in a team match: the computer keeps the control. */
   gone?: boolean;
+  /** Opened from a friends league (the league's code and this player's id in it). */
+  lg?: LeagueTag;
 }
 
 const neutral = (seq = 0): InputFrame => ({ seq, mx: 0, mz: 0, sprint: false, jockey: false, ev: [] });
@@ -93,6 +95,14 @@ export class Room {
   /** Ranked match: the two players' ranked ids, and who to tell about the result (once). */
   ranked: { ids: [string, string]; reported: boolean } | null = null;
   onRankedEnd: ((room: Room, result: 'A' | 'B' | 'D') => void) | null = null;
+  /** Friends league: a league match reached full time (the server signs and sends the result). */
+  onLeagueEnd: ((room: Room, code: string, ids: [string, string], clubs: [string, string], score: [number, number]) => void) | null = null;
+
+  /** Both players opened this 1 v 1 room from the same friends league: its code. */
+  get league(): string | undefined {
+    const a = this.seats[0]?.lg, b = this.seats[1]?.lg;
+    return !this.ranked && this.format === '1v1' && a && b && a.code === b.code && a.id !== b.id ? a.code : undefined;
+  }
 
   constructor(public code: string, private opts: RoomOptions) {
     this.lastActivity = opts.now();
@@ -112,7 +122,7 @@ export class Room {
   private get full() { return this.active.every((i) => !!this.seats[i]); }
 
   /** Add a participant. Returns the seat index, or -1 if the room is full. */
-  join(token: string, name: string, conn: Conn): number {
+  join(token: string, name: string, conn: Conn, lg?: LeagueTag): number {
     const existing = this.seatOf(token);
     if (existing >= 0) return this.resume(existing, conn) ? existing : -1;
     if (this.state !== 'lobby') return -1;
@@ -122,6 +132,7 @@ export class Room {
     this.seats[idx] = {
       token, name, conn, connected: true, ready: false, club: this.clubs[sideOf(idx)], kit: lead?.kit ?? 'home', mentality: lead?.mentality ?? 'balanced', queue: [], held: neutral(), lastInputAt: 0, ack: 0,
       graceUsedMs: 0, disconnectedAt: 0, rematch: false, eventsThisSecond: 0, eventWindowStart: 0, slot: idx >= 2 ? 1 : 0,
+      ...(lg ? { lg } : {}),
     };
     if (this.occupied === 1) this.host = idx;
     this.fixKits();
@@ -427,6 +438,12 @@ export class Room {
 
   private endMatch(reason: 'fulltime' | 'abandoned' | 'opponent_left', gone: 0 | 1 | -1 = -1) {
     if (this.ranked) this.reportRanked(reason, gone);
+    const lg = this.league;
+    if (lg && reason === 'fulltime' && this.match) {
+      const m = this.match;
+      // A shootout winner after a draw is still a draw in the league (online matches keep draws).
+      this.onLeagueEnd?.(this, lg, [this.seats[0]!.lg!.id, this.seats[1]!.lg!.id], [m.cfg.teams[0], m.cfg.teams[1]], [m.score[0], m.score[1]]);
+    }
     this.state = 'results';
     this.resultsAt = this.opts.now();
     for (const s of this.seats) if (s) { s.rematch = false; s.ready = false; }
@@ -536,6 +553,7 @@ export class Room {
       rematch: this.seats.map((s) => !!s?.rematch), host: this.host,
       format: this.format, aiDiff: this.aiDiff, clubs: [this.clubs[0], this.clubs[1]], kits: [this.kitFor(0), this.kitFor(1)],
       ...(this.ranked ? { ranked: true } : {}),
+      ...(this.league ? { league: this.league } : {}),
     };
   }
 
