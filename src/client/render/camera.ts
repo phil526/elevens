@@ -27,6 +27,8 @@ export interface CameraSettings {
   height: 'low' | 'standard' | 'high';
   zoom: 'near' | 'standard' | 'far';
   reducedMotion: boolean;
+  /** Set-piece camera (20 Nov 2026): behind the ball for penalties and free kicks in range (default on). */
+  setPiece?: boolean;
 }
 
 const HEIGHT = { low: 0.78, standard: 1, high: 1.28 };
@@ -73,7 +75,67 @@ export class BroadcastCamera {
     this.yawS.v = 0;
   }
 
+  /** Set-piece camera: how far it has blended in (0..1), and the shot it is holding. */
+  private sp = new Spring(0);
+  /** How far the set-piece view has blended in (0 to 1); the renderer hides the taker's pointer in it. */
+  setPieceK = 0;
+  private spShot: { from: THREE.Vector3; goalX: number; kicked: number; aim: THREE.Vector3 } | null = null;
+  private _q = new THREE.Quaternion();
+  private _p = new THREE.Vector3();
+  private _m = new THREE.Matrix4();
+
   update(view: ViewState, dt: number, s: CameraSettings) {
+    this.updateBase(view, dt, s);
+    const mode = s.mode ?? 'tracking';
+    const base = mode === 'broadcast' ? this.cam.fov : SIDELINE[mode].fov;
+    const k = this.setPieceView(view, dt, s);
+    const fov = base + (40 - base) * k;
+    if (Math.abs(fov - this.cam.fov) > 0.01) { this.cam.fov = fov; this.cam.updateProjectionMatrix(); }
+  }
+
+  /**
+   * Behind the ball for a penalty or a free kick in shooting range (not a quick one): the camera
+   * stands a few metres back from the ball looking at the goal, and after the kick watches the
+   * ball until play moves on. Blended over the normal camera.
+   */
+  private setPieceView(view: ViewState, dt: number, s: CameraSettings): number {
+    const rs = view.restart;
+    const direct = (r: NonNullable<ViewState['restart']>) => r.type === 'penalty' || (r.type === 'freekick' && !r.quick && Math.hypot(r.spot.x - PITCH.halfLength * view.attackDir[r.team], r.spot.z) < 30);
+    const ball = view.ball.pos;
+    if (s.setPiece !== false && rs && view.phase === 'restart' && direct(rs) && Math.hypot(ball.x - rs.spot.x, ball.z - rs.spot.z) < 0.5) {
+      const gx = PITCH.halfLength * view.attackDir[rs.team];
+      const g = new THREE.Vector3(gx - rs.spot.x, 0, -rs.spot.z).normalize();
+      const back = rs.type === 'penalty' ? 9 : 8;
+      this.spShot = { from: new THREE.Vector3(rs.spot.x - g.x * back - g.z * 1.2, rs.type === 'penalty' ? 2.6 : 3.2, rs.spot.z - g.z * back + g.x * 1.2), goalX: gx, kicked: -1,
+        // A free kick from further out looks at a point short of the goal, so the ball and the taker stay in shot.
+        aim: rs.type === 'penalty' ? new THREE.Vector3(gx, 1.2, 0) : new THREE.Vector3(rs.spot.x + (gx - rs.spot.x) * 0.28, 0, rs.spot.z * 0.72) };
+    } else if (this.spShot && this.spShot.kicked < 0 && view.phase === 'play') this.spShot.kicked = 0;
+    const sh = this.spShot;
+    let want = 0;
+    if (sh) {
+      if (sh.kicked >= 0) sh.kicked += dt;
+      want = sh.kicked < 0 || (sh.kicked < 1.8 && view.phase === 'play') || (view.phase === 'goal' && sh.kicked < 3.5) ? 1 : 0;
+      if (!want && this.sp.x < 0.02) this.spShot = null;
+    }
+    const k = this.sp.step(want, s.reducedMotion ? 2.5 : 4, dt);
+    this.setPieceK = sh ? k : 0;
+    if (!sh || k < 0.005) return 0;
+    // Look at the goal before the kick, then follow the ball.
+    const look = sh.kicked < 0 ? sh.aim.clone() : new THREE.Vector3(view.ball.pos.x, Math.max(0.6, view.ball.pos.y), view.ball.pos.z);
+    this._m.lookAt(sh.from, look, new THREE.Vector3(0, 1, 0));
+    this._q.setFromRotationMatrix(this._m);
+    this._p.copy(this.cam.position).lerp(sh.from, k);
+    this.cam.position.copy(this._p);
+    this.cam.quaternion.slerp(this._q, k);
+    // The stick follows the view once it has settled behind the ball.
+    if (k > 0.5) {
+      const f = new THREE.Vector3(look.x - sh.from.x, 0, look.z - sh.from.z);
+      if (sh.kicked < 0) this.inputYaw = Math.atan2(f.x, -f.z);
+    }
+    return k;
+  }
+
+  private updateBase(view: ViewState, dt: number, s: CameraSettings) {
     const mode = s.mode ?? 'tracking';
     if (mode !== this.mode) {
       this.mode = mode;

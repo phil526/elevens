@@ -13,6 +13,7 @@
 
 import * as THREE from 'three';
 import type { Kit, PlayerDef } from '../../shared/teams';
+import { PITCH } from '../../shared/config';
 import type { MatchEvent } from '../../shared/types';
 import type { ViewPlayer, ViewState } from '../view';
 import { kitMaterials, PlayerModel } from './player';
@@ -103,6 +104,11 @@ export class Officials {
   private ballV = new THREE.Vector3();
   private lastRestart: string | null = null;
   readonly colour: number;
+  /** Vanishing spray (20 Nov 2026): the line the referee sprays in front of a free-kick wall and the mark by the ball. */
+  private sprayLine: THREE.Mesh;
+  private sprayDot: THREE.Mesh;
+  private sprayMat: THREE.MeshBasicMaterial;
+  private fk: { key: string; start: number; sprayed: number; gone: number } | null = null;
 
   constructor(kits: [Kit, Kit], def: PlayerDef, assets: PlayerAssets | null, shadows: boolean) {
     this.group.name = 'officials';
@@ -120,6 +126,21 @@ export class Officials {
       this.group.add(model.root);
       this.list.push({ kind, model, p: stub(id, def, x, z), face: null, faceUntil: 0 });
     });
+    // Vanishing spray: a dashed foam line and a half circle by the ball.
+    const sc = document.createElement('canvas');
+    sc.width = 128; sc.height = 8;
+    const sg = sc.getContext('2d')!;
+    for (let x = 0; x < 128; x += 16) { sg.fillStyle = '#ffffff'; sg.globalAlpha = 0.85; sg.fillRect(x + 1, 1, 11, 6); }
+    const stex = new THREE.CanvasTexture(sc);
+    this.sprayMat = new THREE.MeshBasicMaterial({ map: stex, transparent: true, opacity: 0, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
+    this.sprayLine = new THREE.Mesh(new THREE.PlaneGeometry(1, 0.14), this.sprayMat);
+    this.sprayLine.rotation.x = -Math.PI / 2;
+    this.sprayLine.position.y = 0.012;
+    this.sprayDot = new THREE.Mesh(new THREE.RingGeometry(0.28, 0.36, 16, 1, 0, Math.PI), this.sprayMat);
+    this.sprayDot.rotation.x = -Math.PI / 2;
+    this.sprayDot.position.y = 0.012;
+    this.sprayLine.visible = this.sprayDot.visible = false;
+    this.group.add(this.sprayLine, this.sprayDot);
     // The card in the referee's hand.
     this.cardMat = new THREE.MeshStandardMaterial({ color: 0xffd400, roughness: 0.5, side: THREE.DoubleSide });
     this.card = new THREE.Mesh(new THREE.PlaneGeometry(0.075, 0.105), this.cardMat);
@@ -190,6 +211,9 @@ export class Officials {
         this.cardUntil = 0;
       } else if (e.type === 'goal') {
         this.signal(0, 'refPoint', 2.4, this.faceTo(0, 0, 0));
+      } else if (e.type === 'call' && (e.text === 'wallback' || e.text === 'retake')) {
+        // The wall crept in, or the keeper left his line: the referee steps in and points.
+        this.signal(0, 'refPoint', 1.8, e.text === 'retake' && view.restart ? this.faceTo(0, view.restart.spot.x, view.restart.spot.z) : null);
       }
     }
   }
@@ -224,6 +248,9 @@ export class Officials {
         tx = s.x; tz = s.z; max = OFFICIALS.refSpeed;
         // Penalty: beside the spot, level with the box.
         if (rs && rs.type === 'penalty') { tx = rs.spot.x - Math.sign(rs.spot.x) * 4; tz = 9; }
+        // Direct free kick: he walks to the ball, paces out ten yards spraying the line, then stands off.
+        const pace = this.fkPace(view, time);
+        if (pace) { tx = pace.x; tz = pace.z; max = pace.speed; }
       } else {
         const half = o.kind === 'ar1' ? 1 : -1;
         tx = assistantX(view, half); tz = half * OFFICIALS.arZ; max = OFFICIALS.arSpeed;
@@ -245,6 +272,57 @@ export class Officials {
       o.model.update(o.p, dt, time, false, this.ballV);
     }
     this.props();
+    this.spray(view, time);
+  }
+
+  /**
+   * A direct free kick in range: where the referee goes this frame (to the ball, then pacing out
+   * 9.15 m towards goal, then off to the side of the wall), or null once he is done.
+   */
+  private fkPace(view: ViewState, time: number): { x: number; z: number; speed: number } | null {
+    const rs = view.restart;
+    const direct = rs && rs.type === 'freekick' && !rs.quick && view.phase === 'restart' && Math.hypot(rs.spot.x - PITCH.halfLength * view.attackDir[rs.team], rs.spot.z) < 30;
+    if (!direct) return null;
+    const key = `${rs.team}:${Math.round(rs.spot.x * 10)}:${Math.round(rs.spot.z * 10)}`;
+    if (!this.fk || this.fk.key !== key) this.fk = { key, start: time, sprayed: -1, gone: -1 };
+    const t = time - this.fk.start;
+    const gx = PITCH.halfLength * view.attackDir[rs.team];
+    const g = { x: gx - rs.spot.x, z: -rs.spot.z };
+    const gl = Math.hypot(g.x, g.z) || 1;
+    g.x /= gl; g.z /= gl;
+    const side = { x: -g.z, z: g.x };
+    if (t < 1.1) return { x: rs.spot.x + side.x * 0.8, z: rs.spot.z + side.z * 0.8, speed: 7 };
+    if (t < 3.6) {
+      const k = Math.min(1, (t - 1.1) / 2.2);
+      if (k >= 1 && this.fk.sprayed < 0) this.fk.sprayed = time;
+      return { x: rs.spot.x + g.x * 9.15 * k + side.x * 0.8, z: rs.spot.z + g.z * 9.15 * k + side.z * 0.8, speed: 4.5 };
+    }
+    if (this.fk.sprayed < 0) this.fk.sprayed = time;
+    return { x: rs.spot.x + g.x * 9.15 + side.x * 4, z: rs.spot.z + g.z * 9.15 + side.z * 4, speed: 4 };
+  }
+
+  /** The spray: shows once the referee has paced it out and fades a few seconds after the kick. */
+  private spray(view: ViewState, time: number) {
+    const fk = this.fk;
+    const rs = view.restart;
+    if (!fk || fk.sprayed < 0) { this.sprayLine.visible = this.sprayDot.visible = false; return; }
+    if (view.phase !== 'restart' && fk.gone < 0) fk.gone = time;
+    if (rs && rs.type !== 'freekick') { this.fk = null; this.sprayLine.visible = this.sprayDot.visible = false; return; }
+    const fade = fk.gone < 0 ? 1 : Math.max(0, 1 - (time - fk.gone - 4) / 3);
+    if (fade <= 0) { this.fk = null; this.sprayLine.visible = this.sprayDot.visible = false; return; }
+    const [team, sx, sz] = fk.key.split(':').map(Number);
+    const spot = { x: sx / 10, z: sz / 10 };
+    const gx = PITCH.halfLength * view.attackDir[team];
+    const g = { x: gx - spot.x, z: -spot.z };
+    const gl = Math.hypot(g.x, g.z) || 1;
+    const a = Math.atan2(g.z, g.x);
+    this.sprayMat.opacity = 0.9 * Math.min(1, (time - fk.sprayed) / 0.4) * fade;
+    this.sprayLine.visible = this.sprayDot.visible = true;
+    this.sprayLine.position.set(spot.x + (g.x / gl) * 9.15, 0.012, spot.z + (g.z / gl) * 9.15);
+    this.sprayLine.scale.set(4.2, 1, 1);
+    this.sprayLine.rotation.set(-Math.PI / 2, 0, -a - Math.PI / 2);
+    this.sprayDot.position.set(spot.x, 0.012, spot.z);
+    this.sprayDot.rotation.set(-Math.PI / 2, 0, Math.PI / 2 - a);
   }
 
   private move(o: Official, tx: number, tz: number, max: number, dt: number, lineOnly: boolean) {

@@ -249,7 +249,7 @@ export class OnlineSession implements Session {
     v.addedTime = b.ex ?? 0;
     v.shootout = b.so ? { kicks: [b.so[0].map((k) => k === 1), b.so[1].map((k) => k === 1)], team: b.so[2] as 0 | 1, winner: b.so[3] as -1 | 0 | 1 } : null;
     v.score = b.sc;
-    v.restart = b.r ? { type: RESTARTS[b.r[0]], team: b.r[1], taker: b.r[2], ready: b.r[3] === 1, spot: { x: b.r[4], z: b.r[5] }, readyT: b.r[6], aim: { x: b.r[7] ?? b.r[4], z: b.r[8] ?? b.r[5] }, quick: b.r[9] === 1, curve: b.r[10] ?? 0, dip: b.r[11] ?? 0 } : null;
+    v.restart = b.r ? { type: RESTARTS[b.r[0]], team: b.r[1], taker: b.r[2], ready: b.r[3] === 1, spot: { x: b.r[4], z: b.r[5] }, readyT: b.r[6], aim: { x: b.r[7] ?? b.r[4], z: b.r[8] ?? b.r[5] }, quick: b.r[9] === 1, curve: b.r[10] ?? 0, dip: b.r[11] ?? 0, shake: b.r[12] ?? 0, stutter: b.r[13] === 1, gkCommit: b.r[14] ? b.r[14] - 2 : undefined } : null;
     v.momentum = undefined; // no home crowd online (room.ts)
     v.ctl = b.ctl;
     v.next = b.nx;

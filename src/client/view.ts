@@ -42,7 +42,7 @@ export interface ViewState {
   clock: number;
   addedTime: number;
   score: [number, number];
-  restart: { type: RestartType; team: number; taker: number; ready: boolean; spot: V2; readyT: number; aim: V2; quick?: boolean; curve?: number; dip?: number } | null;
+  restart: { type: RestartType; team: number; taker: number; ready: boolean; spot: V2; readyT: number; aim: V2; quick?: boolean; curve?: number; dip?: number; shake?: number; stutter?: boolean; gkCommit?: number } | null;
   /** Home crowd momentum, -1 (away side on top) .. 1 (home side on top); 0 when the setting is off. */
   momentum?: number;
   ctl: [number, number];
@@ -135,7 +135,7 @@ export class MatchViewBuilder {
     v.shootout = m.shootout ? { kicks: [[...m.shootout.kicks[0]], [...m.shootout.kicks[1]]], team: m.shootout.team, winner: m.shootout.winner } : null;
     v.score = m.score;
     const r = m.restart;
-    v.restart = r ? { type: r.type, team: r.team, taker: r.taker, ready: r.ready, spot: r.spot, readyT: r.readyT, aim: r.aim, quick: !!r.quick, curve: r.curve ?? 0, dip: r.dip ?? 0 } : null;
+    v.restart = r ? { type: r.type, team: r.team, taker: r.taker, ready: r.ready, spot: r.spot, readyT: r.readyT, aim: r.aim, quick: !!r.quick, curve: r.curve ?? 0, dip: r.dip ?? 0, shake: r.shake ?? 0, stutter: !!r.stutter, gkCommit: r.gk?.commit ? r.gk.commit.side : undefined } : null;
     v.momentum = m.momentum.on ? m.momentum.value : undefined;
     v.ctl = [m.ctrl[0].pid, m.ctrl[1].pid];
     v.next = [m.ctrl[0].next, m.ctrl[1].next];

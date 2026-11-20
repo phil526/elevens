@@ -19,7 +19,7 @@ import type {
 } from './types';
 import { emptyStats } from './types';
 import { newPlayerStats, rateMatch, type PlayerStats, type Rated } from './ratings';
-import { updateAI, planTeams, restartTargets, chooseRestartKick, ROUTINES, routineAim, levelOf, receivePoint, thirdManRun, humanPassAndMove, LONG_THROW_FX, longThrower, throwRange, wallFor, wallSize } from './ai/team';
+import { updateAI, planTeams, restartTargets, chooseRestartKick, ROUTINES, routineAim, levelOf, receivePoint, thirdManRun, humanPassAndMove, LONG_THROW_FX, longThrower, throwRange, wallFor, wallSize, secondTaker, dummySpot } from './ai/team';
 import type { TeamPlan } from './ai/team';
 import { keeperSaveCheck, manualDive, smother } from './ai/keeper';
 import { gameState, restartUrgency } from './ai/gamestate';
@@ -33,6 +33,7 @@ import { maybeInjure, stepInjury, type Injury } from './injury';
 import { chooseDistribution, distributionFor, distributionRequest, pickDistribution, type Distribution } from './ai/distribution';
 import { aerialWin, holdOffChance, strengthOf, DUEL } from './physical';
 import { Momentum, MOMENTUM } from './momentum';
+import { habitStreak, SETPIECE, SP_ON, bestBy, ratingError, chosenTaker, danceError, directFreeKick, matchPressure, nerveError, readEarlyKeeper, ringShake, setPieceRatings, shakyRing, shootoutWinnerOf, variantTech, type PenTech } from './setpieces';
 import { manualShotAim } from './kick';
 import { BC, G6, SW, SWITCH } from './switches';
 import { closeDribble, heavyChance, humanCarrierInput, isJuggle, placeBallForSkill, startFlick, stepBallSkill, touchAway } from './ballcontrol';
@@ -86,7 +87,7 @@ export function runupDistance(type: RestartType): number {
  * Where a run-up starts: behind the kicking position, angled off to the left of the line through
  * the ball so a right-footed taker comes in on a curve, like a real free-kick taker.
  */
-export function runupStart(kickPos: V2, spot: V2, d: number, foot: 1 | -1 = 1): V2 {
+export function runupStart(kickPos: V2, spot: V2, d: number, foot: number = 1): V2 {
   const u = norm(spot.x - kickPos.x, spot.z - kickPos.z);
   const a = 0.5 * foot; // a left-footed taker comes in from the right
   const lx = u.z, lz = -u.x;
@@ -108,6 +109,8 @@ export interface KickRequest {
   assist?: 1 | 2; // semi or manual pass assistance (on a shot, 2 = manual shooting)
   curve?: number; // free-kick shot: bend chosen by the taker (-1..1)
   dip?: number; // free-kick shot: topspin chosen by the taker (0..1)
+  stutter?: boolean; // penalty: a computer taker's stutter run-up
+  knuckle?: boolean; // free kick: struck without spin, so it wobbles and drops late
 }
 
 /** A foul the referee is waiting on before deciding whether to play advantage. */
@@ -208,6 +211,19 @@ export class Match {
   private pendingSubs: { team: TeamIndex; id: number; bench: number }[] = [];
   /** When the last penalty was struck: keepers must guess a side rather than read the shot. */
   penKickTime = -10;
+  /** The penalty just struck: technique, and a keeper's decision made before it (stutter, early dive, standing tall). */
+  penTech: PenTech = 'normal';
+  /** Each side's penalties so far: -1 / 1 by goal-line side, 0 down the middle (keepers learn from it). */
+  penHistory: [number[], number[]] = [[], []];
+  penGuess: { team: TeamIndex; side: -1 | 0 | 1; t: number; early?: boolean; waited?: boolean } | null = null;
+  /** A human given his keeper for a penalty gets an outfield player back once it is over. */
+  private penKeeperBack: { team: TeamIndex; at: number } | null = null;
+  /** A penalty saved by a keeper who left his line too early is retaken. */
+  private penRetake: { team: TeamIndex; taker: number; spot: V2; until: number; due: number } | null = null;
+  /** A knuckleball in the air: its wobble. */
+  private knuckle: { kicker: number; t0: number; amp: number; freq: number; phase: number } | null = null;
+  /** A keeper whose view of a free kick was blocked (attackers in the wall) or who was fooled by a dummy: slower to react. */
+  keeperBlind: { team: number; until: number; extra: number } | null = null;
   private soT = 0;
   private soWait = -1;
   clock = 0; // football seconds elapsed in the current half
@@ -451,6 +467,7 @@ export class Match {
   }
   emit(type: MatchEventType, data: Partial<MatchEvent> = {}) {
     this.events.push({ id: ++this.eventId, type, tick: this.tick, ...data });
+    if (type === 'save' && this.penRetake && this.time < this.penRetake.until && data.team !== this.penRetake.team) this.penRetake.due = this.time + 0.9;
     this.momentumFrom(type, data);
     if (this.ctlDrill) controlDrillEvent(this, this.ctlDrill, type, data.text, data.player);
   }
@@ -638,7 +655,31 @@ export class Match {
       this.restart.taker = longThrower(this, team).id;
     }
     for (const p of this.players) p.queued = null;
+    // The computer sometimes puts two over the ball or attackers in the wall at a direct free kick;
+    // a computer wall sometimes has a man lying down behind it.
+    if (type === 'freekick' && SP_ON.routines && directFreeKick(spot, this.attackDir(team)) && wallFor(this, this.restart)) {
+      if (!this.ctrl[team].human && this.rng.chance(0.3)) this.restart.routine = this.rng.chance(0.5) ? 3 : 4;
+      if (!this.ctrl[1 - team].human && SP_ON.wall && this.rng.chance(0.3)) this.restart.wall = { n: wallSize(dist(spot, { x: this.ownGoalX((1 - team) as TeamIndex), z: 0 })), shift: 0, lie: true };
+    }
     if (this.ctrl[team].human) this.giveTaker(team, this.restart.taker);
+    // Penalty keeper duel: a human facing a penalty takes his keeper (not in Be a Pro).
+    this.penGuess = null;
+    if (type === 'penalty' && SP_ON.duel) {
+      const dt = (1 - team) as TeamIndex;
+      const c = this.ctrl[dt];
+      const gk = this.keeper(dt);
+      if (c.human && !isLocked(c) && !gk.off && c.pid !== gk.id && this.otherHuman(dt) !== gk.id) {
+        c.pid = gk.id;
+        c.lastAutoSwitch = this.time;
+        gk.queued = null;
+        this.penKeeperBack = { team: dt, at: Infinity };
+        this.emit('switch', { team: dt, player: gk.id, text: 'keeper' });
+      }
+      this.restart.gk = { shift: 0, dance: 0 };
+      // A human who keeps going the same way is told the keeper has noticed.
+      const hs = habitStreak(this.penHistory[team]);
+      if (this.ctrl[team].human && hs.n >= 3 && SP_ON.habits) this.emit('call', { team, text: 'habit', power: hs.n });
+    }
     this.emit('restart', { team, x: spot.x, z: spot.z, text: type });
   }
 
@@ -650,7 +691,22 @@ export class Match {
   private pickTaker(type: RestartType, team: TeamIndex, spot: V2): number {
     const squad = this.teamPlayers(team);
     if (type === 'goalkick') return squad[0].id;
-    if (type === 'penalty') return squad.filter((p) => p.role !== 'GK').sort((a, b) => b.a.shooting - a.a.shooting)[0].id;
+    // Chosen takers (Tactics) first, then the best penalty taker / free-kick specialist (20 Nov 2026).
+    const takers = this.cfg.tactics?.[team]?.takers;
+    if (type === 'penalty') {
+      const ch = chosenTaker(squad, takers, 'pen');
+      if (ch) return ch.id;
+      return SP_ON.ratings ? bestBy(squad, 'pen')!.id : squad.filter((p) => p.role !== 'GK').sort((a, b) => b.a.shooting - a.a.shooting)[0].id;
+    }
+    if (type === 'freekick' && directFreeKick(spot, this.attackDir(team))) {
+      const ch = chosenTaker(squad, takers, 'fk');
+      if (ch && ch.role !== 'GK') return ch.id;
+      if (SP_ON.ratings) return bestBy(squad, 'fk')!.id;
+    }
+    if (type === 'corner') {
+      const ch = chosenTaker(squad, takers, 'corner');
+      if (ch && ch.role !== 'GK') return ch.id;
+    }
     let pool = squad.filter((p) => p.role !== 'GK');
     if (type === 'corner') pool = pool.filter((p) => ['RW', 'LW', 'RB', 'LB', 'RCM', 'LCM'].includes(p.role));
     let best = pool[0], bd = Infinity;
@@ -772,6 +828,7 @@ export class Match {
     if (this.phase !== 'play' && !this.shootout && (this.pendingSubs.length || this.phase === 'restart')) this.stepSubs();
     // Fatigue caps how far stamina recovers, after this step's movement too.
     for (const p of this.players) if (p.stamina > 1 - p.fatigue) p.stamina = 1 - p.fatigue;
+    this.stepPenKeeperBack();
     this.keepLocks();
   }
 
@@ -910,7 +967,10 @@ export class Match {
 
   /** Penalty takers in order: best finishers first, then round the team again (keepers last). */
   private penTaker(team: TeamIndex, n: number) {
-    const squad = this.teamPlayers(team).sort((a, b) => (a.role === 'GK' ? 1 : 0) - (b.role === 'GK' ? 1 : 0) || b.a.shooting - a.a.shooting);
+    // The chosen penalty taker goes first, then the best penalty takers (keepers last).
+    const ch = chosenTaker(this.teamPlayers(team), this.cfg.tactics?.[team]?.takers, 'pen');
+    const score = (p: Player) => (ch && p.id === ch.id ? 1000 : 0) + (SP_ON.ratings ? setPieceRatings(p.def).pen : p.a.shooting * 99);
+    const squad = this.teamPlayers(team).filter((p) => !p.off).sort((a, b) => (a.role === 'GK' && a !== ch ? 1 : 0) - (b.role === 'GK' && b !== ch ? 1 : 0) || score(b) - score(a));
     return squad[n % squad.length].id;
   }
 
@@ -922,8 +982,12 @@ export class Match {
     this.award('penalty', t, spot, false, this.penTaker(t, so.kicks[t].length));
     const r = this.restart!;
     const targets = restartTargets(this, r);
+    this.shootoutSpots(r, targets);
     for (const p of this.players) if (!p.off) { p.pos = { ...targets[p.id] }; p.facing = angleOf(r.spot.x - p.pos.x, r.spot.z - p.pos.z); }
-    this.players[r.taker].facing = 0;
+    // The taker walks up on his own from the group on the halfway line (20 Nov 2026).
+    const tk = this.players[r.taker];
+    if (SP_ON.shootout) { tk.pos = { x: 18, z: 0.5 }; tk.facing = 0; }
+    else this.players[r.taker].facing = 0;
     this.resetBall(r.spot);
     this.soRestart = r;
     this.soT = 0;
@@ -932,20 +996,20 @@ export class Match {
 
   /** Decided when one side cannot catch up within five kicks each, or after an equal number of sudden-death kicks. */
   private shootoutWinner(): -1 | TeamIndex {
-    const [a, b] = this.shootout!.kicks;
-    const ga = a.filter(Boolean).length, gb = b.filter(Boolean).length;
-    if (a.length <= 5 && b.length <= 5) {
-      if (ga > gb + (5 - b.length)) return 0;
-      if (gb > ga + (5 - a.length)) return 1;
-      return -1;
-    }
-    if (a.length === b.length && ga !== gb) return ga > gb ? 0 : 1;
-    return -1;
+    return shootoutWinnerOf(this.shootout!.kicks);
   }
 
   private penResult(scored: boolean) {
     const so = this.shootout!;
     if (this.soWait >= 0) return;
+    if (!scored && this.penRetake && this.penRetake.due > 0) {
+      this.penRetake = null;
+      this.emit('call', { team: so.team, text: 'retake' });
+      this.emit('whistle', { power: 1, text: 'foul' });
+      this.nextPenalty();
+      return;
+    }
+    this.penRetake = null;
     const b = this.ball;
     so.kicks[so.team].push(scored);
     this.emit('pen', { team: so.team, player: this.soRestart?.taker ?? -1, text: scored ? 'scored' : 'missed' });
@@ -1124,11 +1188,16 @@ export class Match {
       this.pendingEvents[dteam] = this.pendingEvents[dteam].filter((e) => !(e.k === 'switch' && e.x === undefined));
       this.defendSetPiece(r, true);
     }
+    if (r.type === 'penalty') this.humanPenaltyKeeper(r, dt);
     const targets = restartTargets(this, r);
+    if (r.type === 'penalty') this.penaltyKeeperSpot(r, targets);
+    if (this.shootout && r.type === 'penalty') this.shootoutSpots(r, targets);
     // Set pieces are struck after a run-up: the taker sets up a few strides back from the ball.
     const kickPos = { ...targets[r.taker] };
-    const runD = this.phase === 'kickoff' ? 0 : runupDistance(r.type);
-    if (runD > 0) targets[r.taker] = runupStart(kickPos, r.spot, runD, footProfile(this.players[r.taker].def).foot);
+    const rs = r.type === 'freekick' ? r.runStyle ?? 0 : 0;
+    const runD = this.phase === 'kickoff' ? 0 : r.type === 'freekick' && rs ? [3.0, 4.6, 1.8, 3.2][rs] : runupDistance(r.type);
+    if (runD > 0) targets[r.taker] = runupStart(kickPos, r.spot, runD, rs === 3 ? 0 : footProfile(this.players[r.taker].def).foot);
+    if (r.type === 'freekick') this.freeKickExtras(r, targets, dt);
     // Ball is retrieved to the spot after a short pause (instantly for kick-offs).
     if (r.t > 0.6 || this.phase === 'kickoff') {
       if (this.ball.pos.x !== r.spot.x || this.ball.pos.z !== r.spot.z) this.resetBall(r.spot);
@@ -1146,10 +1215,16 @@ export class Match {
         const T = targets[p.id];
         // Opponents caught inside the area at a goal kick hurry out of it.
         const clearing = r.type === 'goalkick' && p.team !== r.team && this.inPenaltyArea(r.team, p.pos, 1);
-        this.arrive(p, T, p.id === r.taker || clearing ? 'sprint' : 'jog');
-        if (dist(p.pos, T) > 1.2) allIn = false;
+        this.arrive(p, T, this.shootout && p.id === r.taker ? 'jog' : p.id === r.taker || clearing ? 'sprint' : 'jog');
+        if (dist(p.pos, T) > 1.2 && (!this.shootout || p.id === r.taker)) allIn = false;
       }
       this.moveAll(dt);
+      // Shootouts: the taker walks up from the halfway line (a kick button hurries a human taker up).
+      if (this.shootout && SP_ON.shootout && r.type === 'penalty' && !allIn && r.t < 7.5) {
+        const tc = this.ctrl[r.team];
+        if (tc.human && tc.pid === r.taker && this.pendingEvents[r.team].some(isKickEvent)) { this.pendingEvents[r.team] = []; this.players[r.taker].pos = { ...targets[r.taker] }; }
+        return;
+      }
       if (allIn || r.t > MATCH.restartSetupMax || this.phase === 'kickoff') {
         let snapped = 0;
         // Kick-offs line everyone up. Otherwise stragglers keep running into position after the
@@ -1164,6 +1239,8 @@ export class Match {
         if (snapped > 0 && this.phase !== 'kickoff') this.debugLog(`restart ${r.type}: placed ${snapped} player(s) directly after setup timeout`);
         r.ready = true;
         r.readyT = 0;
+        // Pressure on the taker: a wobble in the timing ring for a nervous one (penalties and free kicks).
+        if (r.type === 'penalty' || r.type === 'freekick') r.shake = ringShake(matchPressure(this, r.team), setPieceRatings(this.players[r.taker].def).comp);
         // The computer varies its corners.
         if (r.type === 'corner' && !this.ctrl[r.team].human) r.routine = Math.floor(this.rng.next() * ROUTINES.corner.length);
         r.aim = this.defaultAim(r);
@@ -1202,17 +1279,29 @@ export class Match {
     if (r.runup && taker.action.type !== 'kick' && taker.action.type !== 'throw') {
       const ru = r.runup;
       if (taker.action.type !== 'none') taker.action = { type: 'none', t: 0, dur: 0 };
+      if (ru.wait !== undefined && ru.wait > 0) { this.stepDummyRun(r, ru, dt); return; }
       ru.t += dt;
       const to = { x: kickPos.x - taker.pos.x, z: kickPos.z - taker.pos.z };
       const left = Math.hypot(to.x, to.z);
       const vmax = ru.req.kind === 'shot' || r.type === 'goalkick' ? PLAYER.runupSpeed : PLAYER.runupSpeed * 0.82;
-      const v = Math.min(vmax, 1.2 + PLAYER.runupAccel * ru.t, left / dt);
-      if (left < 0.05 || ru.t > 2) {
+      let v = Math.min(vmax, 1.2 + PLAYER.runupAccel * ru.t, left / dt);
+      // Stutter (penalties): a check part of the way in, then on again; the keeper may go first.
+      if (r.type === 'penalty' && r.stutter && left < SETPIECE.stutterAt) {
+        ru.check ??= 0;
+        if (ru.check === 0) this.penStutter(r);
+        if (ru.check < SETPIECE.stutterTime) { ru.check += dt; v = 0.35; ru.t = Math.min(ru.t, 0.25); }
+      }
+      if (left < 0.05 || ru.t > 2 + (ru.check ?? 0)) {
         taker.pos = { ...kickPos };
         taker.vel = { x: (to.x / Math.max(left, 1e-6)) * v * 0.6, z: (to.z / Math.max(left, 1e-6)) * v * 0.6 };
         if (ru.face !== undefined) taker.facing = ru.face;
         const req = ru.req;
         r.runup = undefined;
+        // A human taker can still change his mind about the corner during the run-up (seeing the keeper go).
+        if (r.type === 'penalty' && humanTaker && req.target && req.kind === 'shot') {
+          req.target = { ...req.target, z: clamp(r.aim.z, -PITCH.goalHalfWidth + 0.15, PITCH.goalHalfWidth - 0.15) };
+          taker.facing = angleOf(req.target.x - taker.pos.x, req.target.z - taker.pos.z);
+        }
         this.startKick(taker, req, false);
       } else {
         taker.vel = { x: (to.x / left) * v, z: (to.z / left) * v };
@@ -1254,10 +1343,21 @@ export class Match {
         this.emit('call', { team: taker.team, text: `routine:${r.type}`, power: r.routine });
         if (!r.ready) return;
       }
+      // Direct free kick: the skill button goes through the run-ups (standard, long, short, straight on).
+      if (r.type === 'freekick' && !r.quick && SP_ON.knuckle && wallFor(this, r) && evs.some((x) => x.k === 'skill')) {
+        r.runStyle = ((r.runStyle ?? 0) + 1) % 4;
+        r.readyT = Math.min(r.readyT, 0.5);
+        this.emit('call', { team: taker.team, player: taker.id, text: 'runup', power: r.runStyle });
+      }
+      // Penalty: the skill button (or a fake shot) switches a stutter run-up on and off.
+      if (r.type === 'penalty' && SP_ON.techniques && evs.some((x) => x.k === 'skill')) {
+        r.stutter = !r.stutter;
+        this.emit('call', { team: taker.team, player: taker.id, text: 'stutter', power: r.stutter ? 1 : 0 });
+      }
       const e = evs.find(isKickEvent);
       if (e) req = r.quick ? this.quickRestartKick(r, taker, e, c.input) : this.aimedRestartKick(r, taker, e);
       // Free kicks and penalties: the timing ring at the moment of the kick sets its accuracy.
-      if (req && e && (r.type === 'freekick' || r.type === 'penalty') && !r.quick) req.accuracy = timingAccuracy(timingRing(r.readyT));
+      if (req && e && (r.type === 'freekick' || r.type === 'penalty') && !r.quick) req.accuracy = timingAccuracy(shakyRing(r.readyT, r.shake ?? 0));
       if (r.type === 'kickoff' && req?.kind === 'shot') req = { ...req, kind: 'pass', target: { x: r.aim.x, y: 0, z: r.aim.z } };
       if (!req && r.readyT > MATCH.humanRestartTimeout) req = chooseRestartKick(this, r, true);
     } else if (r.readyT > 0.8 + levelOf(this, taker.team).reaction + restartUrgency(gameState(this, taker.team), r.type) - Math.min(0.6, runD * 0.16) + (r.type === 'freekick' && this.ctrl[1 - r.team].human && wallFor(this, r) ? 1.6 : 0)) {
@@ -1267,11 +1367,17 @@ export class Match {
     }
     if (req) {
       if (r.type === 'throwin') this.throwRequest(req, taker);
+      if (r.type === 'penalty' && !humanTaker && req.stutter) r.stutter = true;
       if (runD > 0) {
         // Face the way the kick goes once at the ball: the aim (human) or the target (computer).
         const aimAt = humanTaker ? r.aim : req.target ? { x: req.target.x, z: req.target.z } : req.dir ? { x: kickPos.x + req.dir.x, z: kickPos.z + req.dir.z } : r.spot;
         const face = dist(aimAt, kickPos) > 0.3 ? angleOf(aimAt.x - kickPos.x, aimAt.z - kickPos.z) : undefined;
         r.runup = { req, t: 0, face };
+        // Two over the ball: the other specialist runs over it first.
+        if (r.type === 'freekick' && r.routine === 3 && SP_ON.routines && req.kind === 'shot' && wallFor(this, r)) {
+          const d = secondTaker(this, r);
+          if (d >= 0) { r.runup.wait = 0.65; r.runup.dummy = d; }
+        }
       } else this.startKick(taker, req, r.type === 'throwin');
     }
   }
@@ -1399,6 +1505,14 @@ export class Match {
     let kind: KickKind = e.k === 'shoot' ? 'shot' : (e.k as KickKind);
     if (kind === 'shot') {
       const st = kickStyle(e);
+      // Panenka: a soft chip down the middle, whatever the charge (a little higher with more of it).
+      if (r.type === 'penalty' && st.variant === 'chip' && SP_ON.techniques) {
+        return { kind: 'shot', power: clamp(SETPIECE.panenkaPower + 0.3 * ((e.p ?? 0.5) - 0.5), 0.15, 0.5), placed: false, variant: 'chip', target: { x: dir * PITCH.halfLength, y: 0, z: clamp(r.aim.z, -PITCH.goalHalfWidth + 0.15, PITCH.goalHalfWidth - 0.15) } };
+      }
+      // Knuckleball (20 Nov 2026): a direct free kick hit with the power-shot buttons goes without spin.
+      if (r.type === 'freekick' && st.variant === 'power' && SP_ON.knuckle && wallFor(this, r)) {
+        return { kind: 'shot', power: e.p ?? 0.7, placed: false, knuckle: true, target: { x: dir * PITCH.halfLength, y: 0, z: clamp(r.aim.z, -PITCH.goalHalfWidth + 0.15, PITCH.goalHalfWidth - 0.15) } };
+      }
       const bend = r.type === 'freekick' && (r.curve !== undefined || r.dip !== undefined);
       return { kind: 'shot', power: e.p ?? 0.5, placed: false, variant: bend ? undefined : st.variant, target: { x: dir * PITCH.halfLength, y: 0, z: clamp(r.aim.z, -PITCH.goalHalfWidth + 0.15, PITCH.goalHalfWidth - 0.15) }, curve: bend ? r.curve ?? 0 : undefined, dip: bend ? r.dip ?? 0 : undefined };
     }
@@ -1496,7 +1610,190 @@ export class Match {
         r.wall.n = r.wall.n >= MATCH.wallMax ? MATCH.wallMin : r.wall.n + 1;
         this.emit('call', { team, text: 'wall', power: r.wall.n });
       } else if (e.k === 'shoot') this.wallJump(w.ids);
+      else if (e.k === 'pass' && SP_ON.wall) {
+        r.wall.lie = !r.wall.lie;
+        this.emit('call', { team, text: 'lie', power: r.wall.lie ? 1 : 0 });
+      }
     }
+  }
+
+  /**
+   * Penalty keeper duel (20 Nov 2026): a human facing a penalty moves his keeper along the line with
+   * the stick (dancing about puts the taker off) and dives with the shoot button: pointed left or
+   * right he goes that way as the ball is struck, centred he stands tall. Going too early lets the
+   * taker see it and put it the other way.
+   */
+  private humanPenaltyKeeper(r: Restart, dt: number) {
+    const team = (1 - r.team) as TeamIndex;
+    const c = this.ctrl[team];
+    const gk = this.keeper(team);
+    const g = r.gk;
+    if (!g || !c.human || c.pid !== gk.id) return;
+    const evs = this.pendingEvents[team];
+    this.pendingEvents[team] = [];
+    if (!r.ready) return;
+    if (!g.commit && Math.abs(c.input.mz) > 0.2) {
+      const before = g.shift;
+      g.shift = clamp(g.shift + c.input.mz * SETPIECE.gkShiftSpeed * dt, -SETPIECE.gkShiftMax, SETPIECE.gkShiftMax);
+      g.dance = clamp(g.dance + Math.abs(g.shift - before) * 0.9, 0, 1);
+    }
+    g.dance = Math.max(0, g.dance - dt * 0.22);
+    for (const e of evs) {
+      if (e.k !== 'shoot' || g.commit) continue;
+      const side = Math.abs(c.input.mz) > 0.3 ? (Math.sign(c.input.mz) as -1 | 1) : 0;
+      g.commit = { side, t: this.time };
+      this.emit('call', { team, player: gk.id, text: 'gkcommit', power: side });
+    }
+  }
+
+  /** Where the keeper facing a penalty stands: where a human has moved him, leaning the way he has gone early. */
+  private penaltyKeeperSpot(r: Restart, targets: V2[]) {
+    const team = (1 - r.team) as TeamIndex;
+    const gk = this.keeper(team);
+    const T = targets[gk.id];
+    if (!T || gk.off) return;
+    const pg = this.penGuess && this.penGuess.team === team && this.penGuess.early ? this.penGuess.side : 0;
+    const lean = r.gk?.commit ? r.gk.commit.side : pg;
+    targets[gk.id] = { x: T.x, z: clamp((r.gk?.shift ?? 0) + lean * 0.45, -1.4, 1.4) };
+  }
+
+  /**
+   * Shootout positions: everyone but the taker and the keeper in goal stands arm in arm on the
+   * halfway line (each side together), the other keeper waits by the edge of the area.
+   */
+  private shootoutSpots(r: Restart, targets: V2[]) {
+    if (!SP_ON.shootout) return;
+    const gkIn = this.keeper(1 - r.team);
+    for (const t of [0, 1] as TeamIndex[]) {
+      const squad = this.teamPlayers(t).filter((p) => p.id !== r.taker && p.id !== gkIn.id);
+      let i = 0;
+      for (const p of squad) {
+        if (p.role === 'GK') { targets[p.id] = { x: PITCH.halfLength - 17, z: -19 }; continue; }
+        targets[p.id] = { x: 0.6, z: (t === 0 ? -1 : 1) * (0.9 + i * 0.62) };
+        i++;
+      }
+    }
+  }
+
+  /** The taker checks in his run-up: a computer keeper may go first (a good one waits). */
+  private penStutter(r: Restart) {
+    const team = (1 - r.team) as TeamIndex;
+    const gk = this.keeper(team);
+    this.emit('call', { team: r.team, player: r.taker, text: 'check' });
+    if (r.gk?.commit || this.controlOf(gk)) return; // a human keeper decides for himself
+    if (this.rng.chance(0.25 + 0.35 * gk.a.goalkeeping)) { this.penGuess = { team, side: 0, t: this.time, waited: true }; return; }
+    this.penGuess = { team, side: this.rng.chance(0.5) ? 1 : -1, t: this.time, early: true };
+  }
+
+  /**
+   * A computer taker at the moment of the kick: a keeper seen going early (or leaning after a
+   * stutter) gets it put the other way, more surely by a composed taker.
+   */
+  private aiPenaltyRead(r: Restart, comp: number, aimZ: number): number {
+    const g = r.gk?.commit;
+    let side = 0, chance = 0;
+    if (g && g.side !== 0) { side = g.side; chance = readEarlyKeeper(this.time - g.t, comp); }
+    else if (this.penGuess?.early && this.penGuess.side !== 0) { side = this.penGuess.side; chance = 0.55 + 0.4 * (comp / 99); }
+    if (side && Math.sign(aimZ) !== -side && this.rng.chance(chance)) return -side * this.rng.range(1.5, 2.4);
+    // A keeper standing off-centre leaves more of the goal on one side.
+    const sh = r.gk?.shift ?? 0;
+    if (!side && Math.abs(sh) > 0.35 && Math.sign(aimZ) === Math.sign(sh) && this.rng.chance(Math.abs(sh) * 0.5)) return -Math.sign(sh) * this.rng.range(1.6, 2.5);
+    return aimZ;
+  }
+
+  /** The penalty is struck: a human keeper who went early dives now; standing tall is remembered for his read. */
+  private penaltyStruck(r: Restart) {
+    const team = (1 - r.team) as TeamIndex;
+    const gk = this.keeper(team);
+    const g = r.gk?.commit;
+    if (g && !gk.off) {
+      if (g.side === 0) this.penGuess = { team, side: 0, t: g.t };
+      else manualDive(this, gk, 0, g.side);
+      // Off his line well before the kick: if he saves it, the referee orders a retake.
+      if (g.side !== 0 && SP_ON.referee && this.time - g.t > SETPIECE.offLine) this.penRetake = { team: r.team, taker: r.taker, spot: { ...r.spot }, until: this.time + 2.5, due: -1 };
+    }
+    if (this.penKeeperBack?.team === team) this.penKeeperBack.at = this.time + 1.4;
+  }
+
+  /** After a penalty the human who was given his keeper gets an outfield player back (once the keeper has let go of the ball). */
+  private stepPenKeeperBack() {
+    const pk = this.penKeeperBack;
+    if (!pk || this.time < pk.at) return;
+    const c = this.ctrl[pk.team];
+    const gk = this.keeper(pk.team);
+    if (c.pid !== gk.id || this.shootout) { this.penKeeperBack = null; return; }
+    if (this.phase !== 'play' && this.phase !== 'restart') return;
+    if (this.ball.owner === gk.id || gk.action.type === 'dive' || gk.action.type === 'down' || (this.restart?.type === 'penalty')) return;
+    this.penKeeperBack = null;
+    this.leaveKeeper(pk.team);
+  }
+
+  /**
+   * Free-kick extras before the kick (20 Nov 2026): the man lying behind the wall gets down, and a
+   * computer wall facing a human taker creeps in until the referee pushes it back (a second time
+   * earns a booking).
+   */
+  private freeKickExtras(r: Restart, targets: V2[], dt: number) {
+    const w = wallFor(this, r);
+    if (!w) return;
+    if (w.lier >= 0 && w.lieSpot) {
+      const l = this.players[w.lier];
+      if (r.ready && l.action.type === 'none' && dist(l.pos, w.lieSpot) < 0.8) {
+        l.pos = { ...w.lieSpot };
+        l.vel = { x: 0, z: 0 };
+        l.facing = angleOf(w.perp.x, w.perp.z);
+        l.action = { type: 'down', t: 0, dur: 60 };
+      }
+      if (l.action.type === 'down') { l.pos = { ...w.lieSpot }; l.vel = { x: 0, z: 0 }; }
+    }
+    // Two over the ball: the dummy's run past the ball.
+    if (r.runup?.dummy !== undefined && r.runup.wait !== undefined && r.runup.wait > 0) targets[r.runup.dummy] = { ...this.players[r.runup.dummy].pos };
+    if (!SP_ON.referee || !r.ready || r.quick || r.runup) return;
+    const c = this.ctrl[r.team];
+    if (!c.human || this.ctrl[w.team].human || c.pid !== r.taker) return;
+    r.wall ??= { n: w.ids.length, shift: 0 };
+    if (r.readyT < 1.2) return;
+    r.wall.creep = Math.min(1.2, (r.wall.creep ?? 0) + dt * 0.3);
+    if (r.wall.creep > 0.9) {
+      r.wall.creep = 0;
+      r.wall.warned = (r.wall.warned ?? 0) + 1;
+      this.emit('call', { team: w.team, text: 'wallback', power: r.wall.warned });
+      if (r.wall.warned >= 2) {
+        const p = this.players[w.ids[Math.floor(w.ids.length / 2)]];
+        if (p && !p.off && p.cards === 0) this.giveCard(p, 1);
+      }
+    }
+  }
+
+  /** Two over the ball: the dummy runs over it (a computer wall may jump at him), then the taker goes. */
+  private stepDummyRun(r: Restart, ru: NonNullable<Restart['runup']>, dt: number) {
+    const before = ru.wait!;
+    ru.wait = before - dt;
+    const d = this.players[ru.dummy ?? -1];
+    if (!d) return;
+    const from = dummySpot(this, r);
+    const over = { x: r.spot.x + (r.spot.x - from.x) * 1.2, z: r.spot.z + (r.spot.z - from.z) * 1.2 };
+    const k = clamp(1 - ru.wait / 0.65, 0, 1);
+    const np = { x: from.x + (over.x - from.x) * k, z: from.z + (over.z - from.z) * k };
+    d.vel = { x: (np.x - d.pos.x) / Math.max(dt, 1e-3), z: (np.z - d.pos.z) / Math.max(dt, 1e-3) };
+    d.pos = np;
+    d.facing = angleOf(over.x - from.x, over.z - from.z);
+    // As he reaches the ball a computer wall may jump for it, and come down before the real shot.
+    if (before > 0.32 && ru.wait <= 0.32) {
+      const w = wallFor(this, r);
+      if (w && !this.ctrl[w.team].human && this.rng.chance(0.45)) { this.wallJump(w.ids); r.wallFooled = true; }
+      this.emit('call', { team: r.team, player: d.id, text: 'dummy2' });
+    }
+  }
+
+  /** A knuckleball wobbles from side to side once it is on its way, until someone touches it. */
+  private stepKnuckle() {
+    const k = this.knuckle;
+    if (!k) return;
+    const b = this.ball;
+    if (b.lastTouch !== k.kicker || b.state !== 'flight' || this.time - k.t0 > 2.5) { this.knuckle = null; return; }
+    const t = this.time - k.t0;
+    b.spin = k.amp * Math.sin(k.phase + t * k.freq) * clamp((t - 0.12) / 0.25, 0, 1);
   }
 
   /** The wall jumps together (anyone already in the air carries on). */
@@ -1518,7 +1815,7 @@ export class Match {
   }
 
   /** The wall at the last free kick, while it still counts as a wall: who, the taker, until when, and a computer jump to come. */
-  fkWall: { team: number; ids: number[]; taker: number; until: number; jumpAt: number } | null = null;
+  fkWall: { team: number; ids: number[]; taker: number; until: number; jumpAt: number; lier?: number } | null = null;
 
   /** Called when a restart kick leaves the taker: back to open play. */
   private restartTaken(taker: Player) {
@@ -1536,6 +1833,15 @@ export class Match {
     const fw = this.fkWall;
     if (fw && this.time > fw.until) this.fkWall = null;
     else if (fw && fw.jumpAt > 0 && this.time >= fw.jumpAt) { fw.jumpAt = -1; this.wallJump(fw.ids); }
+    this.stepKnuckle();
+    if (this.penRetake && this.penRetake.due > 0 && this.time >= this.penRetake.due) {
+      const pr = this.penRetake;
+      this.penRetake = null;
+      this.emit('call', { team: pr.team, text: 'retake' });
+      this.emit('whistle', { power: 1, text: 'foul' });
+      this.award('penalty', pr.team, pr.spot, false, pr.taker);
+      return;
+    } else if (this.penRetake && this.time > this.penRetake.until && this.penRetake.due < 0) this.penRetake = null;
     this.processHumanInput();
     this.updateContain();
     updateAI(this, dt);
@@ -1961,7 +2267,7 @@ export class Match {
       type: fromHands || req.kind === 'throw' ? 'throw' : 'kick',
       t: 0, dur: (shotWindup ?? windup) + (keeperHands ? HAND_FOLLOW : 0.28), windup: keeperHands ? windup : shotWindup, kind: req.kind, power: req.power ?? 0.6, dir: req.dir ? { ...req.dir } : undefined,
       placed: req.placed, receiver: req.receiver ?? -1, target: req.target ? { ...req.target } : undefined, released: false, exact: req.exact,
-      variant: req.variant, charged: req.charged, accuracy: req.accuracy, locked: req.locked, assist: req.assist, curve: req.curve, dip: req.dip,
+      variant: req.variant, charged: req.charged, accuracy: req.accuracy, locked: req.locked, assist: req.assist, curve: req.curve, dip: req.dip, knuckle: req.knuckle,
     };
     p.queued = null;
   }
@@ -2559,13 +2865,41 @@ export class Match {
     let res: { vel: V3; spin: number; dip?: number };
     let flight: Ball['flight'] = kind === 'shot' ? 'shot' : kind;
     let special: ReturnType<Match['specialKick']> = null;
+    let penTech: PenTech = 'normal';
     if (kind === 'shot') {
-      const aimZ = a.target ? a.target.z : a.assist === 2 ? manualShotAim(p, dir, inDir.x, inDir.z) : aimFromInput(p, dir, inDir.x, inDir.z);
+      let aimZ = a.target ? a.target.z : a.assist === 2 ? manualShotAim(p, dir, inDir.x, inDir.z) : aimFromInput(p, dir, inDir.x, inDir.z);
       // A free kick within range has a wall 9.15 m away: the shot is lofted to clear it if it can be.
       const wall = isRestartTaker && r!.type === 'freekick' && dist(p.pos, { x: dir * PITCH.halfLength, z: 0 }) < 30;
       const v = a.variant;
       const style = v === 'chip' || v === 'low' || v === 'power' || v === 'placed' || v === 'finesse' ? v : a.placed ? 'finesse' : undefined;
-      res = solveShot(ctx, { side: dir, aimZ, power: a.power ?? 0.6, placed: style === 'finesse', style, clear: wall ? { d: MATCH.freeKickDistance + 0.4, h: 2.3 } : undefined, curve: a.curve, dip: a.dip });
+      // Penalties and direct free kicks (20 Nov 2026): the taker's rating, nerves (computer takers; a
+      // human's ring wobbles instead), a keeper dancing on his line, a stutter.
+      const human = !!this.controlOf(p);
+      if (isRestartTaker && r!.type === 'penalty') {
+        const rt = setPieceRatings(p.def);
+        penTech = variantTech(v);
+        ctx.accuracy = (ctx.accuracy ?? 1) * ratingError(rt.pen) * (human ? 1 : nerveError(matchPressure(this, team), rt.comp)) * danceError(r!.gk?.dance ?? 0, rt.comp) * (r!.stutter ? SETPIECE.stutterError : 1);
+        if (!human && penTech !== 'panenka' && SP_ON.duel) aimZ = this.aiPenaltyRead(r!, rt.comp, aimZ);
+      } else if (wall) {
+        const rt = setPieceRatings(p.def);
+        ctx.accuracy = (ctx.accuracy ?? 1) * ratingError(rt.fk) * (human ? 1 : nerveError(matchPressure(this, team), rt.comp));
+      }
+      // Free-kick run-ups: a long one adds pace and a little error, a short one is tidier and softer, straight on curls less.
+      const rs = wall ? r!.runStyle ?? 0 : 0;
+      let power = a.power ?? 0.6;
+      if (rs === 1) { power = Math.min(1, power * 1.07); ctx.accuracy = (ctx.accuracy ?? 1) * 1.08; }
+      if (rs === 2) { power *= 0.93; ctx.accuracy = (ctx.accuracy ?? 1) * 0.9; }
+      const curve = rs === 3 && a.curve !== undefined ? a.curve * 0.6 : a.curve;
+      // A low drive is kept under the wall's jump rather than lifted over it.
+      // A knuckleball still has to get over the wall: it is solved with its late dip and no curl.
+      const knuckle = !!a.knuckle && !!wall;
+      const clear = wall && style !== 'low' ? { d: MATCH.freeKickDistance + 0.4 - (r!.wall?.creep ?? 0), h: 2.3 } : undefined;
+      res = solveShot(ctx, { side: dir, aimZ, power, placed: style === 'finesse', style, clear, curve: knuckle ? 0 : curve, dip: knuckle ? 3.5 / 9 : a.dip });
+      if (knuckle) {
+        res = { ...res, spin: 0, dip: 3.5 };
+        this.knuckle = { kicker: p.id, t0: this.time, amp: this.rng.range(6, 10) * (rs === 3 ? 1.3 : 1), freq: this.rng.range(8, 11), phase: this.rng.range(0, Math.PI * 2) };
+        this.emit('call', { team, player: p.id, text: 'knuckle' });
+      }
     } else if (kind === 'throw' && !isHolder) {
       const t = this.throwIn(p, ctx, a, dir);
       res = t.res;
@@ -2701,11 +3035,22 @@ export class Match {
         // A computer wall jumps for a shot most of the time, a moment after it is struck (a human jumps it themselves).
         const lvl = levelOf(this, w.team);
         const human = this.ctrl[w.team].human;
-        const jump = !human && kind === 'shot' && this.rng.chance(0.35 + 0.35 * lvl.tackleEagerness);
-        this.fkWall = { team: w.team, ids: w.ids, taker: p.id, until: this.time + MATCH.wallActive, jumpAt: jump ? this.time + this.rng.range(0.02, 0.16) : -1 };
+        const jump = !human && kind === 'shot' && !r!.wallFooled && this.rng.chance(0.35 + 0.35 * lvl.tackleEagerness);
+        this.fkWall = { team: w.team, ids: w.ids, taker: p.id, until: this.time + MATCH.wallActive, jumpAt: jump ? this.time + this.rng.range(0.02, 0.16) : -1, lier: w.lier };
+        // The man lying behind the wall gets up once it has gone.
+        if (w.lier >= 0) { const l = this.players[w.lier]; if (l.action.type === 'down') l.action.dur = l.action.t + 1.1; }
+        // Attackers in the wall block the keeper's view; a dummy run has him guessing.
+        if (kind === 'shot' && (r!.routine === 4 || r!.routine === 3) && SP_ON.routines) this.keeperBlind = { team: w.team, until: this.time + 2, extra: r!.routine === 4 ? 0.12 : 0.08 };
       }
     }
-    if (isRestartTaker && r!.type === 'penalty') this.penKickTime = this.time;
+    if (isRestartTaker && r!.type === 'penalty') {
+      this.penKickTime = this.time;
+      this.penTech = penTech;
+      const pc = predictGoalLine(b, dir, 3);
+      if (pc) this.penHistory[team].push(Math.abs(pc.z) < 0.7 ? 0 : Math.sign(pc.z));
+      if (penTech !== 'normal') this.emit('call', { team, player: p.id, text: `pen:${penTech}` });
+      this.penaltyStruck(r!);
+    }
     if (isRestartTaker) this.restartTaken(p);
     if (isHolder) this.holdT = 0;
 
@@ -3146,6 +3491,18 @@ export class Match {
         if (Math.hypot(p.pos.x - cx, p.pos.z - cz) < PLAYER.wallReach && cy > h - 0.05 && cy < PLAYER.wallTop + h) {
           this.fkWall = null;
           this.deflect(p, 0.3, true);
+          return;
+        }
+      }
+      // The man lying behind the wall stops a shot skidded under it.
+      if (wall.lier !== undefined && wall.lier >= 0) {
+        const l = this.players[wall.lier];
+        const g = norm(b.vel.x, b.vel.z);
+        const a = { x: l.pos.x - g.z * 0.9, z: l.pos.z + g.x * 0.9 }, c = { x: l.pos.x + g.z * 0.9, z: l.pos.z - g.x * 0.9 };
+        if (!l.off && sweptBodyHit(prev, b.pos, a, c, 0.22, 0.4)) {
+          this.fkWall = null;
+          this.deflect(l, 0.3, true);
+          this.emit('call', { team: l.team, player: l.id, text: 'lieblock' });
           return;
         }
       }

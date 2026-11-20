@@ -80,6 +80,7 @@ export interface PlayerAction {
   block?: boolean; // slide: thrown in front of a shot (no tackle, a wider body to block with)
   curve?: number; // free-kick shot: bend chosen by the taker, -1..1 (+ curls left of travel)
   dip?: number; // free-kick shot: topspin chosen by the taker, 0..1
+  knuckle?: boolean; // free-kick shot struck without spin (wobbles late)
   tactical?: boolean; // tackle: a deliberate pull-back (tactical foul)
   chain?: number; // step-over: how many step-overs came before this one in a chain
 }
@@ -151,12 +152,22 @@ export interface Restart {
   aim: V2; // human taker's target point (moved with the stick)
   quick?: boolean; // taken quickly, before everyone was set
   routine?: number; // corner / free kick routine (index into ROUTINES), 0 = standard
-  runup?: { req: import('./match').KickRequest; t: number; face?: number }; // taker running in to strike the ball
+  runup?: { req: import('./match').KickRequest; t: number; face?: number; check?: number; wait?: number; dummy?: number }; // taker running in to strike the ball
   /** Defensive wall at a free kick in range: how many stand in it and how far it is moved sideways (m, + = defenders' right). */
-  wall?: { n: number; shift: number };
+  wall?: { n: number; shift: number; creep?: number; lie?: boolean; warned?: number };
+  /** Direct free kick: the run-up (0 standard, 1 long, 2 short, 3 straight on). */
+  runStyle?: number;
+  /** Two over the ball: a computer wall that jumped at the dummy. */
+  wallFooled?: boolean;
   /** Free kick: bend (-1..1, + curls left as the taker sees it) and dip (0..1) set by a human taker with the modifier held. */
   curve?: number;
   dip?: number;
+  /** Penalty: the taker checks in his run-up (a stutter); the keeper may go first. */
+  stutter?: boolean;
+  /** Pressure on the taker shown as a wobble in the timing ring (0 calm .. 0.8). */
+  shake?: number;
+  /** Penalty keeper duel: a human keeper's shuffle along the line (m), how much he has been dancing (0..1), and his early dive. */
+  gk?: { shift: number; dance: number; commit?: { side: -1 | 0 | 1; t: number } };
 }
 
 export interface InputEvent {

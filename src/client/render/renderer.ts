@@ -867,6 +867,11 @@ export class GameRenderer {
         const goalX = -view.attackDir[p.team] * 52.5;
         if (Math.hypot(rs.spot.x - goalX, rs.spot.z) < 36 && p.action.type === 'none') this.reactions.hold(p.id, 'organise', 0.5);
       }
+      // Shootout: arm in arm on the halfway line.
+      if (view.shootout && view.phase !== 'fulltime' && !this.cine && Math.abs(p.pos.x - 0.6) < 0.8 && Math.abs(p.pos.z) < 9 && Math.hypot(p.vel.x, p.vel.z) < 0.6 && p.action.type === 'none') {
+        if (this.reactions.kindOf(p.id) !== 'armsLinked') this.reactions.cancel(p.id);
+        this.reactions.hold(p.id, 'armsLinked', 0.4);
+      }
     }
     // Injured: down holding the leg, sitting up while treated (a knock), then limping for a while.
     const j = view.injury;
@@ -1399,7 +1404,8 @@ export class GameRenderer {
       used.add(style);
       const m = this.markers[style];
       const show = live && view.humans[t] && pid >= 0;
-      m.sprite.visible = show;
+      // Behind the taker in the set-piece view, his pointer would sit in the middle of the picture.
+      m.sprite.visible = show && !(this.camera.setPieceK > 0.4 && view.restart && view.restart.taker === pid);
       m.ring.visible = m.arrow.visible = show && mk.playerRing !== false;
       if (!show) continue;
       const p = view.players[pid];

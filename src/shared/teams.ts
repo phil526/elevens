@@ -395,6 +395,8 @@ export interface Tactics {
   press: number; // stand off .. press high
   /** Defending corners and wide free kicks: zones plus man-marking (default), all man-marking, or all zonal. */
   marking?: 'mixed' | 'man' | 'zonal';
+  /** Chosen set-piece takers by player name (20 Nov 2026); unset = picked automatically. */
+  takers?: { pen?: string; fk?: string; corner?: string };
 }
 export const MARKINGS = ['mixed', 'man', 'zonal'] as const;
 export const defaultTactics = (): Tactics => ({ formation: '433', width: 0, line: 0, press: 0 });
@@ -402,6 +404,14 @@ export const cleanTactics = (t: Partial<Tactics> | undefined): Tactics => {
   const s = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(-2, Math.min(2, Math.round(v))) : 0);
   const out: Tactics = { formation: t && FORMATIONS.includes(t.formation as Formation) ? (t.formation as Formation) : '433', width: s(t?.width), line: s(t?.line), press: s(t?.press) };
   if (t?.marking === 'man' || t?.marking === 'zonal') out.marking = t.marking;
+  if (t?.takers && typeof t.takers === 'object') {
+    const tk: NonNullable<Tactics['takers']> = {};
+    for (const k of ['pen', 'fk', 'corner'] as const) {
+      const v = (t.takers as Record<string, unknown>)[k];
+      if (typeof v === 'string' && v.length > 0 && v.length <= 48) tk[k] = v;
+    }
+    if (Object.keys(tk).length) out.takers = tk;
+  }
   return out;
 };
 

@@ -7,6 +7,7 @@ import { clockText, minuteText } from '../../shared/snapshot';
 import { ROUTINES } from '../../shared/ai/team';
 import type { MatchEvent } from '../../shared/types';
 import { footProfile } from '../../shared/teams';
+import { PEN_TECH_NAMES, favouriteSide, matchPressureView, setPieceRatings, type PenTech } from '../../shared/setpieces';
 import type { PlayerDef } from '../../shared/teams';
 import type { ViewState } from '../view';
 import { MOMENTUM } from '../../shared/momentum';
@@ -165,6 +166,15 @@ export class Hud {
    * The 19 Nov 2026 gameplay calls: crowd lift, tactical fouls, the offside trap springing,
    * deflections, and physical battles your own player wins or loses (scrambles stay unannounced).
    */
+  /** The taker's set-piece rating, composure and the pressure on him, for the restart hint. */
+  private takerLine(v: ViewState, taker: number, kind: 'pen' | 'fk'): string {
+    const p = v.players[taker];
+    if (!p) return kind === 'pen' ? 'Penalty' : 'Free kick';
+    const rt = setPieceRatings(p.def);
+    const pr = matchPressureView({ ...v, practice: this.practice }, p.team);
+    return `${kind === 'pen' ? 'Penalty' : 'Free kick'} · ${p.def.short} ${kind === 'pen' ? 'PEN' : 'FK'} ${kind === 'pen' ? rt.pen : rt.fk} · nerve ${rt.comp}${pr >= 0.55 ? ' · big pressure' : pr >= 0.45 ? ' · under pressure' : ''}`;
+  }
+
   private g6Call(view: ViewState, e: MatchEvent, tm: string) {
     const p = e.player !== undefined && e.player >= 0 ? view.players[e.player] : null;
     const who = p ? `#${p.def.number} ${p.def.short}` : '';
@@ -220,7 +230,15 @@ export class Hud {
       if (e.type === 'goal' && view.shootout) { /* shootout kicks are shown by the 'pen' event */ }
       else if (e.type === 'pen') {
         if (e.text === 'start') this.flash('PENALTIES', 'Five each, then sudden death', '', 2200);
-        else this.flash(e.text === 'scored' ? 'SCORED' : 'MISSED', tm, e.text === 'scored' ? 'goal' : '', 1300);
+        else {
+          const so = view.shootout;
+          const p = e.player !== undefined && e.player >= 0 ? view.players[e.player] : null;
+          // How the shootout stands after this kick, and when it goes to sudden death.
+          const k = so ? so.kicks : null;
+          const tally = k ? `${k[0].filter(Boolean).length}-${k[1].filter(Boolean).length}` : '';
+          const sudden = k && k[0].length === 5 && k[1].length === 5 && so!.winner < 0 ? ' · SUDDEN DEATH' : '';
+          this.flash(e.text === 'scored' ? 'SCORED' : 'MISSED', `${tm}${p ? ` · ${p.def.short}` : ''}${tally ? ` · ${tally}` : ''}${sudden}`, e.text === 'scored' ? 'goal' : '', 1600);
+        }
       } else if (e.type === 'goal') {
         const p = e.player !== undefined && e.player >= 0 ? view.players[e.player] : null;
         this.flash('GOAL!', `${tm} · ${p ? p.def.short : ''}${e.text === 'og' ? ' (own goal)' : ''} ${minuteText(view.clock, view.half)}`, 'goal', 2800);
@@ -228,7 +246,24 @@ export class Hud {
       else if (e.type === 'foul') this.flash('FOUL', tm, '', 1400);
       else if (e.type === 'advantage' && e.text === 'over') this.toast('Advantage over: play on', 1500);
       else if (e.type === 'advantage') this.flash('ADVANTAGE', tm ? `Play on · ${tm}` : 'Play on', 'adv', 1500);
+      else if (e.type === 'switch' && e.text === 'keeper' && e.team !== undefined && this.localSet.has(e.team) && view.restart?.type === 'penalty') { /* the penalty hint explains it */ }
       else if (e.type === 'switch' && e.text === 'keeper' && e.team !== undefined && this.localSet.has(e.team)) this.toast('You have the keeper: SHOOT dives, PASS comes out. SKILL hands him back', 2600);
+      else if (e.type === 'call' && e.text?.startsWith('pen:')) {
+        // Penalty techniques everyone sees: a Panenka or a blast.
+        const t = e.text.slice(4) as PenTech;
+        if (t === 'panenka') this.toast('Panenka!', 1400);
+        else if (t === 'blast' && e.team !== undefined && this.localSet.has(e.team)) this.toast('Blasted!', 900);
+      }
+      else if (e.type === 'call' && e.text === 'stutter' && e.team !== undefined && this.localSet.has(e.team)) this.toast(e.power ? 'Stutter run-up: ON (he checks, the keeper may go first)' : 'Stutter run-up: off', 1600);
+      else if (e.type === 'call' && e.text === 'retake') this.flash('RETAKE', 'Keeper off his line too early', '', 2000);
+      else if (e.type === 'call' && e.text === 'wallback') this.toast(e.power && e.power >= 2 ? 'The wall crept in again: booked' : 'Referee: the wall has crept in, back ten yards', 2000);
+      else if (e.type === 'call' && e.text === 'knuckle') this.toast('Knuckleball!', 1100);
+      else if (e.type === 'call' && e.text === 'lieblock') this.toast('Blocked by the man lying behind the wall', 1600);
+      else if (e.type === 'call' && e.text === 'runup' && e.team !== undefined && this.localSet.has(e.team)) this.toast(`Run-up: ${['standard', 'long (more pace)', 'short (tidier)', 'straight on (less curl, more knuckle)'][e.power ?? 0]}`, 1600);
+      else if (e.type === 'call' && e.text === 'lie' && e.team !== undefined && this.localSet.has(e.team)) this.toast(e.power ? 'A man lies down behind the wall' : 'Nobody lying behind the wall', 1400);
+      else if (e.type === 'call' && e.text === 'dummy2') { /* seen on the pitch */ }
+      else if (e.type === 'call' && e.text === 'habit' && e.team !== undefined && this.localSet.has(e.team)) this.toast(`Their keeper has seen your last ${e.power ?? 3} penalties go the same way`, 2600);
+      else if (e.type === 'call' && (e.text === 'gkcommit' || e.text === 'check')) { /* seen on the pitch */ }
       else if (e.type === 'card') {
         const p = e.player !== undefined && e.player >= 0 ? view.players[e.player] : null;
         const who = `${tm} · #${p?.def.number ?? ''} ${p?.def.short ?? ''}`;
@@ -355,14 +390,21 @@ export class Hud {
     if (r && r.ready && lt !== undefined && r.team === lt && v.ctl[lt] === r.taker && v.humans[lt]) {
       this.hint.style.display = 'block';
       this.hint.textContent = r.type === 'kickoff' ? 'Kick-off: pass to start'
-        : r.type === 'penalty' ? 'Penalty: move the target, hold SHOOT and release as the ring closes'
+        : r.type === 'penalty' ? `${this.takerLine(v, r.taker, 'pen')}: aim, hold SHOOT and release as the ring closes · SKILL stutter${r.stutter ? ' (on)' : ''} · LOB+SHOOT Panenka · SWITCH+SHOOT side-foot · modifier+sprint blast`
         : r.type === 'corner' ? 'Corner: move the target, LOB to cross or PASS short'
-        : r.type === 'freekick' ? (r.quick ? 'Quick free kick: pass, lob or shoot' : (Math.abs(r.curve ?? 0) > 0.02 || (r.dip ?? 0) > 0.02 ? `Free kick: bend ${Math.round(Math.abs(r.curve ?? 0) * 100)}% ${(r.curve ?? 0) >= 0 ? 'right' : 'left'}, dip ${Math.round((r.dip ?? 0) * 100)}%. Shoot as the ring closes` : 'Free kick: move the target, then pass, lob or shoot as the ring closes. Hold the modifier and move to bend or dip a shot'))
+        : r.type === 'freekick' ? (r.quick ? 'Quick free kick: pass, lob or shoot' : (Math.hypot(r.spot.x - PITCH.halfLength * v.attackDir[lt], r.spot.z) < 32 ? `${this.takerLine(v, r.taker, 'fk')} · ` : '') + (Math.abs(r.curve ?? 0) > 0.02 || (r.dip ?? 0) > 0.02 ? `Free kick: bend ${Math.round(Math.abs(r.curve ?? 0) * 100)}% ${(r.curve ?? 0) >= 0 ? 'right' : 'left'}, dip ${Math.round((r.dip ?? 0) * 100)}%. Shoot as the ring closes` : 'Free kick: move the target, then pass, lob or shoot as the ring closes. Hold the modifier and move to bend or dip a shot') + (Math.hypot(r.spot.x - PITCH.halfLength * v.attackDir[lt], r.spot.z) < 30 ? '. SKILL: run-up · modifier+sprint+SHOOT: knuckleball · THROUGH+SHOOT: low under the wall · SWITCH: routine' : ''))
         : r.type === 'throwin' ? `Throw-in: PASS short to feet, LOB long, THROUGH down the line${Math.abs(r.spot.x - PITCH.halfLength * v.attackDir[lt]) < 32 ? '. SWITCH: long throw into the box' : ''}`
         : `${RESTART_NAMES[r.type]}: move the target, then pass or lob`;
+    } else if (r && r.type === 'penalty' && lt !== undefined && r.team !== lt && v.humans[lt] && v.players[v.ctl[lt]]?.role === 'GK') {
+      // Penalty keeper duel.
+      const tk = v.players[r.taker];
+      const fav = tk ? favouriteSide(tk.def) : null;
+      this.hint.style.display = 'block';
+      this.hint.textContent = (r.gkCommit !== undefined ? (r.gkCommit === 0 ? 'Standing tall. ' : 'You have picked your side. ') : '') +
+        `Their penalty${tk ? ` (${tk.def.short}${fav ? `, usually puts it to his ${fav.side === 'L' ? 'left' : 'right'}` : ''})` : ''}: move along your line with the stick, point the way and press SHOOT to dive, or centred to stand tall. Go too early and he will see it`;
     } else if (r && r.type === 'freekick' && lt !== undefined && r.team !== lt && v.humans[lt] && Math.hypot(r.spot.x + PITCH.halfLength * v.attackDir[lt], r.spot.z) < 30) {
       this.hint.style.display = 'block';
-      this.hint.textContent = 'Their free kick: move the stick to shift your wall, SWITCH changes how many stand in it, SHOOT makes it jump';
+      this.hint.textContent = 'Their free kick: move the stick to shift your wall, SWITCH changes how many stand in it, SHOOT makes it jump, PASS puts a man down behind it';
     } else if (v.ball.state === 'held' && v.ball.owner >= 0 && lt !== undefined && v.players[v.ball.owner].team === lt && v.humans[lt] && v.phase === 'play') {
       this.hint.style.display = 'block';
       this.hint.textContent = 'Keeper\'s ball: PASS rolls it out, LOB throws, THROUGH drop-kicks, SHOOT punts. Aim with the stick, hold for distance';
