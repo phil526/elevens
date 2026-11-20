@@ -93,7 +93,8 @@ export function isTablet(): boolean {
 
 export function defaultSettings(): Settings {
   const mobile = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
-  // Phones start on Low; tablets on Medium, which shows the realistic (Higgsfield) players.
+  // Phones start on Low and tablets on Medium; both show the realistic (Higgsfield) players (Low
+  // has them too since 20 Nov 2026, with lighter posing for players off screen).
   return {
     audio: { master: 0.8, effects: 0.9, crowd: 0.6, muted: false, music: 0.5, musicOn: true, commentary: true, menuSounds: true, announcer: false },
     graphics: { preset: mobile ? (isTablet() ? 'medium' : 'low') : 'high', renderScale: mobile ? 0.85 : 1, shadows: !mobile, players: 'realistic', autoRes: true, wear: true, bigMoments: true },

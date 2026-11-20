@@ -19,7 +19,7 @@ await new Promise((res) => server.stdout.on('data', (d) => { if (String(d).inclu
 const browser = await chromium.launch({ executablePath: exe, args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 try {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
-  await ctx.addInitScript(() => { if (!localStorage.getItem('elevens.settings.v1')) localStorage.setItem('elevens.settings.v1', JSON.stringify({ graphics: { preset: 'low', renderScale: 1, shadows: false } })); });
+  await ctx.addInitScript(() => { if (!localStorage.getItem('elevens.settings.v1')) localStorage.setItem('elevens.settings.v1', JSON.stringify({ graphics: { preset: 'low', renderScale: 1, shadows: false, players: 'classic' } })); });
   const page = await ctx.newPage();
   page.on('pageerror', (e) => report.consoleErrors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error') report.consoleErrors.push(m.text()); });

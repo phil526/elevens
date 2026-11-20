@@ -20,7 +20,7 @@ const browser = await chromium.launch({ executablePath: exe, args: ['--use-gl=an
 try {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
   await ctx.addInitScript(() => localStorage.setItem('elevens.menuopen.v1', JSON.stringify({ modes: true, options: true }))); // More modes and More options open
-  await ctx.addInitScript(() => { if (!localStorage.getItem('elevens.settings.v1')) localStorage.setItem('elevens.settings.v1', JSON.stringify({ graphics: { preset: 'low', renderScale: 1, shadows: false } })); });
+  await ctx.addInitScript(() => { if (!localStorage.getItem('elevens.settings.v1')) localStorage.setItem('elevens.settings.v1', JSON.stringify({ graphics: { preset: 'low', renderScale: 1, shadows: false, players: 'classic' } })); });
   const page = await ctx.newPage();
   page.on('pageerror', (e) => report.consoleErrors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error') report.consoleErrors.push(m.text()); });
@@ -131,7 +131,7 @@ try {
 
   // --- Touch: the small row of buttons, relabelled when defending.
   const mob = await browser.newContext({ ...devices['iPhone 13 landscape'] });
-  await mob.addInitScript(() => localStorage.setItem('elevens.settings.v1', JSON.stringify({ graphics: { preset: 'low', renderScale: 0.6, shadows: false } })));
+  await mob.addInitScript(() => localStorage.setItem('elevens.settings.v1', JSON.stringify({ graphics: { preset: 'low', renderScale: 0.6, shadows: false, players: 'classic' } })));
   const mp = await mob.newPage();
   mp.on('pageerror', (e) => report.consoleErrors.push(e.message));
   await mp.goto(`${BASE}/?test`);
@@ -169,7 +169,7 @@ try {
   // --- Controller on a tablet: the stick and D-pad move a visible highlight through the menus.
   const tab = await browser.newContext({ ...devices['iPad Pro 11 landscape'] });
   await tab.addInitScript(() => {
-    localStorage.setItem('elevens.settings.v1', JSON.stringify({ graphics: { preset: 'low', renderScale: 0.6, shadows: false } }));
+    localStorage.setItem('elevens.settings.v1', JSON.stringify({ graphics: { preset: 'low', renderScale: 0.6, shadows: false, players: 'classic' } }));
     const pad = { connected: true, id: 'Xbox Wireless Controller', index: 0, axes: [0, 0, 0, 0], buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0 })) };
     window.__pad = pad;
     navigator.getGamepads = () => [pad];

@@ -91,7 +91,7 @@ export interface GraphicsSettings {
   preset: 'low' | 'medium' | 'high' | 'ultra';
   renderScale: number; // 0.5..1.5 (above 1 renders more pixels than the screen, then downsamples)
   shadows: boolean;
-  /** Player bodies: generated, motion-captured models or the lightweight procedural ones. Low always uses procedural. */
+  /** Player bodies: generated, motion-captured models or the lightweight procedural ones (Classic). */
   players?: 'realistic' | 'classic';
   /** Mowing pattern cut into the grass; Random picks one each match (render/vfx.ts MOW_GLSL). */
   mowing?: MowSetting;
@@ -115,7 +115,8 @@ export interface GraphicsSettings {
 
 export { AUTO_RES_MIN } from './autores';
 
-export const realisticPlayers = (g: GraphicsSettings) => g.preset !== 'low' && g.players !== 'classic';
+/** Realistic (motion-captured) players on every quality, Low included (phones need them too, 20 Nov), unless Players is Classic. */
+export const realisticPlayers = (g: GraphicsSettings) => g.players !== 'classic';
 
 export interface MarkerInfo {
   localTeams: number[]; // teams controlled on this device
@@ -142,6 +143,8 @@ export interface DebugDraw {
 const QUALITY = { low: 0, medium: 1, high: 2, ultra: 3 } as const;
 const DPR_CAP = { low: 1, medium: 1.5, high: 2, ultra: 2.5 } as const;
 const MAX_DPR = 3;
+/** On Low, realistic players further than this from the camera (m) don't plant their feet. */
+const LITE_IK_DIST = 32;
 
 function markerSprite(shape: 'triangle' | 'diamond', colour: string, label: string) {
   const tex = canvasTex(128, 128, (g) => {
@@ -234,6 +237,10 @@ export class GameRenderer {
   /** Direct free kick: dotted line showing the bend and dip the taker has chosen (19 Nov 2026). */
   private fkLine: THREE.Points | null = null;
   private blobs: THREE.Mesh[] = [];
+  private liteFrustum = new THREE.Frustum();
+  private liteMat = new THREE.Matrix4();
+  /** Round a player, generous so a turning or diving player at the edge of the picture is never caught frozen. */
+  private liteSphere = new THREE.Sphere(new THREE.Vector3(), 3);
   private debugGroup = new THREE.Group();
   private ballSpinner = new BallSpin();
   private ballQ = new THREE.Quaternion();
@@ -391,16 +398,23 @@ export class GameRenderer {
     };
   }
 
+  /** Fetch the realistic players if they're wanted and not here yet (again after a failed attempt). */
+  private wantPlayers() {
+    if (!realisticPlayers(this.gfx) || this.playerAssets || this.playersWaiting) return;
+    this.playersWaiting = true;
+    void loadPlayerAssets().then((a) => {
+      this.playersWaiting = false;
+      if (!a) return;
+      this.playerAssets = a;
+      // Swap the procedural stand-ins for the realistic bodies as soon as they arrive.
+      if (this.matchArgs && realisticPlayers(this.gfx) && !this.playersReal) this.buildPlayers(...this.matchArgs);
+    });
+  }
+  private playersWaiting = false;
+
   applyGraphics(gfx: GraphicsSettings) {
     this.gfx = gfx;
-    if (realisticPlayers(gfx) && !this.playerAssets) {
-      void loadPlayerAssets().then((a) => {
-        if (!a) return;
-        this.playerAssets = a;
-        // Swap the procedural stand-ins for the realistic bodies as soon as they arrive.
-        if (this.matchArgs && realisticPlayers(this.gfx) && !this.playersReal) this.buildPlayers(...this.matchArgs);
-      });
-    }
+    this.wantPlayers();
     const q = QUALITY[gfx.preset];
     const scale = q >= 3 ? gfx.renderScale : Math.min(1, gfx.renderScale);
     this.baseDpr = Math.min(MAX_DPR, Math.min(window.devicePixelRatio || 1, DPR_CAP[gfx.preset]) * scale);
@@ -918,6 +932,7 @@ export class GameRenderer {
 
   /** Build (or rebuild) the scene for a match between these teams/kits. */
   setupMatch(teams: [TeamDef, TeamDef], kits: ['home' | 'away', 'home' | 'away'], weather?: MatchWeather) {
+    this.wantPlayers();
     this.chooseWeather(weather);
     this.chooseMowing();
     this.feed?.reset();
@@ -1283,6 +1298,14 @@ export class GameRenderer {
     if (this.mascots && !this.mascotMode) { this.mascots.dispose(); this.mascots = null; }
     if (this.mascots && this.mascotMode === 'hand') for (const id of this.mascots.players) this.reactions.hold(id, 'holdHand', 0.5);
     this.motionInputs(view);
+    // Low (phones): realistic players off screen skip their pose, and only players near the camera
+    // plant their feet (foot IK is a fifth of the players' per-frame work and can't be seen far off).
+    const lite = QUALITY[this.gfx.preset] === 0;
+    if (lite) {
+      const cam = this.camera.cam;
+      cam.updateMatrixWorld();
+      this.liteFrustum.setFromProjectionMatrix(this.liteMat.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+    }
     view.players.forEach((p, i) => {
       if (this.players[i] && this.modelDefs[i] && p.def.number !== this.modelDefs[i].number) this.replaceModel(i, p.def);
       const m = this.players[i];
@@ -1305,6 +1328,13 @@ export class GameRenderer {
       if (m instanceof RealPlayerModel) {
         const kw = this.kitWear.get(i);
         m.wear.mud = wearOn ? kw.mud : 0; m.wear.front = kw.front; m.wear.sweat = wearOn ? kw.sweat : 0;
+      }
+      if (m instanceof RealPlayerModel) {
+        if (lite) {
+          this.liteSphere.center.set(p.pos.x, 0.95, p.pos.z);
+          m.skipPose = !this.renderer.shadowMap.enabled && !this.liteFrustum.intersectsSphere(this.liteSphere);
+          m.footIK = this.camera.cam.position.distanceToSquared(this.liteSphere.center) < LITE_IK_DIST * LITE_IK_DIST;
+        } else { m.skipPose = false; m.footIK = true; }
       }
       m.update(p, dt, this.time, b.state === 'held' && b.owner === p.id, ballV);
       const blob = this.blobs[i];

@@ -21,7 +21,7 @@ try {
   // --- iPad + Xbox controller.
   const tab = await browser.newContext({ ...devices['iPad Pro 11 landscape'] });
   await tab.addInitScript(() => {
-    if (!localStorage.getItem('elevens.settings.v1')) localStorage.setItem('elevens.settings.v1', JSON.stringify({ graphics: { preset: 'low', renderScale: 0.6, shadows: false } }));
+    if (!localStorage.getItem('elevens.settings.v1')) localStorage.setItem('elevens.settings.v1', JSON.stringify({ graphics: { preset: 'low', renderScale: 0.6, shadows: false, players: 'classic' } }));
     const pad = { connected: true, id: 'Xbox Wireless Controller', index: 0, axes: [0, 0, 0, 0], buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0 })) };
     window.__pad = pad;
     navigator.getGamepads = () => [pad];
@@ -95,7 +95,7 @@ try {
 
   // --- Desktop keyboard.
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
-  await ctx.addInitScript(() => { if (!localStorage.getItem('elevens.settings.v1')) localStorage.setItem('elevens.settings.v1', JSON.stringify({ graphics: { preset: 'low', renderScale: 1, shadows: false } })); });
+  await ctx.addInitScript(() => { if (!localStorage.getItem('elevens.settings.v1')) localStorage.setItem('elevens.settings.v1', JSON.stringify({ graphics: { preset: 'low', renderScale: 1, shadows: false, players: 'classic' } })); });
   const page = await ctx.newPage();
   page.on('pageerror', (e) => report.consoleErrors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error') report.consoleErrors.push(m.text()); });

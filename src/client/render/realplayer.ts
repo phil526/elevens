@@ -292,6 +292,7 @@ export interface PlayerAssets {
 }
 
 let pending: Promise<PlayerAssets | null> | null = null;
+const noop = () => {};
 
 /** What happened to the realistic models, shown in Settings so a failure can be reported. */
 export let playerAssetStatus: { state: 'idle' | 'loading' | 'ready' | 'failed'; detail: string } = { state: 'idle', detail: '' };
@@ -303,8 +304,25 @@ function b64Bytes(uri: string): Uint8Array {
   return out;
 }
 
+/**
+ * fetch with a couple of retries: phones on mobile data drop the odd request, and one lost file
+ * used to leave every player on the simple models for the whole session. A 404 is final.
+ */
+export async function fetchRetry(url: string, tries = 3): Promise<Response> {
+  let last: unknown = null;
+  for (let i = 0; i < tries; i++) {
+    if (i) await new Promise((ok) => setTimeout(ok, 700 * i * i));
+    try {
+      const r = await fetch(url);
+      if (r.ok || r.status === 404) return r;
+      last = new Error(`${url}: HTTP ${r.status}`);
+    } catch (e) { last = e; }
+  }
+  throw last ?? new Error(`${url}: failed`);
+}
+
 async function fetchBytes(url: string): Promise<Uint8Array> {
-  const r = await fetch(url);
+  const r = await fetchRetry(url);
   if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
   return new Uint8Array(await r.arrayBuffer());
 }
@@ -398,12 +416,12 @@ async function loadModel(loader: GLTFLoader, path: string) {
   const dir = path.slice(0, path.lastIndexOf('/') + 1);
   let glb: ArrayBuffer;
   try {
-    const r = await fetch(`${path}.glb`);
+    const r = await fetchRetry(`${path}.glb`);
     const buf = r.ok ? await r.arrayBuffer() : null;
     if (!buf || new DataView(buf).getUint32(0, true) !== 0x46546c67) throw new Error('no glb');
     glb = buf;
   } catch {
-    const r = await fetch(`${path}.json`);
+    const r = await fetchRetry(`${path}.json`);
     if (!r.ok) throw new Error(`${path}.json: HTTP ${r.status}`);
     glb = await gltfJsonToGlb(await r.json(), dir);
   }
@@ -412,7 +430,7 @@ async function loadModel(loader: GLTFLoader, path: string) {
 
 /** The kit mask: alpha is the socks, so RGB must stay exactly as stored. */
 async function loadMask(url: string) {
-  const r = await fetch(url);
+  const r = await fetchRetry(url);
   if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
   return bitmapFrom(await r.arrayBuffer(), 'image/png', { imageOrientation: 'none', premultiplyAlpha: 'none', colorSpaceConversion: 'none' } as ImageBitmapOptions);
 }
@@ -472,6 +490,8 @@ export function loadPlayerAssets(base = 'models/'): Promise<PlayerAssets | null>
   })().catch((err) => {
     console.warn('[players] realistic models unavailable, using procedural players:', err);
     playerAssetStatus = { state: 'failed', detail: String((err as Error)?.message ?? err).slice(0, 160) };
+    // Let the next kick-off (or a trip to Settings) try again rather than giving up for the session.
+    pending = null;
     return null;
   });
   return pending;
@@ -1069,12 +1089,21 @@ export class RealPlayerModel {
   scanCue = 0;
   private scan: { t: number; dur: number; side: number } | null = null;
   private scanCool = Math.random() * 2;
-  /** Planted feet: on by default (the renderer turns it off for players far from the camera). */
+  /** Planted feet: on by default (the renderer turns it off for players far from the camera on Low). */
   footIK = true;
+  /**
+   * Off screen on Low (phones): the renderer sets this and the pose isn't worked out at all, as
+   * nobody can see it. Speeds, gait phase and timers still advance, so the player picks up exactly
+   * where he should when he comes back into view.
+   */
+  skipPose = false;
 
   constructor(public id: number, assets: PlayerAssets, kit: Kit, keeper: boolean, skin: number, num: number, shadows: boolean, extra: { name?: string; boot?: number; captain?: boolean; hair?: number; coat?: boolean; hairStyle?: HairStyle; detail?: number } = {}) {
     const body = assets.bodies[nearestBody(assets, skin)];
     this.model = cloneSkinned(body.scene);
+    // Bones are only ever turned by quaternion (the clips and every pose layer), so skip three.js
+    // keeping each bone's Euler angles in step: that was nearly a tenth of the players' per-frame work.
+    this.model.traverse((o) => { if ((o as THREE.Bone).isBone) o.quaternion._onChange(noop); });
     this.root.add(this.body);
     this.body.add(this.model);
     const km = kitMaterial(body, kit, keeper, extra.boot, { skin, hair: extra.hair, coat: extra.coat });
@@ -1397,6 +1426,7 @@ export class RealPlayerModel {
     kick?.setEffectiveWeight(kickW);
     slide?.setEffectiveWeight(slideW);
     for (const n of SHOTS) this.actions[n]?.setEffectiveWeight(n === shotName ? Math.min(shotW, 1 - kickW - slideW) : 0);
+    if (this.skipPose) { this.ikOn = 0; for (const f of this.feet) { f.lock = null; f.w = 0; } return; }
     this.mixer.update(0);
     this.applyProcedural();
     // Running style layer over the motion-captured run (see applyRunLayer).
@@ -1610,7 +1640,7 @@ export class RealPlayerModel {
    */
   private plantFeet(dt: number, W: number) {
     if (W < 0.01) { for (const f of this.feet) { f.lock = null; f.w = 0; } return; }
-    this.root.updateMatrixWorld(true);
+    // (No whole-model matrix update here: every world position below updates just its own bone chain.)
     const sy = this.root.scale.y;
     const pole = new THREE.Vector3(1, 0, 0).applyQuaternion(this.root.quaternion);
     for (const f of this.feet) {

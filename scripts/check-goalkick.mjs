@@ -12,7 +12,7 @@ const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PAT
 let fails = 0;
 try {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
-  await ctx.addInitScript(() => localStorage.setItem('elevens.settings.v1', JSON.stringify({ graphics: { preset: 'low', renderScale: 1, shadows: false } })));
+  await ctx.addInitScript(() => localStorage.setItem('elevens.settings.v1', JSON.stringify({ graphics: { preset: 'low', renderScale: 1, shadows: false, players: 'classic' } })));
   const page = await ctx.newPage();
   page.on('pageerror', (e) => console.log('pageerror', e.message));
   await page.goto(`${BASE}/?test`);

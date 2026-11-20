@@ -45,6 +45,9 @@ export class Hud {
   /** Momentum meter under the score bug. */
   private mom: HTMLDivElement;
   private momKey = '';
+  /** Score bug size, re-read only when it changes (reading it every frame forced a page layout each frame). */
+  private bugBox = '';
+  private momW = '';
   /** The players people control right now (for battle calls). */
   private ctlIds = new Set<number>();
   private radar: HTMLCanvasElement;
@@ -79,6 +82,7 @@ export class Hud {
       <div class="guide"></div>`;
     this.bug = root.querySelector('.scorebug')!;
     this.mom = root.querySelector('.mom')!;
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => { this.bugBox = ''; }).observe(this.bug);
     this.pcard = root.querySelector('.pcard')!;
     this.power = root.querySelector('.power')!;
     this.tring = root.querySelector('.tring')!;
@@ -184,8 +188,9 @@ export class Hud {
     const mv = v.momentum;
     const show = mv !== undefined && !this.practice && (v.phase === 'play' || v.phase === 'restart' || v.phase === 'kickoff' || v.phase === 'goal');
     if (!show) { this.mom.style.display = 'none'; return; }
-    this.mom.style.display = 'block';
-    const key = `${c0}|${c1}|${this.bug.offsetWidth}|${this.bug.offsetHeight}`;
+    if (this.mom.style.display !== 'block') { this.mom.style.display = 'block'; this.bugBox = ''; }
+    if (!this.bugBox || typeof ResizeObserver === 'undefined') this.bugBox = `${this.bug.offsetWidth}|${this.bug.offsetHeight}|${this.bug.offsetTop}|${this.bug.offsetLeft}`;
+    const key = `${c0}|${c1}|${this.bugBox}`;
     if (key !== this.momKey) {
       this.momKey = key;
       this.mom.style.top = `${this.bug.offsetTop + this.bug.offsetHeight + 3}px`;
@@ -195,6 +200,9 @@ export class Hud {
       (this.mom.children[1] as HTMLElement).style.background = c1;
     }
     const w = Math.round(Math.min(1, Math.abs(mv!)) * 50);
+    const wk = `${mv! > 0 ? w : 0}|${mv! < 0 ? w : 0}|${mv! > MOMENTUM.liftFrom}`;
+    if (wk === this.momW) return;
+    this.momW = wk;
     (this.mom.children[0] as HTMLElement).style.width = `${mv! > 0 ? w : 0}%`;
     (this.mom.children[1] as HTMLElement).style.width = `${mv! < 0 ? w : 0}%`;
     this.mom.classList.toggle('lift', mv! > MOMENTUM.liftFrom);

@@ -21,7 +21,7 @@ const errors = [];
 try {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
   await ctx.addInitScript(() => {
-    if (!localStorage.getItem('elevens.settings.v1')) localStorage.setItem('elevens.settings.v1', JSON.stringify({ graphics: { preset: 'low', renderScale: 0.5, shadows: false } }));
+    if (!localStorage.getItem('elevens.settings.v1')) localStorage.setItem('elevens.settings.v1', JSON.stringify({ graphics: { preset: 'low', renderScale: 0.5, shadows: false, players: 'classic' } }));
   });
   const p = await ctx.newPage();
   p.on('pageerror', (e) => errors.push(e.message));

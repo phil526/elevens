@@ -3,7 +3,9 @@
 // Title and menu music (Philip's "Stadium Drop", public/music/menu.mp3) loops on the menus and
 // fades out when a match starts. A few commentary lines for shots and goals (Settings > Audio > Commentary). Starts only after a user gesture; master/effects/crowd/music buses;
 // a compressor prevents spikes; voice limits stop overlapping kicks piling up.
-// The crowd is silent until a match runs, so menus stay quiet.
+// The crowd is silent until a match runs, so menus stay quiet. No synthesised noise plays while
+// the recorded sounds are still loading (slow phone connections used to hear a hiss of white noise
+// for the first seconds of a match): the noise fallbacks only take over if the files failed to load.
 
 import { MenuSfx, type MenuSound } from './menusfx';
 
@@ -79,7 +81,9 @@ export class GameAudio {
   private settings: AudioSettings;
   private crowdTarget = 0; // silent until a match is running
   private samples: Partial<Record<SampleName, AudioBuffer>> = {};
-  private synthCrowd!: GainNode; // synthesised murmur, quieter once the recorded crowd has loaded
+  private synthCrowd!: GainNode; // synthesised murmur: silent unless the recorded crowd failed to load
+  /** Every recorded sound has been tried (loaded or failed). Until then nothing falls back to noise. */
+  loaded = false;
   private bed: GainNode | null = null;
   private surge: GainNode | null = null; // lifts the crowd bed as a shot goes in, under the reaction
   private nextChant = 0;
@@ -104,7 +108,13 @@ export class GameAudio {
 
   /** Must be called from a user gesture (click / key / touch). */
   unlock() {
-    if (this.ctx) { if (this.ctx.state === 'suspended') void this.ctx.resume(); return; }
+    if (this.ctx) {
+      if (this.ctx.state !== 'running') void this.ctx.resume();
+      // iPhone/iPad: a press (pointerdown) is not a gesture there, so music that failed to start
+      // then starts on the tap's touchend or click.
+      if (this.musicWanted && this.musicEl?.paused && this.musicStop === null) void this.musicEl.play().catch(() => {});
+      return;
+    }
     const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (!AC) return;
     const ctx = new AC();
@@ -172,15 +182,21 @@ export class GameAudio {
   /** Loads every recorded sound that exists; a missing or broken file just keeps the synthesised one. */
   private async loadSamples() {
     const ctx = this.ctx!;
-    await Promise.all((Object.keys(SAMPLES) as SampleName[]).map(async (k) => {
+    const load = async (k: SampleName) => {
       try {
         const r = await fetch(this.sfxBase + SAMPLES[k]);
         if (!r.ok) return;
         const buf = await r.arrayBuffer();
-        this.samples[k] = await ctx.decodeAudioData(buf);
+        this.samples[k] = await decode(ctx, buf);
       } catch { /* keep the synthesised fallback */ }
-    }));
+    };
+    // The stadium beds first, so the crowd is there as early as possible on a slow connection.
+    await Promise.all((['crowdA', 'crowdB'] as SampleName[]).map(load));
     this.startBed();
+    await Promise.all((Object.keys(SAMPLES) as SampleName[]).filter((k) => k !== 'crowdA' && k !== 'crowdB').map(load));
+    this.loaded = true;
+    // Only if no recorded crowd could be loaded at all does the synthesised murmur stand in.
+    if (!this.bed) this.synthCrowd.gain.setTargetAtTime(1, ctx.currentTime, 1);
   }
 
   /** True once a recorded sound has loaded (tests and the settings screen use it). */
@@ -214,8 +230,6 @@ export class GameAudio {
       src.connect(g).connect(this.bed!);
       src.start(0, Math.random() * buf.duration);
     });
-    // The recorded crowd carries the atmosphere; the synthesised murmur only fills underneath.
-    this.synthCrowd.gain.setTargetAtTime(0.3, ctx.currentTime, 1);
   }
 
   /** Plays a recorded sound on a bus. Returns false if it is not loaded. */
@@ -261,6 +275,7 @@ export class GameAudio {
     warm.frequency.value = 900;
     warm.Q.value = 0.5;
     this.synthCrowd = ctx.createGain();
+    this.synthCrowd.gain.value = 0; // see loadSamples: only a fallback
     this.synthCrowd.connect(this.crowdBus);
     warm.connect(this.synthCrowd);
     this.crowdLevel.connect(warm);
@@ -322,6 +337,7 @@ export class GameAudio {
 
   private rain: GainNode | null = null;
   private rainWanted = 0;
+  private rainNodes: AudioScheduledSourceNode[] = [];
   /** Rain on the stadium roof and the pitch: 0 off .. 1 a steady downpour. On the crowd volume. */
   setRain(level: number) {
     this.rainWanted = level;
@@ -336,18 +352,31 @@ export class GameAudio {
       hp.type = 'highpass'; hp.frequency.value = 900;
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass'; lp.frequency.value = 6500;
-      this.rain = ctx.createGain();
-      this.rain.gain.value = 0;
+      // The slow breathing (1 +- 0.2) goes on its own gain, before the level: on the level itself it
+      // kept a faint hiss going after the rain stopped (back on the menus after a wet match).
+      const breathe = ctx.createGain();
+      breathe.gain.value = 1;
       const lfo = ctx.createOscillator();
       lfo.frequency.value = 0.07;
       const lg = ctx.createGain();
-      lg.gain.value = 0.012;
-      lfo.connect(lg).connect(this.rain.gain);
-      src.connect(hp).connect(lp).connect(this.rain).connect(this.crowdBus);
+      lg.gain.value = 0.2;
+      lfo.connect(lg).connect(breathe.gain);
+      this.rain = ctx.createGain();
+      this.rain.gain.value = 0;
+      src.connect(hp).connect(lp).connect(breathe).connect(this.rain).connect(this.crowdBus);
       src.start();
       lfo.start();
+      this.rainNodes = [src, lfo];
     }
-    this.rain?.gain.setTargetAtTime(level * 0.06, ctx.currentTime, 1.2);
+    if (!this.rain) return;
+    this.rain.gain.setTargetAtTime(level * 0.06, ctx.currentTime, 1.2);
+    if (level <= 0) {
+      // Fade out, then stop the noise source altogether.
+      const r = this.rain, nodes = this.rainNodes;
+      this.rain = null;
+      this.rainNodes = [];
+      window.setTimeout(() => { for (const n of nodes) { try { n.stop(); } catch { /* already stopped */ } } r.disconnect(); }, 6000);
+    }
   }
 
   /** The stands stamp their feet and clap in rhythm. */
@@ -580,6 +609,8 @@ export class GameAudio {
       case 'boo': if (this.play('boo', this.crowdBus, 0.55 * lvl, { dur: 3, fade: 0.4 })) return; return; // no synthesised boo
       case 'applause': if (this.play('applause', this.crowdBus, 0.6 * lvl, { offset: Math.random() * 14, dur: 7, fade: 0.8 })) return; return;
     }
+    // Still loading: stay quiet rather than play a burst of noise in place of the recording.
+    if (!this.loaded) return;
     const now = ctx.currentTime;
     const n = ctx.createBufferSource();
     n.buffer = this.noise;
@@ -667,4 +698,12 @@ export class GameAudio {
     void this.ctx?.resume();
     if (this.musicWanted && this.musicEl?.paused) void this.musicEl.play().catch(() => {});
   }
+}
+
+/** decodeAudioData with the callback form too (older Safari returns no promise from it). */
+function decode(ctx: AudioContext, buf: ArrayBuffer): Promise<AudioBuffer> {
+  return new Promise((ok, fail) => {
+    const p = ctx.decodeAudioData(buf, ok, fail) as Promise<AudioBuffer> | undefined;
+    p?.catch?.(fail);
+  });
 }
