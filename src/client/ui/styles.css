@@ -665,10 +665,13 @@ ul.partners small { opacity: 0.7; margin-left: 6px; }
 
 /* World tournament (20 Nov 2026) */
 .flag { vertical-align: middle; border-radius: 2px; flex: none; }
-.tgroups { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; margin: 10px 0; }
+.tgroups { display: grid; grid-template-columns: repeat(auto-fit, minmax(195px, 1fr)); gap: 10px; margin: 10px 0; }
 .tgroup { padding: 8px; border-radius: 10px; background: var(--ink-2); border: 1px solid var(--line); }
 .tgroup.mine { border-color: var(--accent); }
 .tgroup h4 { margin: 0 0 6px; }
-.tgroup .ltable { width: 100%; font-size: 13px; }
+.tgroup .ltable { width: 100%; font-size: 12.5px; }
+.tgroup .ltable td, .tgroup .ltable th { padding: 3px 4px; }
 .tgroup tr.through td:first-child { color: var(--accent); font-weight: 700; }
 .club.nation .pstyle { color: #f2c14e; letter-spacing: 0.1em; }
+.screen.translucent .panel.analysis { max-height: calc(100vh - 20px); overflow-y: auto; }
+.an-pitch { max-height: 40vh; }

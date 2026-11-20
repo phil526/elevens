@@ -140,7 +140,8 @@ export class MatchAnalysis {
     const xgMe = this.xg(me), xgThem = this.xg((1 - me) as 0 | 1);
     const goals = v.score[me], against = v.score[1 - me];
     const st = v.stats[me];
-    const poss = st.possessionTicks / Math.max(1, st.possessionTicks + v.stats[1 - me].possessionTicks);
+    const ticks = st.possessionTicks + v.stats[1 - me].possessionTicks;
+    const poss = ticks > 1800 ? st.possessionTicks / ticks : 0.5; // 30 s of play before possession means anything
     if (mine.length >= 5 && far / mine.length > 0.55) return `${far} of your ${mine.length} shots came from outside the box (average ${(mine.reduce((n, s) => n + s.xg, 0) / mine.length).toFixed(2)} xG). Work the ball closer: a shot from inside the box is worth three or four from distance.`;
     if (passes.length >= 20 && pct < 0.68) return `Only ${Math.round(pct * 100)}% of your passes found a teammate. Look for the player with space before you press pass, and use shorter balls when you are pressed.`;
     if (xgMe > 1.6 && goals <= xgMe - 1.2) return `You created ${xgMe.toFixed(1)} expected goals but scored ${goals}. Try placed shots (hold the modifier) and aim for the corners when you are through on goal.`;
