@@ -9,7 +9,7 @@ import { ALL_CLUBS, TEAMS } from './teams';
 import type { RankedRecord } from './ranked';
 import { cleanLeagueName, cleanResult, LEAGUE, LEAGUE_CODE_RE, type LeagueInfo, type LeagueResult } from './friends';
 
-export const PROTOCOL_VERSION = 17;
+export const PROTOCOL_VERSION = 18; // 16 solid bodies + timed tackles; 17 team rooms; 18 friends league (20 Nov 2026)
 
 export type ClientMsg =
   | { t: 'hello'; v: number; token?: string; name?: string }

@@ -39,7 +39,8 @@
     "e2e:hosted": "node scripts/e2e-hosted.mjs",
     "e2e:switch": "node scripts/e2e-switch.mjs",
     "e2e:teams": "node scripts/e2e-online-teams.mjs",
-    "e2e:friends": "node scripts/e2e-friends.mjs"
+    "e2e:friends": "node scripts/e2e-friends.mjs",
+    "e2e:onpitch": "node scripts/e2e-onpitch.mjs"
   },
   "dependencies": {
     "three": "0.186.1",

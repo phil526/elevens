@@ -13,6 +13,7 @@ import { chooseDistribution, counterOn } from './distribution';
 import { gameState } from './gamestate';
 import { G6 } from '../switches';
 import { SETPIECE, habitEdge } from '../setpieces';
+import { HABIT, expectedCorner } from './habits';
 
 const R = BALL.radius;
 
@@ -130,7 +131,13 @@ export function updateKeeper(m: Match, gk: Player, _dt: number, humanGk = false)
       const cr = crossPlane(m, planeX, side) ?? predictGoalLine(b, side, 2.5);
       read = { tag, live: false, tz: 0, ty: 0 } as { tag: string; live: boolean; tz: number; ty: number; now?: boolean };
       if (cr && Math.abs(cr.z) < PITCH.goalHalfWidth + 1.2 && cr.y < PITCH.goalHeight + 0.6) {
-        const sigma = 0.1 + 0.45 * (1 - gkA) + lvl.keeperReaction * 0.5 + 0.2 * m.lastKickHelp;
+        let sigma = 0.1 + 0.45 * (1 - gkA) + lvl.keeperReaction * 0.5 + 0.2 * m.lastKickHelp;
+        // Habits: he reads the corner he has seen a human side go for better, the other one worse.
+        const shooter = b.kicker >= 0 ? m.players[b.kicker] : null;
+        if (shooter && shooter.team !== gk.team && b.flight === 'shot') {
+          const ec = expectedCorner(m, gk.team, shooter.pos);
+          if (ec.side) sigma *= Math.sign(cr.z) === ec.side ? 1 - HABIT.keeperRead * ec.k : 1 + 0.5 * HABIT.keeperRead * ec.k;
+        }
         read = { tag, live: true, tz: cr.z + m.rng.gauss() * sigma, ty: clamp(cr.y + m.rng.gauss() * sigma * 0.5, 0.15, 2.5) };
         if (m.time - m.penKickTime < 0.6) {
           // Penalty: too close to react, so the keeper has guessed a side (or stayed up) as it was struck.
@@ -281,6 +288,11 @@ export function keeperSpot(m: Match, gk: Player, side: number, depth0: number): 
   if (fromLine < KEEPER_POS.bylineWithin && wide > 0) {
     const near = { x: gx - side * KEEPER_POS.nearPostDepth, z: Math.sign(b.pos.z) * (hw - KEEPER_POS.nearPostIn) };
     T = { x: T.x + (near.x - T.x) * wide, z: T.z + (near.z - T.z) * wide };
+  }
+  // Habits (20 Nov 2026): a human side that keeps going for one corner finds him cheating towards it.
+  if (carrier && carrier.team !== gk.team && fromLine < 32) {
+    const ec = expectedCorner(m, gk.team, carrier.pos);
+    if (ec.side) T.z = clamp(T.z + ec.side * ec.k * HABIT.keeperShade, -hw + 0.4, hw - 0.4);
   }
   return T;
 }

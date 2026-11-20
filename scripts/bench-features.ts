@@ -4,11 +4,12 @@
 // slide tackles, skill moves, penalties and results by side (for difficulty checks).
 import { Match, defaultConfig } from '../src/shared/match';
 import type { Difficulty } from '../src/shared/config';
-import { bcOff, g6Off } from '../src/shared/switches';
+import { bcOff, g6Off, p20Off } from '../src/shared/switches';
 // BC_OFF=attr,heavy,... turns the 19 Nov 2026 ball-control features off to compare.
 bcOff(process.env.BC_OFF);
 import { CLUB_STYLES, type PlayStyle } from '../src/shared/playstyle';
 g6Off(process.env.G6_OFF);
+p20Off(process.env.P20_OFF);
 // STYLE_A / STYLE_B: play the two default clubs with another style (balance checks).
 if (process.env.STYLE_A) CLUB_STYLES.redmoor = process.env.STYLE_A as PlayStyle;
 if (process.env.STYLE_B) CLUB_STYLES.kestrel = process.env.STYLE_B as PlayStyle;
