@@ -36,7 +36,7 @@ export function flagSvg(id: string, w = 30): string {
     case 'canton': body = `<rect width="30" height="20" fill="${a}"/><rect y="10" width="30" height="10" fill="${b}"/><rect width="12" height="10" fill="${c}"/><circle cx="6" cy="5" r="2.2" fill="${a}"/>`; break;
     case 'saltire': body = `<rect width="30" height="20" fill="${a}"/><path d="M0 0 L30 20 M30 0 L0 20" stroke="${b}" stroke-width="4"/><circle cx="15" cy="10" r="3" fill="${c}"/>`; break;
   }
-  return `<svg class="flag" width="${w}" height="${h}" viewBox="0 0 30 20" aria-hidden="true">${body}<rect width="30" height="20" fill="none" stroke="rgba(0,0,0,0.35)" stroke-width="0.6"/></svg>`;
+  return `<svg class="flag" width="${w}" height="${h}" viewBox="0 0 30 20" aria-hidden="true">${body}<rect width="30" height="20" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="0.6"/></svg>`;
 }
 
 export interface TourHost {
