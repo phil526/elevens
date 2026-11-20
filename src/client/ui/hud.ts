@@ -26,7 +26,7 @@ export interface HudInfo {
   ringAt?: { x: number; y: number; visible: boolean; q: number } | null; // set-piece timing ring (q 0 = perfect)
   powerAt: { x: number; y: number; visible: boolean } | null;
   chargeTicks?: boolean; // pass charge picks near/middle/far teammates: show the bands
-  conn: { show: boolean; state: string; latency: number; colour: string } | null;
+  conn: { show: boolean; state: string; latency: number; colour: string; bars?: number } | null;
   guide: string;
   debug: string | null;
   /** The frame-rate readout (Settings > Graphics > Frame rate), or null when it is off. */
@@ -78,7 +78,7 @@ export class Hud {
       <div class="tring"><i></i></div>
       <div class="edgearrow"><i></i><b></b></div>
       <canvas class="radar" width="210" height="136"></canvas>
-      <div class="conn"><span class="dot"></span><span class="txt"></span></div>
+      <div class="conn"><span class="dot"></span><span class="sig" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="txt"></span></div>
       <div class="banner"><div class="big"></div><div class="sub"></div></div>
       <div class="hint"></div>
       <div class="toast"></div>
@@ -363,6 +363,14 @@ export class Hud {
       this.conn.style.display = 'block';
       (this.conn.querySelector('.txt') as HTMLElement).textContent = info.conn.latency >= 0 ? `${info.conn.state} · ${Math.round(info.conn.latency)} ms` : info.conn.state;
       (this.conn.querySelector('.dot') as HTMLElement).style.background = info.conn.colour;
+      // Signal bars (online): how quick and steady the link is.
+      const bars = info.conn.bars;
+      this.conn.classList.toggle('bars', bars !== undefined);
+      if (bars !== undefined) {
+        this.conn.querySelectorAll('.sig i').forEach((el, i) => { (el as HTMLElement).style.background = i < bars ? info.conn!.colour : ''; });
+        this.conn.title = `Signal ${bars} of 4`;
+        this.conn.dataset.bars = String(bars);
+      }
     } else this.conn.style.display = 'none';
     // Set-piece timing ring: strike when the outer ring closes on the inner one.
     const rg = info.ringAt;

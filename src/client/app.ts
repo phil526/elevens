@@ -22,7 +22,7 @@ import { CineDirector, introCaption } from './cine';
 import { groundFor, groundInSentence } from '../shared/grounds';
 import { OfflineSession } from './game/offline';
 import { defaultPicks, listDevices, localKind, moveToken, seatsFor, splitKeyMap, SPLIT_KEYS, type LocalDevice, type Seat, type SidePick } from './game/local';
-import type { Session } from './game/session';
+import { signalBars, type Session } from './game/session';
 import { ActionLayer, type InputSource } from './input/actions';
 import { GamepadSource } from './input/gamepad';
 import { attachKeyboard, KeyboardState } from './input/keyboard';
@@ -3430,6 +3430,7 @@ export class App {
       }
     };
     net.onRoom = (r) => this.onRoom(r);
+    net.onPong = () => { const el = this.ui.querySelector('.lobby-sig'); if (el) el.innerHTML = this.signalHtml(); };
     net.onSnapshot = (s, at) => { if (this.session instanceof OnlineSession) this.session.push(s, at); };
     net.onMessage = (m) => this.onServerMsg(m);
     net.connect(name);
@@ -3548,6 +3549,16 @@ export class App {
     }
   }
 
+  /** Your connection to the match server as signal bars and the round trip (lobby). */
+  private signalHtml(): string {
+    const n = this.net;
+    if (!n || n.latency < 0) return 'Your connection: measuring…';
+    const bars = signalBars(n.latency, n.jitter, 0);
+    const colour = bars <= 1 ? '#ff5a5f' : bars === 2 ? '#ffb020' : '#3ee08f';
+    const word = ['No signal', 'Poor', 'Fair', 'Good', 'Great'][bars];
+    return `Your connection: <span class="sig-inline" data-bars="${bars}">${[0, 1, 2, 3].map((i) => `<i style="height:${4 + i * 3}px;${i < bars ? `background:${colour}` : ''}"></i>`).join('')}</span> ${word} · ${Math.round(n.latency)} ms`;
+  }
+
   private renderLobby() {
     const r = this.room;
     if (!r) return;
@@ -3586,6 +3597,7 @@ export class App {
         <div class="row between"><span class="lbl">Your tactics</span>${this.seg('ment', [['defensive', 'Defensive'], ['balanced', 'Balanced'], ['attacking', 'Attacking']], me.mentality)}</div>
         <div class="row between"><span class="lbl">Match length${host ? '' : ' (host chooses)'}</span>${host ? this.seg('min', MATCH.allowedRealMinutes.map((m) => [String(m), `${m} min`]), String(r.minutes)) : `<span>${r.minutes} min</span>`}</div>
       </div>
+      <p class="note lobby-sig">${this.signalHtml()}</p>
       <p class="note" style="margin-top:12px">${esc(status)}</p>
       <div class="row end"><button class="btn" data-a="leave">Leave room</button><button class="btn ${me.ready ? '' : 'primary'}" data-a="ready" ${other ? '' : 'disabled'}>${me.ready ? 'Not ready' : 'Ready'}</button></div>
     </div>`);
