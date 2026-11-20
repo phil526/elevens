@@ -7,6 +7,7 @@
 // the recorded sounds are still loading (slow phone connections used to hear a hiss of white noise
 // for the first seconds of a match): the noise fallbacks only take over if the files failed to load.
 
+import { playAnthem } from './anthem';
 import { MenuSfx, type MenuSound } from './menusfx';
 
 export type WhistleKind = 'out' | 'restart' | 'kickoff' | 'penalty' | 'foul' | 'offside' | 'stop' | 'goal' | 'halftime' | 'fulltime';
@@ -662,6 +663,13 @@ export class GameAudio {
 
   private menuSfx: MenuSfx | null = null;
   /** A menu sound (Settings > Audio > Menu sounds), on the effects level. */
+  /** Both nations' anthems, one after the other (World tournament, before kick-off). */
+  anthems(ids: string[]) {
+    if (!this.ctx || !this.fx) return;
+    let at = this.ctx.currentTime + 0.4;
+    for (const id of ids) at = playAnthem(this.ctx, this.fx, id, at) + 0.8;
+  }
+
   ui(kind: MenuSound) {
     const ctx = this.ctx;
     if (!ctx || this.settings.menuSounds === false) return;

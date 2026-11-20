@@ -20,7 +20,7 @@ import { SKILL_GAMES, SKILL_HELP, SKILL_NAMES, type SkillGame } from '../../shar
 import { ALL_CLUBS, HR, ROLES, SK, teamById, teamRatings, type TeamDef } from '../../shared/teams';
 import type { MatchConfig } from '../../shared/types';
 import type { Match } from '../../shared/match';
-import type { Profile, Trophy } from '../profile';
+import { trophyName, type Profile, type Trophy } from '../profile';
 import { clubBadge } from '../ui/badge';
 import type { ViewState } from '../view';
 import { deleteClip, listClips, type GoalClip } from './clips';
@@ -30,7 +30,7 @@ const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const niceDate = (d: string) => { try { return new Date(d.length === 10 ? `${d}T12:00:00` : d).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); } catch { return d; } };
 
-export type ModeKind = 'career' | 'pro' | 'scenario' | 'skill';
+export type ModeKind = 'career' | 'pro' | 'scenario' | 'skill' | 'tournament';
 
 /** A match one of the modes wants played. */
 export interface ModeMatch {
@@ -637,7 +637,7 @@ export class ModeScreens {
   private cabinetHtml(profileTrophies: Trophy[]): string {
     type Shelf = { icon: string; cls: string; title: string; sub: string; date: string; club: string };
     const items: Shelf[] = [
-      ...profileTrophies.map((t) => ({ icon: '🏆', cls: t.kind === 'league' ? 'gold' : 'silver', title: t.kind === 'league' ? 'Elevens League' : 'Elevens Cup', sub: `${t.clubName} · ${t.size} clubs`, date: t.date, club: t.club })),
+      ...profileTrophies.map((t) => ({ icon: t.kind === 'world' ? '🌍' : '🏆', cls: t.kind === 'cup' ? 'silver' : 'gold', title: trophyName(t.kind), sub: `${t.clubName} · ${t.size} ${t.kind === 'world' ? 'nations' : 'clubs'}`, date: t.date, club: t.club })),
       ...this.store.cabinet.map((c: CabinetItem) => ({
         icon: c.kind === 'scenario' ? '🎖️' : c.kind === 'skill' ? '🎯' : c.kind === 'pro-award' ? '⭐' : c.kind === 'ranked' ? '🛡️' : '🏆',
         cls: c.kind === 'career-league' || c.kind === 'pro-league' ? 'gold' : c.kind === 'career-cup' ? 'silver' : 'medal',

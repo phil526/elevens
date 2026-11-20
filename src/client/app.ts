@@ -50,7 +50,7 @@ import { WEATHER_NAMES } from './render/weather';
 import type { ViewState } from './view';
 import { SLOW_MO, SlowMo } from './slowmo';
 import { CUP_SIZES, LEAGUE_SIZES, cupRounds, leagueTable, myFixture, newCompetition, opponentOf, recordResult, roundName, scoreText, type CompKind, type Competition, type Fixture } from '../shared/competition';
-import { ACHIEVEMENTS, SLOT_COUNT, applyClubs, goalSequence, loadStore, newProfile, recordMatch, recordTrophy, saveStore, today, unlock, type Achievement, type GoalDetail, type MatchSummary, type Profile, type ProfileStore } from './profile';
+import { ACHIEVEMENTS, SLOT_COUNT, applyClubs, goalSequence, loadStore, newProfile, recordMatch, recordTrophy, saveStore, today, trophyName, unlock, type Achievement, type GoalDetail, type MatchSummary, type Profile, type ProfileStore } from './profile';
 import { badgeSvg, clubBadge } from './ui/badge';
 import { CHARGE_SCALE, COLOUR_VISION, applyTextSize, pickOppKit, type ChargeSpeed, type ColourVision, type TextSize } from './access';
 import { Coach } from './tutorial';
@@ -65,6 +65,7 @@ import { Announcer, lineupLines, welcomeLines, type AnnounceTeam } from './audio
 import { captainIndex } from './render/look';
 import { loadChoice, loadMenuOpen, saveChoice, saveMenuOpen, type MatchChoice } from './quickmatch';
 import { ModeScreens, type ModeMatch } from './modes/screens';
+import { TournamentScreens } from './modes/tournament';
 import { clearModes } from './modes/store';
 import { ClipTheatre, makeClip, saveClip, shareVideo, type GoalClip } from './modes/clips';
 import type { SwitchSens, SwitchStyle } from '../shared/types';
@@ -682,6 +683,9 @@ export class App {
   /** The ceremony's caption if this result wins the competition for the player's club, else null. */
   private trophyCaption(v: ViewState): string | null {
     const s = this.session;
+    if (s instanceof OfflineSession && this.modeMatch?.kind === 'tournament') {
+      return this.tour.winsFinal(v) ? `<b>World champions</b><span>🌍</span><b>${esc(teamById(s.cfg.teams[0]).name)}</b><small>World tournament winners</small>` : null;
+    }
     const c = this.comp;
     if (!(s instanceof OfflineSession) || !this.compMatch || !c || c.champion || opponentOf(c) !== s.cfg.teams[1]) return null;
     const so = v.shootout;
@@ -709,9 +713,14 @@ export class App {
   /** Club level, weekly challenges and rewards for the active save slot (20 Nov 2026). */
   private levels: LevelStore = loadLevels(0);
   private levelSlot = -1;
-  /** A World tournament or friends league fixture is being played (they count as competitions). */
-  private tourMatch: { group: boolean } | null = null;
+  /** A friends league fixture is being played (it counts as a competition). */
   private friendsMatch: { league: string } | null = null;
+  /** World tournament (20 Nov 2026). */
+  private tour = new TournamentScreens({
+    set: (h, c) => this.set(h, c), on: (sel, fn) => this.on(sel, fn), seg: (n, v, c) => this.seg(n, v, c), bindSeg: (n, fn) => this.bindSeg(n, fn),
+    home: () => this.showMode(), play: (m) => this.playMode(m), slot: () => this.store.active, choice: () => this.choice,
+    trophy: (nation) => { this.profile.trophies.push({ kind: 'world', club: nation, clubName: teamById(nation).name, size: 16, date: today() }); this.saveProfile(); },
+  });
   /** What the last match did for the club level (shown on the full-time panel). */
   private levelNote = '';
 
@@ -1106,6 +1115,7 @@ export class App {
         ${open ? `<div class="more-modes">
           <button class="btn" data-a="local">Local multiplayer</button>
           <button class="btn" data-a="comp">Cup and league</button>
+          ${this.tour.menuButton()}
           <button class="btn" data-a="practice">Practice and tutorial</button>
           <button class="btn" data-a="online">Online match</button>
           <button class="btn" data-a="clubs">Profile and clubs</button>
@@ -1136,6 +1146,7 @@ export class App {
     this.on('[data-a=clubs]', () => { this.profileTab = 'career'; this.showProfile(); });
     this.on('[data-a=online]', () => this.showOnline());
     this.on('[data-a=levels]', () => this.openLevels());
+    this.on('[data-a=tour]', () => this.tour.show());
     this.on('[data-a=controls]', () => this.showControls(() => this.showMode()));
     this.on('[data-a=settings]', () => this.showSettings(() => this.showMode()));
   }
@@ -1675,6 +1686,8 @@ export class App {
     this.track = { restart: '', restartKick: '', lastKick: { text: '', x: 0, z: 0, player: -1, team: -1, from: '' }, goals: [] };
     this.analysis.reset(!(s instanceof OfflineSession && s.cfg.practice));
     this.levelNote = '';
+    // World tournament: both anthems before kick-off.
+    if (s instanceof OfflineSession && this.modeMatch?.kind === 'tournament') this.audio.anthems([...s.cfg.teams]);
     this.resultsNote = null;
     this.coach?.dispose();
     this.coach = null;
@@ -2176,7 +2189,7 @@ export class App {
     this.overlay = 'fulltime';
     if (first && mm.kind !== 'skill') this.recordForProfile(v);
     this.resultsNote = '';
-    const res = this.modes.finish(v, s.match);
+    const res = mm.kind === 'tournament' ? this.tour.finish(v) : this.modes.finish(v, s.match);
     const so = v.shootout;
     const pens = so && so.winner >= 0 ? [so.kicks[0].filter(Boolean).length, so.kicks[1].filter(Boolean).length] : null;
     const title = mm.kind === 'skill' ? ({ crossbar: 'Crossbar challenge', targets: 'Target practice' } as Record<string, string>)[mm.ref ?? ''] ?? 'Skill game'
@@ -2432,7 +2445,7 @@ export class App {
     // Club level and weekly challenges.
     this.syncLevels();
     const mp = this.analysis.passes.filter((x) => x.team === me);
-    const facts: MatchFacts = { ...m, passPct: mp.length >= 10 ? mp.filter((x) => x.ok).length / mp.length : NaN, kind: this.modeMatch?.kind ?? (this.tourMatch ? 'tournament' : this.friendsMatch ? 'friends' : mode) };
+    const facts: MatchFacts = { ...m, passPct: mp.length >= 10 ? mp.filter((x) => x.ok).length / mp.length : NaN, kind: this.modeMatch?.kind ?? (this.friendsMatch ? 'friends' : mode) };
     const lr = recordLevels(this.levels, facts);
     saveLevels(this.levelSlot, this.levels);
     this.levelNote = levelNoteHtml(this.levels, lr);
@@ -2615,7 +2628,7 @@ export class App {
       </div>`;
     } else if (tab === 'awards') {
       body = `<h3>Trophy cabinet</h3>
-        ${p.trophies.length ? `<div class="trophies">${p.trophies.map((t) => `<div class="trophy"><span>${t.kind === 'cup' ? '🏆' : '🥇'}</span><b>${t.kind === 'cup' ? 'Elevens Cup' : 'Elevens League'}</b><small>${esc(t.clubName)} · ${t.size} clubs · ${t.date}</small></div>`).join('')}</div>` : '<p class="note">Empty for now: win the cup or the league to fill it.</p>'}
+        ${p.trophies.length ? `<div class="trophies">${p.trophies.map((t) => `<div class="trophy"><span>${t.kind === 'cup' ? '🏆' : t.kind === 'world' ? '🌍' : '🥇'}</span><b>${trophyName(t.kind)}</b><small>${esc(t.clubName)} · ${t.size} ${t.kind === 'world' ? 'nations' : 'clubs'} · ${t.date}</small></div>`).join('')}</div>` : '<p class="note">Empty for now: win the cup or the league to fill it.</p>'}
         <h3>Achievements · ${Object.keys(p.achievements).length} of ${ACHIEVEMENTS.length}</h3>
         <div class="achievements">${ACHIEVEMENTS.map((a) => { const d = p.achievements[a.id]; return `<div class="ach ${d ? 'got' : ''}"><span class="ic">${d ? a.icon : '🔒'}</span><div><b>${esc(a.name)}</b><span>${esc(a.text)}</span>${d ? `<small>${d}</small>` : ''}</div></div>`; }).join('')}</div>`;
     } else if (tab === 'clubs') {
@@ -2662,6 +2675,7 @@ export class App {
       // The slot's career, Be a Pro, cabinet and club history go with it.
       clearModes(i);
       clearLevels(i);
+      TournamentScreens.clear(i);
       this.levelSlot = -1;
       this.modes.syncSlot(true);
       if (!this.store.slots.some(Boolean)) this.store.slots[i] = newProfile('Player 1');

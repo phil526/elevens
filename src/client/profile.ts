@@ -37,7 +37,9 @@ export interface Records {
   topScorer?: RecordEntry; // most goals by one player in a match
 }
 
-export interface Trophy { kind: 'cup' | 'league'; club: string; clubName: string; size: number; date: string }
+export interface Trophy { kind: 'cup' | 'league' | 'world'; club: string; clubName: string; size: number; date: string }
+
+export const trophyName = (k: Trophy['kind']) => (k === 'cup' ? 'Elevens Cup' : k === 'world' ? 'World Tournament' : 'Elevens League');
 
 export interface Profile {
   name: string;

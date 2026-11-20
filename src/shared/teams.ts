@@ -295,7 +295,29 @@ let squadOverrides = new Map<string, TeamDef>();
 export function setSquadOverrides(list: TeamDef[]) { squadOverrides = new Map(list.map((t) => [t.id, t])); }
 export function clearSquadOverrides() { squadOverrides = new Map(); }
 
-export const teamById = (id: string) => squadOverrides.get(id) ?? ALL_CLUBS.find((t) => t.id === id) ?? customClubs.find((t) => t.id === id) ?? TEAMS[0];
+/** Teams that aren't clubs (the World tournament's nations, 20 Nov 2026), added by their module. */
+let extraTeams: TeamDef[] = [];
+export function addTeams(list: TeamDef[]) { extraTeams = [...extraTeams.filter((t) => !list.some((x) => x.id === t.id)), ...list]; }
+
+export const teamById = (id: string) => squadOverrides.get(id) ?? ALL_CLUBS.find((t) => t.id === id) ?? customClubs.find((t) => t.id === id) ?? extraTeams.find((t) => t.id === id) ?? TEAMS[0];
+
+/** A national side for the World tournament: names from the nation's own name lists. */
+export function makeNation(n: { id: string; name: string; abbr: string; strength: number; flavour: Flavour; home: Kit; away: Kit; style: string; first: string[]; last: string[]; flag: { colours: [number, number, number] } }): TeamDef {
+  let h = 2166136261;
+  for (let i = 0; i < n.id.length; i++) h = Math.imul(h ^ n.id.charCodeAt(i), 16777619);
+  h >>>= 0;
+  const used = new Set<string>();
+  const names = ROLES.map((_, i) => {
+    let k = 0, last = '';
+    do { last = n.last[(h + i * 5 + k * 7) % n.last.length]; k++; } while (used.has(last) && k < 40);
+    used.add(last);
+    return `${n.first[((h >>> 4) + i * 7) % n.first.length]} ${last}`;
+  });
+  const t = makeClub(n.id, n.name, n.abbr, n.style, n.strength, n.flavour, { ...n.home }, { ...n.away }, names);
+  const [a, b, c] = n.flag.colours;
+  t.badge = { shape: 'round', emblem: 'star', bg: a, fg: b !== a ? b : c, trim: 0xf2c14e };
+  return t;
+}
 
 export type Flavour = 'pace' | 'passing' | 'defence' | 'attack' | 'balanced';
 export const FLAVOURS: Flavour[] = ['balanced', 'pace', 'passing', 'attack', 'defence'];
