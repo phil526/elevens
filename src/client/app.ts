@@ -3277,6 +3277,16 @@ export class App {
         break;
       case 'end':
         this.endReason = m.reason;
+        if (m.reason === 'fulltime' && this.session instanceof OnlineSession) {
+          // The final whistle normally arrives in the last snapshot; if it never shows (an older
+          // server, a lost frame), open the full-time panel anyway rather than leave play frozen.
+          const s = this.session;
+          setTimeout(() => {
+            if (this.session !== s || this.overlay === 'fulltime') return;
+            const v = s.view();
+            if (v) { this.lastPhase = 'fulltime'; this.openResults(v); }
+          }, 2500);
+        }
         if (m.reason !== 'fulltime' && this.session) {
           const v = this.session.view();
           if (v) {

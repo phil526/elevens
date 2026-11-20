@@ -377,7 +377,10 @@ export class Room {
       else if (now - this.halftimeAt > MATCH.halftimePauseOnline * 1000) { m.continueAfterHalftime(); this.halftimeAt = -1; }
     }
     this.snapCounter++;
-    if (this.snapCounter >= SIM.tickRate / SIM.snapshotRate) {
+    // The full-time tick always sends a snapshot: the match ends on this tick, so without it the
+    // players could miss the final whistle (2 ticks in 3 send none) and sit on a frozen match.
+    const final = m.phase === 'fulltime';
+    if (this.snapCounter >= SIM.tickRate / SIM.snapshotRate || final) {
       this.snapCounter = 0;
       const ev = this.pendingEvents;
       this.pendingEvents = [];
