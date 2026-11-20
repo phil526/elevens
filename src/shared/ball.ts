@@ -3,7 +3,7 @@
 // never moves more than BALL.maxSubstep per step (no tunnelling through posts,
 // bodies or the goal line).
 
-import { BALL, PITCH } from './config';
+import { BALL, PITCH, onPitchChange } from './config';
 import type { BallPhys, V3 } from './types';
 
 export type Crossing =
@@ -17,12 +17,15 @@ export interface BallStepResult {
   hitBar: boolean;
   hitNet: boolean;
   bounced: number; // impact speed of the strongest bounce this step
+  /** Street cage: the ball hit the boards at this speed this step. */
+  hitWall?: number;
 }
 
-const GL = PITCH.halfLength;
-const GW = PITCH.goalHalfWidth;
-const GH = PITCH.goalHeight;
-const PR = PITCH.postRadius;
+let GL = PITCH.halfLength;
+let GW = PITCH.goalHalfWidth;
+let GH = PITCH.goalHeight;
+let PR = PITCH.postRadius;
+onPitchChange(() => { GL = PITCH.halfLength; GW = PITCH.goalHalfWidth; GH = PITCH.goalHeight; PR = PITCH.postRadius; });
 const R = BALL.radius;
 
 /**
@@ -109,6 +112,34 @@ function reflect(v: { x: number; y: number; z: number }, nx: number, ny: number,
     v.y -= (1 + e) * vn * ny;
     v.z -= (1 + e) * vn * nz;
   }
+}
+
+/** How much speed the ball keeps off the boards of a street cage. */
+export const WALL_BOUNCE = 0.62;
+
+/**
+ * Street cage (PITCH.walls): the ball comes back off the side walls and the end walls, except
+ * through the goal mouth (the posts and bar themselves are collideFrame's). Returns the impact speed.
+ */
+function collideWalls(b: BallPhys, prevX: number): number {
+  const p = b.pos, v = b.vel;
+  let hit = 0;
+  const zl = PITCH.halfWidth - R;
+  if (Math.abs(p.z) > zl) {
+    const s = Math.sign(p.z);
+    p.z = s * zl;
+    if (v.z * s > 0) { hit = Math.max(hit, Math.abs(v.z)); v.z = -v.z * WALL_BOUNCE; v.x *= 0.92; v.y *= 0.92; }
+  }
+  const xl = GL - R;
+  if (Math.abs(p.x) > xl && Math.abs(prevX) <= GL) {
+    const mouth = Math.abs(p.z) < GW + PR && p.y < GH + PR;
+    if (!mouth) {
+      const s = Math.sign(p.x);
+      p.x = s * xl;
+      if (v.x * s > 0) { hit = Math.max(hit, Math.abs(v.x)); v.x = -v.x * WALL_BOUNCE; v.z *= 0.92; v.y *= 0.92; }
+    }
+  }
+  return hit;
 }
 
 /** Posts (vertical cylinders) and crossbar (horizontal cylinder along z). */
@@ -208,6 +239,7 @@ export function stepBall(b: BallPhys, dt: number, inPlay: boolean): BallStepResu
     if (imp > res.bounced) res.bounced = imp;
     collideFrame(b, res);
     collideNet(b, px, py, pz, res);
+    if (PITCH.walls) { const w = collideWalls(b, px); if (w > 0) res.hitWall = Math.max(res.hitWall ?? 0, w); }
     if (inPlay && !res.crossing) {
       const lineX = GL + R;
       if (Math.abs(px) <= lineX && Math.abs(b.pos.x) > lineX) {

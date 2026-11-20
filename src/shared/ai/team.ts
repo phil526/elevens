@@ -1,7 +1,7 @@
 // Layered AI (DESIGN §8): team plan -> role positions -> individual behaviour.
 // Plans refresh at 10 Hz; per-player movement intentions every tick.
 
-import { DIFFICULTY, MENTALITY, PITCH, applyGamePlan, type MentalityParams } from '../config';
+import { DIFFICULTY, FULL_PITCH, MENTALITY, PITCH, applyGamePlan, pitchScale, setPitch, type MentalityParams } from '../config';
 import { laneBlock, pressureOn } from '../kick';
 import { angleOf, clamp, dist, norm, wrapAngle } from '../math';
 import { jogSpeed, sprintTop } from '../movement';
@@ -20,7 +20,11 @@ import { LINK, applySetPiece, bestPartner, forwardRestartOption, blindRun, blind
 export const tacticsOf = (m: Match, team: number): Tactics => m.cfg.tactics?.[team] ?? DEFAULT_TACTICS;
 const DEFAULT_TACTICS = defaultTactics();
 /** Reference position for a role in the team's formation. */
-export const basePos = (m: Match, team: number, role: Role) => FORMATION_POS[tacticsOf(m, team).formation][role];
+export const basePos = (m: Match, team: number, role: Role) => {
+  const b = FORMATION_POS[tacticsOf(m, team).formation][role];
+  // Street cage: the same shape, shrunk to the cage (formationTarget works on the full-size one).
+  return PITCH.walls ? { x: (b.x * PITCH.halfLength) / FULL_PITCH.halfLength, z: (b.z * PITCH.halfWidth) / FULL_PITCH.halfWidth } : b;
+};
 /** Mentality with the sliders applied: line height moves the block, pressing changes how many go and from how far. */
 export function mentalityOf(m: Match, team: number): MentalityParams {
   const base = scoreMentality(applyGamePlan(applyPlayStyle(slidersOf(m, team), styleOf(m, team)), m.plan[team]), gameState(m, team));
@@ -270,8 +274,25 @@ function attackingShape(m: Match, p: Player, plan: TeamPlan): V2 {
   return fromFrame(m.attackDir(p.team), { x, z });
 }
 
-/** Role position for player p given the plan (world coordinates). */
+/**
+ * Role position for player p given the plan (world coordinates). In a street cage the shape is
+ * worked out as if on a full-size pitch and then shrunk to fit, so the same team shape plays small.
+ */
 export function formationTarget(m: Match, p: Player, plan: TeamPlan): V2 {
+  if (!PITCH.walls) return shapeTarget(m, p, plan);
+  const cage = m.pitch;
+  const kx = FULL_PITCH.halfLength / cage.halfLength, kz = FULL_PITCH.halfWidth / cage.halfWidth;
+  let t: V2;
+  setPitch(FULL_PITCH);
+  try {
+    t = shapeTarget(m, p, { ...plan, bx: plan.bx * kx, bz: plan.bz * kz, offsideLineFx: plan.offsideLineFx * kx });
+  } finally {
+    setPitch(cage);
+  }
+  return { x: t.x / kx, z: t.z / kz };
+}
+
+function shapeTarget(m: Match, p: Player, plan: TeamPlan): V2 {
   const dir = m.attackDir(p.team);
   const ment = mentalityOf(m, p.team);
   if (plan.inPossession && plan.bx > SHAPE_FROM && p.role !== 'GK') return attackingShape(m, p, plan);
@@ -348,7 +369,7 @@ function aiOffsideTrap(m: Match, team: number) {
   const c = m.players[b.owner];
   if (c.team === team) return;
   const own = Math.sign(m.ownGoalX(team));
-  const cfx = c.pos.x * -own; // how far the carrier is into our half (+ = in our half)
+  const cfx = (c.pos.x * -own) / pitchScale(); // how far the carrier is into our half (+ = in our half, full-pitch metres)
   if (cfx < -15 || cfx > 25) return;
   const facing = Math.cos(c.facing) * own > 0.4; // facing our goal
   if (!facing) return;
@@ -992,7 +1013,7 @@ export const PASS_MOVE = { chance: 0.55, back: 3, maxDist: 25, time: 2.2 };
 export function humanPassAndMove(m: Match, passer: Player, receiver: Player) {
   if (passer.role === 'GK' || passer.role === 'LCB' || passer.role === 'RCB' || passer.off || instrOf(m, passer) < 0) return;
   const dir = m.attackDir(passer.team);
-  const fx = passer.pos.x * dir;
+  const fx = (passer.pos.x * dir) / pitchScale();
   if (fx < -30 || fx > 40) return;
   if ((receiver.pos.x - passer.pos.x) * dir < -PASS_MOVE.back || dist(passer.pos, receiver.pos) > PASS_MOVE.maxDist) return;
   if (m.rng.chance(PASS_MOVE.chance)) passer.giveGoUntil = m.time + PASS_MOVE.time;
@@ -1423,7 +1444,7 @@ export function restartTargets(m: Match, r: Restart): V2[] {
       let T = formationTarget(m, p, plan);
       const f = toFrame(dir, T);
       if (p.role === 'GK') {
-        const gf = r.type === 'penalty' && !attacking ? { x: -PITCH.halfLength + 0.2, z: 0 } : { x: -PITCH.halfLength + 1.5 + Math.max(0, sf.x + 52.5) * 0.08, z: clamp(sf.z * 0.1, -2, 2) };
+        const gf = r.type === 'penalty' && !attacking ? { x: -PITCH.halfLength + 0.2, z: 0 } : { x: -PITCH.halfLength + 1.5 + Math.max(0, sf.x + PITCH.halfLength) * 0.08 * (PITCH.halfLength / FULL_PITCH.halfLength), z: clamp(sf.z * 0.1, -2, 2) };
         T = fromFrame(dir, gf);
       }
       switch (r.type) {
@@ -1436,7 +1457,7 @@ export function restartTargets(m: Match, r: Restart): V2[] {
           if (attacking && p.role === 'RCM') k = { x: -2, z: 7 };
           if (!attacking) {
             const d = Math.hypot(k.x, k.z);
-            if (d < PITCH.centreCircleRadius + 0.5) { const n = norm(k.x, k.z); k = { x: n.x * 9.8, z: n.z * 9.8 }; }
+            if (d < PITCH.centreCircleRadius + 0.5) { const n = norm(k.x, k.z), r = PITCH.centreCircleRadius + 0.65; k = { x: n.x * r, z: n.z * r }; }
             k.x = Math.min(k.x, -1);
           }
           T = fromFrame(dir, k);
@@ -1532,7 +1553,7 @@ export function restartTargets(m: Match, r: Restart): V2[] {
     const opponent = p.team !== r.team;
     if (r.type === 'kickoff') { out[p.id] = T; continue; }
     if (opponent) {
-      const rad = r.type === 'throwin' ? 2 : r.type === 'dropball' ? 4 : 9.15;
+      const rad = r.type === 'throwin' ? 2 : r.type === 'dropball' ? 4 : PITCH.restartDistance;
       if (!(r.type === 'penalty' && p.role === 'GK')) T = pushOut(T, spot, rad, awayFallback);
       if (r.type === 'goalkick' && m.inPenaltyArea(r.team, T, 0.5)) {
         const gx = m.ownGoalX(r.team);
@@ -1561,6 +1582,8 @@ export function restartTargets(m: Match, r: Restart): V2[] {
   const w = wallFor(m, r);
   if (w) w.ids.forEach((id, i) => { out[id] = w.spots[i]; });
   if (w && w.lier >= 0 && w.lieSpot) out[w.lier] = w.lieSpot;
+  // Street cage: nobody lines up behind the boards.
+  if (PITCH.walls) for (let i = 0; i < out.length; i++) if (out[i] && !m.players[i].off) out[i] = clampPitch(out[i]);
   return out;
 }
 

@@ -66,6 +66,7 @@ import { captainIndex } from './render/look';
 import { loadChoice, loadMenuOpen, saveChoice, saveMenuOpen, type MatchChoice } from './quickmatch';
 import { ModeScreens, type ModeMatch } from './modes/screens';
 import { TournamentScreens } from './modes/tournament';
+import { StreetScreens } from './modes/street';
 import { clearModes } from './modes/store';
 import { ClipTheatre, makeClip, saveClip, shareVideo, type GoalClip } from './modes/clips';
 import type { SwitchSens, SwitchStyle } from '../shared/types';
@@ -723,6 +724,11 @@ export class App {
     home: () => this.showMode(), play: (m) => this.playMode(m), slot: () => this.store.active, choice: () => this.choice,
     trophy: (nation) => { this.profile.trophies.push({ kind: 'world', club: nation, clubName: teamById(nation).name, size: 16, date: today() }); this.saveProfile(); },
   });
+  /** 5-a-side street matches (20 Nov 2026). */
+  private street = new StreetScreens({
+    set: (h, c) => this.set(h, c), on: (sel, fn) => this.on(sel, fn), seg: (n, v, c) => this.seg(n, v, c), bindSeg: (n, fn) => this.bindSeg(n, fn),
+    home: () => this.showMode(), play: (m) => this.playMode(m), slot: () => this.store.active, choice: () => this.choice,
+  });
   /** What the last match did for the club level (shown on the full-time panel). */
   private levelNote = '';
 
@@ -1118,6 +1124,7 @@ export class App {
           <button class="btn" data-a="local">Local multiplayer</button>
           <button class="btn" data-a="comp">Cup and league</button>
           ${this.tour.menuButton()}
+          ${this.street.menuButton()}
           <button class="btn" data-a="practice">Practice and tutorial</button>
           <button class="btn" data-a="online">Online match</button>
           <button class="btn" data-a="clubs">Profile and clubs</button>
@@ -1149,6 +1156,7 @@ export class App {
     this.on('[data-a=online]', () => this.showOnline());
     this.on('[data-a=levels]', () => this.openLevels());
     this.on('[data-a=tour]', () => this.tour.show());
+    this.on('[data-a=street]', () => this.street.show());
     this.on('[data-a=controls]', () => this.showControls(() => this.showMode()));
     this.on('[data-a=settings]', () => this.showSettings(() => this.showMode()));
   }
@@ -1658,7 +1666,7 @@ export class App {
       const r = this.ensureRenderer();
       const side = cfg.humans[0] || !cfg.humans[1] ? 0 : 1;
       this.dressRenderer(r, side ? oppDef : teamById(cfg.teams[0]), cfg.kits[side], side);
-      r.setupMatch([teamById(cfg.teams[0]), oppDef], cfg.kits, cfg.weather);
+      r.setupMatch([teamById(cfg.teams[0]), oppDef], cfg.kits, cfg.weather, !!cfg.street);
       this.lastTeams = { teams: [cfg.teams[0], cfg.teams[1]], kits: [cfg.kits[0], cfg.kits[1]] };
       this.kitOverride = oppDef !== teamById(opp) ? oppDef : null;
       const s = this.makeOffline(cfg);
@@ -1687,6 +1695,7 @@ export class App {
     if (s instanceof OfflineSession && this.kitOverride && s.cfg.teams[1] === this.kitOverride.id) s.match.teams[1] = this.kitOverride;
     this.track = { restart: '', restartKick: '', lastKick: { text: '', x: 0, z: 0, player: -1, team: -1, from: '' }, goals: [] };
     this.analysis.reset(!(s instanceof OfflineSession && s.cfg.practice));
+    this.audio.setVenue(s instanceof OfflineSession && !!s.cfg.street);
     this.levelNote = '';
     // World tournament: both anthems before kick-off.
     if (s instanceof OfflineSession && this.modeMatch?.kind === 'tournament') this.audio.anthems([...s.cfg.teams]);
@@ -2191,7 +2200,7 @@ export class App {
     this.overlay = 'fulltime';
     if (first && mm.kind !== 'skill') this.recordForProfile(v);
     this.resultsNote = '';
-    const res = mm.kind === 'tournament' ? this.tour.finish(v) : this.modes.finish(v, s.match);
+    const res = mm.kind === 'tournament' ? this.tour.finish(v) : mm.kind === 'street' ? this.street.finish(v) : this.modes.finish(v, s.match);
     const so = v.shootout;
     const pens = so && so.winner >= 0 ? [so.kicks[0].filter(Boolean).length, so.kicks[1].filter(Boolean).length] : null;
     const title = mm.kind === 'skill' ? ({ crossbar: 'Crossbar challenge', targets: 'Target practice' } as Record<string, string>)[mm.ref ?? ''] ?? 'Skill game'
@@ -2678,6 +2687,7 @@ export class App {
       clearModes(i);
       clearLevels(i);
       TournamentScreens.clear(i);
+      StreetScreens.clear(i);
       this.levelSlot = -1;
       this.modes.syncSlot(true);
       if (!this.store.slots.some(Boolean)) this.store.slots[i] = newProfile('Player 1');

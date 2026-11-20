@@ -5,11 +5,13 @@ import * as THREE from 'three';
 import { PITCH } from '../../shared/config';
 import { canvasTex, grassTexture, netTexture } from './textures';
 import { buildArena } from './arena';
+import { buildCage } from './cage';
 import { grassMaterial, NetPanel } from './vfx';
 import type { GroundStyle } from '../../shared/grounds';
 
-const L = PITCH.halfLength;
-const W = PITCH.halfWidth;
+// Read from PITCH when a ground is built (a street cage is smaller).
+let L = PITCH.halfLength;
+let W = PITCH.halfWidth;
 const LINE = 0.12;
 
 /** Flat ribbon geometry builder for line markings (y-up, lying on the grass). */
@@ -69,6 +71,7 @@ function pitchLines(): THREE.BufferGeometry {
     r.strip(ga, -PITCH.goalAreaHalfWidth - LINE / 2, ga, PITCH.goalAreaHalfWidth + LINE / 2);
     const spot = gx - s * PITCH.penaltySpot;
     r.disc(spot, 0, 0.22);
+    if (PITCH.walls) continue; // the cage: no arcs, no technical areas
     // Penalty arc: the part of the 9.15 m circle outside the area.
     const c = Math.acos((PITCH.penaltyAreaDepth - PITCH.penaltySpot) / PITCH.centreCircleRadius);
     if (s > 0) r.arc(spot, 0, PITCH.centreCircleRadius, Math.PI - c, Math.PI + c, LINE, 96);
@@ -80,7 +83,7 @@ function pitchLines(): THREE.BufferGeometry {
     }
   }
   // Technical areas (far touchline, in front of the dugouts) and the halfway-line marks for the fourth official area.
-  for (const s of [-1, 1]) {
+  if (!PITCH.walls) for (const s of [-1, 1]) {
     const x0 = s * 6, x1 = s * 18, z0 = -(W + 1), z1 = -(W + 4.2);
     r.strip(x0, z0, x0, z1, 0.08);
     r.strip(x1, z0, x1, z1, 0.08);
@@ -160,9 +163,13 @@ export interface StadiumOptions {
   awayShort?: string;
   /** The home club's ground (shared/grounds.ts). */
   ground?: GroundStyle;
+  /** 5-a-side street cage instead of the stadium (PITCH must be the street pitch). */
+  street?: boolean;
 }
 
 export function buildStadium(opts: StadiumOptions): THREE.Group {
+  L = PITCH.halfLength;
+  W = PITCH.halfWidth;
   const root = new THREE.Group();
   // Surround (track/concrete) and grass.
   const surround = new THREE.Mesh(new THREE.PlaneGeometry(220, 170), new THREE.MeshLambertMaterial({ color: 0x3d4a3a }));
@@ -170,7 +177,7 @@ export function buildStadium(opts: StadiumOptions): THREE.Group {
   surround.position.y = -0.02;
   root.add(surround);
   const gm = grassMaterial(grassTexture(18, opts.quality), opts.quality);
-  const grass = new THREE.Mesh(new THREE.PlaneGeometry(2 * L + 10, 2 * W + 12), gm.material);
+  const grass = new THREE.Mesh(opts.street ? new THREE.PlaneGeometry(2 * L + 0.2, 2 * W + 0.2) : new THREE.PlaneGeometry(2 * L + 10, 2 * W + 12), gm.material);
   root.userData.grass = gm.uniforms;
   root.userData.grassMap = gm.material.map;
   grass.rotation.x = -Math.PI / 2;
@@ -181,6 +188,13 @@ export function buildStadium(opts: StadiumOptions): THREE.Group {
   lines.receiveShadow = opts.quality > 0;
   root.add(lines);
   root.add(goal(1, opts.quality), goal(-1, opts.quality));
+  if (opts.street) {
+    // The street cage: boards, fence, floodlight poles and the flats around it. No stadium bowl.
+    const cage = buildCage(opts.quality, opts.homeColour, opts.awayColour);
+    root.add(cage.group);
+    root.userData.cage = cage;
+    return root;
+  }
 
   // Corner flags: render/clubflags.ts (spring-mounted posts in the home club's colours).
 

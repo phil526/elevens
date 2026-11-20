@@ -8,7 +8,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { BALL } from '../../shared/config';
+import { BALL, FULL_PITCH, STREET_PITCH, setPitch } from '../../shared/config';
 import type { Kit, PlayerDef, TeamDef } from '../../shared/teams';
 import { bootColour, captainIndex, playerBuild } from './look';
 import { hairStyleFor } from './hair';
@@ -951,7 +951,13 @@ export class GameRenderer {
   }
 
   /** Build (or rebuild) the scene for a match between these teams/kits. */
-  setupMatch(teams: [TeamDef, TeamDef], kits: ['home' | 'away', 'home' | 'away'], weather?: MatchWeather) {
+  /** A 5-a-side street cage is set up (no stadium, staff or assistants). */
+  cage = false;
+
+  setupMatch(teams: [TeamDef, TeamDef], kits: ['home' | 'away', 'home' | 'away'], weather?: MatchWeather, street = false) {
+    // The pitch the ground is built for (the match sets the same when it starts).
+    setPitch(street ? STREET_PITCH : FULL_PITCH);
+    this.cage = street;
     this.wantPlayers();
     this.glCheck.rearm();
     this.chooseWeather(weather);
@@ -964,14 +970,14 @@ export class GameRenderer {
     this.kitWear.reset();
     this.marks.reset(this.weather === 'snow');
     this.tifo.reset();
-    const key = `${teams[0].id}:${kits[0]}|${teams[1].id}:${kits[1]}|${this.gfx.preset}|${realisticPlayers(this.gfx) && !!this.playerAssets}`;
+    const key = `${teams[0].id}:${kits[0]}|${teams[1].id}:${kits[1]}|${this.gfx.preset}|${realisticPlayers(this.gfx) && !!this.playerAssets}|${street ? 'cage' : 'ground'}`;
     if (key === this.builtFor) { this.weatherTints(); this.smoke.setup(this.flarePos, QUALITY[this.gfx.preset]); return; }
     this.builtFor = key;
     for (const m of this.markers) this.scene.remove(m.ring, m.arrow, m.sprite);
     this.markers = [];
     if (this.stadium) this.scene.remove(this.stadium);
     const k0 = teams[0][kits[0]], k1 = teams[1][kits[1]];
-    this.stadium = buildStadium({ quality: QUALITY[this.gfx.preset], homeColour: k0.shirt, awayColour: k1.shirt, homeName: teams[0].name, awayName: teams[1].name, homeShort: teams[0].abbr, awayShort: teams[1].abbr, ground: groundFor(groundTeam(teams[0])) });
+    this.stadium = buildStadium({ quality: QUALITY[this.gfx.preset], homeColour: k0.shirt, awayColour: k1.shirt, homeName: teams[0].name, awayName: teams[1].name, homeShort: teams[0].abbr, awayShort: teams[1].abbr, ground: groundFor(groundTeam(teams[0])), street });
     this.scene.add(this.stadium);
     const arenaObj = this.stadium.userData.arena as Arena | undefined;
     this.pitchside = arenaObj ? new Pitchside(arenaObj.staff, QUALITY[this.gfx.preset]) : null;
@@ -980,7 +986,7 @@ export class GameRenderer {
     if (arenaObj && QUALITY[this.gfx.preset] >= 1) { this.blimp = new Blimp(arenaObj.roofHeight + 3.5); this.scene.add(this.blimp.group); }
     if (this.clubFlags) this.stadium.add(this.clubFlags.group);
     this.cornerFlags = new CornerFlags(teams[0].home);
-    this.stadium.add(this.cornerFlags.group);
+    if (!street) this.stadium.add(this.cornerFlags.group);
     if (this.pitchside) this.stadium.add(this.pitchside.group);
     if (arenaObj && QUALITY[this.gfx.preset] >= 1) { this.tifo.build(teams[0], k0, arenaObj.tiers.low, arenaObj.tiers.upr); this.stadium.add(this.tifo.group); }
     else this.tifo.dispose();
@@ -1305,7 +1311,7 @@ export class GameRenderer {
     const b = view.ball;
     const ballV = new THREE.Vector3(b.pos.x, b.pos.y, b.pos.z);
     // Wear builds from live play only (not while a cinematic replays recorded play).
-    const wearOn = this.gfx.wear !== false;
+    const wearOn = this.gfx.wear !== false && !this.cage; // a street cage is artificial turf
     const wet = this.weather === 'rain' ? this.weatherFx.cover : 0;
     if (wearOn && !this.cine) {
       this.pitchWear.update(view, dt, wet);
@@ -1520,6 +1526,12 @@ export class GameRenderer {
     this.managers?.update(view, dt, this.time);
     this.touchline?.update(view, dt, this.time);
     this.officials?.update(view, dt, this.time, this.officialStage);
+    if (this.cage) {
+      // Street: a referee only; no assistants, managers or touchline staff around the cage.
+      this.officials?.models.forEach((m, i) => { if (i > 0) m.root.visible = false; });
+      if (this.managers) this.managers.group.visible = false;
+      if (this.touchline) this.touchline.group.visible = false;
+    }
     this.blimp?.update(this.time, this.matchTime() === 'night');
     this.breath.update(view, dt, this.time, this.mouthY, wd ? { x: wd.wind * Math.cos(wd.windDir), z: wd.wind * Math.sin(wd.windDir) } : { x: 0, z: 0 }, this.managers?.mouths());
     this.blades?.update(this.camera.cam, this.time, b.pos, wd ? { x: wd.wind * Math.cos(wd.windDir), z: wd.wind * Math.sin(wd.windDir) } : { x: 0, z: 0 }, this.weather === 'snow' ? this.weatherFx.cover : 0);

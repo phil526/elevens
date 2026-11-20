@@ -444,6 +444,8 @@ export const isMidfielder = (r: Role) => r === 'CDM' || r === 'RCM' || r === 'LC
 const BENCH_FIRST = ['Tom', 'Leo', 'Sami', 'Kai', 'Ollie', 'Joel', 'Remy', 'Dev', 'Ilan', 'Marco', 'Finn', 'Arlo'];
 const BENCH_LAST = ['Hale', 'Brennan', 'Okafor', 'Lindqvist', 'Varga', 'Moreau', 'Teague', 'Achebe', 'Sorensen', 'Pike', 'Ruiz', 'Doyle'];
 /** Bench order: a keeper, then a defender, midfielder, winger and striker. */
+/** 5-a-side street (20 Nov 2026): the five who play; everyone else sits out. Index 9 (ST) stays the first controlled player. */
+export const STREET_ROLES: readonly Role[] = ['GK', 'RCB', 'LCB', 'RCM', 'ST'];
 export const BENCH_ROLES: Role[] = ['GK', 'RCB', 'RCM', 'RW', 'ST'];
 
 /**

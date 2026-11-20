@@ -266,7 +266,7 @@ export class GameAudio {
     const t = this.ctx.currentTime;
     this.master.gain.setTargetAtTime(s.muted ? 0 : s.master, t, 0.05);
     this.fx.gain.setTargetAtTime(s.effects, t, 0.05);
-    this.crowdBus.gain.setTargetAtTime(s.crowd, t, 0.05);
+    this.crowdBus.gain.setTargetAtTime(s.crowd * this.venueK, t, 0.05);
     this.musicBus.gain.setTargetAtTime(s.musicOn === false ? 0 : (s.music ?? 0.5), t, 0.05);
     this.voiceBus.gain.setTargetAtTime(s.commentary === false ? 0 : 0.95, t, 0.05);
   }
@@ -279,6 +279,13 @@ export class GameAudio {
     this.crowdLevel = ctx.createGain();
     this.crowdLevel.gain.value = 0;
     this.crowdLevel.gain.setTargetAtTime(this.crowdTarget, ctx.currentTime, 1.5);
+  }
+
+  /** How loud the crowd is for the venue: a full stadium, or a few onlookers at a street cage. */
+  private venueK = 1;
+  setVenue(street: boolean) {
+    this.venueK = street ? 0.16 : 1;
+    if (this.settings) this.apply(this.settings);
   }
 
   /** Fade the crowd out (back to menus / lobby). */

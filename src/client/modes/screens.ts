@@ -30,7 +30,7 @@ const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const niceDate = (d: string) => { try { return new Date(d.length === 10 ? `${d}T12:00:00` : d).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); } catch { return d; } };
 
-export type ModeKind = 'career' | 'pro' | 'scenario' | 'skill' | 'tournament';
+export type ModeKind = 'career' | 'pro' | 'scenario' | 'skill' | 'tournament' | 'street';
 
 /** A match one of the modes wants played. */
 export interface ModeMatch {

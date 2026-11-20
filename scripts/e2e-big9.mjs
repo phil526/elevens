@@ -142,6 +142,47 @@ try {
     check('no page errors (first device)', errors.length === 0, errors.slice(0, 3).join(' | '));
     await ctx.close();
   }
+
+  if (part('street')) {
+    const { ctx, page, errors, M, seen } = await newPage();
+    await page.goto(`${BASE}/?test`);
+    await page.waitForSelector('[data-a=quick]');
+    await page.click('[data-a=street]');
+    await page.waitForSelector('[data-a=sgo]');
+    check('street set-up lists clubs for both sides', await M(() => document.querySelectorAll('[data-sclub]').length >= 6 && document.querySelectorAll('[data-sopp]').length >= 6));
+    await page.screenshot({ path: OUT + 'big9-street-setup.png' });
+    await page.click('[data-a=sgo]');
+    check('a street match starts', await inMatch(seen));
+    check('five a side on a 40 m cage pitch, no subs', await M(() => {
+      const m = window.__elevens.session.match;
+      const on = [0, 1].map((t) => m.players.filter((p) => p.team === t && !p.off).length);
+      return on[0] === 5 && on[1] === 5 && m.pitch.length === 40 && m.pitch.walls && m.maxSubs === 0;
+    }));
+    check('the cage is built (no stadium bowl)', await M(() => { const st = window.__elevens.renderer.stadium; return !!st.userData.cage && !st.userData.arena && !!st.getObjectByName('street-cage'); }));
+    // The computer plays both sides for a while: the ball must stay in the cage.
+    await M(() => { window.__elevens.session.match.ctrl[0].human = false; });
+    await seen(() => window.__elevens.session.match.phase === 'play', null, 20000);
+    let inside = true;
+    for (let i = 0; i < 8; i++) {
+      await page.waitForTimeout(1500);
+      const r = await M(() => { const m = window.__elevens.session.match; return { x: m.ball.pos.x, z: m.ball.pos.z, r: m.restart?.type ?? '' }; });
+      if (Math.abs(r.z) > 12.2 || ['throwin', 'corner', 'goalkick'].includes(r.r)) inside = false;
+    }
+    check('the ball stays in the cage: no throw-ins, corners or goal kicks', inside);
+    await page.screenshot({ path: OUT + 'big9-street-play.png' });
+    await M(() => { const m = window.__elevens.session.match; m.ctrl[0].human = true; m.score[0] = 3; m.score[1] = 1; });
+    const ft = await toFullTime(M, seen);
+    check('full time shows the street record', ft && await M(() => /Street record: 1 won/.test(document.querySelector('.mode-note')?.textContent ?? '')));
+    await page.screenshot({ path: OUT + 'big9-street-ft.png' });
+    await page.click('[data-a=mcont]');
+    await page.waitForSelector('[data-a=sgo]');
+    check('Continue goes back to the street screen with the record', await M(() => /1<\/b> won/.test(document.querySelector('.street-rec')?.innerHTML ?? '')));
+    await page.click('[data-a=back]');
+    await page.waitForSelector('[data-a=quick]');
+    check('back on the menus the pitch is full size again once the backdrop runs', await seen(() => !window.__elevens.session && (window.__elevens.backdrop?.match ? window.__elevens.backdrop.match.pitch.length === 105 : true), null, 20000));
+    check('no page errors (street)', errors.length === 0, errors.slice(0, 3).join(' | '));
+    await ctx.close();
+  }
 } finally {
   await browser.close();
   server.kill();

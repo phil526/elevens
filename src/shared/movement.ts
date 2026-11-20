@@ -105,8 +105,9 @@ export function stepMovement(m: MoverState, wx: number, wz: number, mode: MoveMo
   m.pos.x += vx * dt;
   m.pos.z += vz * dt;
   // Players may run a few metres beyond the lines but not into the stands.
-  m.pos.x = clamp(m.pos.x, -PITCH.halfLength - 4, PITCH.halfLength + 4);
-  m.pos.z = clamp(m.pos.z, -PITCH.halfWidth - 3, PITCH.halfWidth + 3);
+  const ox = PITCH.walls ? -0.35 : 4, oz = PITCH.walls ? -0.35 : 3;
+  m.pos.x = clamp(m.pos.x, -PITCH.halfLength - ox, PITCH.halfLength + ox);
+  m.pos.z = clamp(m.pos.z, -PITCH.halfWidth - oz, PITCH.halfWidth + oz);
 
   const ns = Math.hypot(vx, vz);
   const faceRate = 10 + 6 * m.a.acceleration;

@@ -244,6 +244,8 @@ export interface MatchConfig {
   injuries?: boolean | 'more';
   /** Daily scenarios: pick the match up part of the way through (half, clock in the half, score, who kicks off, players sent off). */
   startAt?: { half: 1 | 2; clock: number; score: [number, number]; kickoff: 0 | 1; offs: number[] };
+  /** 5-a-side street (20 Nov 2026): a 40 x 24 m cage with walls, five a side, no offside, no subs. Offline only. */
+  street?: boolean;
 }
 
 export type MatchEventType =

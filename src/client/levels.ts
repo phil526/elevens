@@ -96,6 +96,7 @@ export const CHALLENGES: ChallengeDef[] = [
   { id: 'shots', text: 'Have 25 shots on target', target: 25, add: (f) => f.stats.onTarget },
   { id: 'online', text: 'Play 2 online matches', target: 2, add: (f) => (f.mode === 'online' ? 1 : 0) },
   { id: 'competition', text: 'Win 2 cup, league or tournament matches', target: 2, add: (f) => (won(f) && (f.mode === 'cup' || f.mode === 'league' || f.kind === 'tournament' || f.kind === 'career') ? 1 : 0) },
+  { id: 'street', text: 'Win 2 street 5-a-side matches', target: 2, add: (f) => (won(f) && f.kind === 'street' ? 1 : 0) },
   { id: 'tackles', text: 'Make 30 tackles', target: 30, add: (f) => f.stats.tackles },
   { id: 'hattrick', text: 'Score a hat-trick', target: 1, add: (f) => (Object.values(f.goals.reduce<Record<string, number>>((m, g) => ((m[g.scorer] = (m[g.scorer] ?? 0) + 1), m), {})).some((n) => n >= 3) ? 1 : 0) },
 ];

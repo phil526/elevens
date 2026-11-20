@@ -158,10 +158,10 @@ export class MatchAnalysis {
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
-const W = PITCH.length, H = PITCH.width;
 
 /** The pitch outline as SVG (x right, z down), 105 x 68 user units with a margin. */
 export function pitchSvg(inner: string, cls = ''): string {
+  const W = PITCH.length, H = PITCH.width;
   const L = PITCH.halfLength, Wd = PITCH.halfWidth, pa = PITCH.penaltyAreaDepth, pw = PITCH.penaltyAreaHalfWidth, ga = PITCH.goalAreaDepth, gw = PITCH.goalAreaHalfWidth;
   const line = 'fill="none" stroke="rgba(255,255,255,0.55)" stroke-width="0.4"';
   return `<svg class="an-pitch ${cls}" viewBox="${-L - 3} ${-Wd - 3} ${W + 6} ${H + 6}" preserveAspectRatio="xMidYMid meet" role="img">
@@ -195,7 +195,7 @@ export function analysisHtml(a: MatchAnalysis, v: ViewState, tab: AnalysisTab, m
   } else if (tab === 'heat') {
     const h = a.heat[heatTeam];
     const max = Math.max(1, ...h);
-    const cw = W / HEAT_X, ch = H / HEAT_Z;
+    const cw = PITCH.length / HEAT_X, ch = PITCH.width / HEAT_Z;
     const c = col(heatTeam);
     const cells = h.map((n, i) => n ? `<rect x="${(-PITCH.halfLength + (i % HEAT_X) * cw).toFixed(2)}" y="${(-PITCH.halfWidth + Math.floor(i / HEAT_X) * ch).toFixed(2)}" width="${cw.toFixed(2)}" height="${ch.toFixed(2)}" fill="${c}" fill-opacity="${(0.08 + 0.8 * (n / max) ** 0.8).toFixed(2)}" />` : '').join('');
     body = `<div class="seg an-heat-team">${([0, 1] as const).map((t) => `<button class="${t === heatTeam ? 'on' : ''}" data-heat="${t}">${name(t)}</button>`).join('')}</div>${pitchSvg(cells)}<p class="note">Where ${name(heatTeam)}'s outfield players spent the match, attacking to the right.</p>`;
