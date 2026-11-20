@@ -5,13 +5,13 @@ import { DIFFICULTY, MENTALITY, PITCH, applyGamePlan, type MentalityParams } fro
 import { laneBlock, pressureOn } from '../kick';
 import { angleOf, clamp, dist, norm, wrapAngle } from '../math';
 import { jogSpeed, sprintTop } from '../movement';
-import { FORMATION_POS, defaultTactics, isDefender, isForward, isMidfielder, type Role, type Tactics } from '../teams';
+import { FORMATION_POS, defaultTactics, footProfile, isDefender, isForward, isMidfielder, type Role, type Tactics } from '../teams';
 import type { Match, KickRequest } from '../match';
 import type { Player, Restart, V2 } from '../types';
 import { carrierAI } from './carrier';
 import { gameState, scoreMentality } from './gamestate';
 import { applyPlayStyle, styleOf } from '../playstyle';
-import { aiPenalty, favouriteSide, setPieceRatings, takerSideZ, techVariant } from '../setpieces';
+import { SP_ON, aiPenalty, favouriteSide, setPieceRatings, takerSideZ, techVariant } from '../setpieces';
 import { G6 } from '../switches';
 import { updateHumanKeeper, updateKeeper } from './keeper';
 import { LINK, applySetPiece, bestPartner, forwardRestartOption, blindRun, blindTarget, boxMarkSpot, linkLevel, overlapAround, secondBalls, setPieceDefence, setPieceMarkSpot, shotLine, trackBoxRunners, underlapInside, underlapTo, unseenRunner, wantUnderlap, MATES3 } from './mates3';
@@ -40,7 +40,7 @@ const widthK = (m: Match, team: number) => 1 + 0.08 * tacticsOf(m, team).width;
 /** Set-piece routines, cycled by the taker's switch button (Q / LB / RUN) before the kick. */
 export const ROUTINES = {
   corner: ['Standard', 'Near post', 'Far post', 'Short corner', 'Edge of the box'],
-  freekick: ['Standard', 'Lay-off', 'Far post'],
+  freekick: ['Standard', 'Lay-off', 'Far post', 'Two over the ball', 'Attackers in the wall'],
   throwin: ['Short', 'Long throw into the box'],
 } as const;
 
@@ -78,6 +78,28 @@ export function layoffTaker(m: Match, r: Restart): number {
   const c = m.teamPlayers(r.team).filter((p) => p.id !== r.taker && p.role !== 'GK' && !isDefender(p.role)).sort((a, b) => b.a.shooting - a.a.shooting)[0];
   return c ? c.id : -1;
 }
+/**
+ * Two over the ball (20 Nov 2026): the other free-kick specialist (the opposite foot if there is
+ * one) stands beside the ball and runs over it first as a dummy.
+ */
+export function secondTaker(m: Match, r: Restart): number {
+  const tf = footProfile(m.players[r.taker].def).foot;
+  const c = m.teamPlayers(r.team).filter((p) => p.id !== r.taker && p.role !== 'GK')
+    .sort((a, b) => (footProfile(b.def).foot !== tf ? 12 : 0) + setPieceRatings(b.def).fk - ((footProfile(a.def).foot !== tf ? 12 : 0) + setPieceRatings(a.def).fk))[0];
+  return c ? c.id : -1;
+}
+/** Where the dummy stands: beside the ball on the far side from the taker's run-up. */
+export function dummySpot(m: Match, r: Restart): V2 {
+  const g = norm(m.attackDir(r.team) * PITCH.halfLength - r.spot.x, -r.spot.z);
+  const foot = footProfile(m.players[r.taker].def).foot;
+  const lx = g.z, lz = -g.x; // the taker's run comes in from this side for a right-footer
+  return { x: r.spot.x - g.x * 1.6 - lx * foot * 1.5, z: r.spot.z - g.z * 1.6 - lz * foot * 1.5 };
+}
+/** Attackers in the wall: two forwards stand on the end of the defenders' wall, blocking the keeper's view. */
+export function wallAttackers(m: Match, r: Restart): number[] {
+  return m.teamPlayers(r.team).filter((p) => p.id !== r.taker && p.role !== 'GK' && (isForward(p.role) || p.role === 'RCM' || p.role === 'LCM')).sort((a, b) => b.def.attrs.tackling - a.def.attrs.tackling || a.id - b.id).slice(0, 2).map((p) => p.id);
+}
+
 /** Lay-off: a teammate stands beside the ball, a step towards the middle, to set it for a strike. */
 function layoffSpot(m: Match, r: Restart): V2 {
   const dir = m.attackDir(r.team);
@@ -1458,6 +1480,16 @@ export function restartTargets(m: Match, r: Restart): V2[] {
           const rt = r.routine ?? 0;
           if (!attacking || p.role === 'GK' || !rt) break;
           if (rt === 1 && p.id === layoffTaker(m, r)) T = layoffSpot(m, r);
+          if (rt === 3 && p.id === secondTaker(m, r)) T = dummySpot(m, r);
+          if (rt === 4) {
+            const w = wallFor(m, r);
+            const k = wallAttackers(m, r).indexOf(p.id);
+            if (w && k >= 0) {
+              const half = (w.ids.length / 2) * 0.75 + 0.4;
+              const g = norm(w.centre.x - spot.x, w.centre.z - spot.z);
+              T = { x: w.centre.x + w.perp.x * (k ? half : -half) - g.x * 0.5, z: w.centre.z + w.perp.z * (k ? half : -half) - g.z * 0.5 };
+            }
+          }
           if (rt === 2 && (isForward(p.role) || p.role === 'RCB' || p.role === 'LCB')) {
             const s = Math.sign(sf.z) || 1;
             T = fromFrame(dir, { x: 44 + (p.slot % 3) * 1.5, z: -s * (3 + (p.slot % 4) * 1.6) });
@@ -1528,6 +1560,7 @@ export function restartTargets(m: Match, r: Restart): V2[] {
   // Defensive wall for central free kicks within shooting range.
   const w = wallFor(m, r);
   if (w) w.ids.forEach((id, i) => { out[id] = w.spots[i]; });
+  if (w && w.lier >= 0 && w.lieSpot) out[w.lier] = w.lieSpot;
   return out;
 }
 
@@ -1541,7 +1574,7 @@ export function wallSize(d: number): number {
  * and where, 9.4 m from the ball on the line to goal, moved sideways by the wall's shift.
  * Null when the kick is out of range.
  */
-export function wallFor(m: Match, r: Restart): { team: number; ids: number[]; spots: V2[]; centre: V2; perp: V2 } | null {
+export function wallFor(m: Match, r: Restart): { team: number; ids: number[]; spots: V2[]; centre: V2; perp: V2; lier: number; lieSpot: V2 | null } | null {
   if (r.type !== 'freekick') return null;
   const spot = r.spot;
   const defTeam = 1 - r.team;
@@ -1556,12 +1589,21 @@ export function wallFor(m: Match, r: Restart): { team: number; ids: number[]; sp
     // Keep the wall in a fixed order along it, so moving it doesn't make players swap places.
     .sort((a, c) => ((a.pos.x - spot.x) * perp.x + (a.pos.z - spot.z) * perp.z) - ((c.pos.x - spot.x) * perp.x + (c.pos.z - spot.z) * perp.z) || a.id - c.id)
     .map((p) => p.id);
-  const centre = { x: spot.x + g.x * 9.4 + perp.x * shift, z: spot.z + g.z * 9.4 + perp.z * shift };
+  // A wall creeping in before the kick stands closer (the referee pushes it back).
+  const at = 9.4 - (r.wall?.creep ?? 0);
+  const centre = { x: spot.x + g.x * at + perp.x * shift, z: spot.z + g.z * at + perp.z * shift };
   const spots = ids.map((_, i) => {
     const off = (i - (ids.length - 1) / 2) * 0.75;
     return clampPitch({ x: centre.x + perp.x * off, z: centre.z + perp.z * off });
   });
-  return { team: defTeam, ids, spots, centre, perp };
+  // One more defender lies down behind it against a shot under a jumping wall (20 Nov 2026).
+  let lier = -1, lieSpot: V2 | null = null;
+  if (r.wall?.lie) {
+    const used = new Set(ids);
+    const l = m.teamPlayers(defTeam).filter((p) => p.role !== 'GK' && !used.has(p.id)).sort((a, c) => dist(a.pos, centre) - dist(c.pos, centre) || a.id - c.id)[0];
+    if (l) { lier = l.id; lieSpot = clampPitch({ x: centre.x + g.x * 0.9, z: centre.z + g.z * 0.9 }); }
+  }
+  return { team: defTeam, ids, spots, centre, perp, lier, lieSpot };
 }
 
 /** AI decision for a restart (also used to auto-take a human restart after the timeout). */
@@ -1600,6 +1642,8 @@ export function chooseRestartKick(m: Match, r: Restart, auto = false): KickReque
       if ((!r.indirect && goalD < 28 && Math.abs(taker.pos.z) < 18) || m.skill) {
         const gk = m.keeper(1 - team);
         const aimZ = (gk.pos.z > 0 ? -1 : 1) * m.rng.range(2.2, 3.1);
+        // A knuckleball from further out now and then (20 Nov 2026).
+        if (SP_ON.knuckle && goalD > 22 && !m.skill && m.rng.chance(0.25)) return { kind: 'shot', power: m.rng.range(0.8, 0.92), placed: false, knuckle: true, target: { x: dir * PITCH.halfLength, y: 0, z: aimZ * 0.6 } };
         return { kind: 'shot', power: m.rng.range(0.65, 0.8), placed: true, target: { x: dir * PITCH.halfLength, y: 0, z: aimZ } };
       }
       break;

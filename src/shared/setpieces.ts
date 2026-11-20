@@ -9,7 +9,7 @@ import type { PlayerDef, Tactics } from './teams';
 import type { Player, TeamIndex } from './types';
 
 /** Feature switches for benches and tests (all on in the game). */
-export const SP_ON = { ratings: true, takers: true, pressure: true, techniques: true, duel: true, habits: true };
+export const SP_ON = { ratings: true, takers: true, pressure: true, techniques: true, duel: true, habits: true, knuckle: true, routines: true, wall: true, referee: true };
 
 /** Tuning. */
 export const SETPIECE = {
@@ -29,6 +29,8 @@ export const SETPIECE = {
   panenkaStayGk: 0.16,
   /** Shot-power charge a Panenka is struck with. */
   panenkaPower: 0.3,
+  /** A keeper who dives this long before the kick has left his line: a save is retaken. */
+  offLine: 0.6,
   /** Biggest ring wobble under pressure. */
   shakeMax: 0.8,
 } as const;

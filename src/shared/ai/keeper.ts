@@ -122,7 +122,8 @@ export function updateKeeper(m: Match, gk: Player, _dt: number, humanGk = false)
   // the keeper shuffling across until then.
   const towardGoal = b.vel.x * side > 2 && (b.state === 'flight' || b.state === 'free');
   const tag = `read:${m.lastKickTime.toFixed(3)}`;
-  if (towardGoal && m.time - m.lastKickTime > lvl.keeperReaction + 0.04 * m.lastKickHelp + (humanGk ? 0.1 : 0) && b.lastTouchTeam !== gk.team) {
+  const blind = m.keeperBlind && m.keeperBlind.team === gk.team && m.time < m.keeperBlind.until ? m.keeperBlind.extra : 0;
+  if (towardGoal && m.time - m.lastKickTime > lvl.keeperReaction + 0.04 * m.lastKickHelp + (humanGk ? 0.1 : 0) + blind && b.lastTouchTeam !== gk.team) {
     const planeX = gk.pos.x;
     let read = reads.get(gk);
     if (!read || read.tag !== tag) {
