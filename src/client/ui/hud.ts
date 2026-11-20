@@ -167,7 +167,7 @@ export class Hud {
     if (!p) return kind === 'pen' ? 'Penalty' : 'Free kick';
     const rt = setPieceRatings(p.def);
     const pr = matchPressureView({ ...v, practice: this.practice }, p.team);
-    return `${kind === 'pen' ? 'Penalty' : 'Free kick'} · ${p.def.short} ${kind === 'pen' ? 'PEN' : 'FK'} ${kind === 'pen' ? rt.pen : rt.fk} · nerve ${rt.comp}${pr >= 0.55 ? ' · big pressure' : pr >= 0.3 ? ' · pressure' : ''}`;
+    return `${kind === 'pen' ? 'Penalty' : 'Free kick'} · ${p.def.short} ${kind === 'pen' ? 'PEN' : 'FK'} ${kind === 'pen' ? rt.pen : rt.fk} · nerve ${rt.comp}${pr >= 0.55 ? ' · big pressure' : pr >= 0.45 ? ' · under pressure' : ''}`;
   }
 
   private g6Call(view: ViewState, e: MatchEvent, tm: string) {
@@ -386,7 +386,7 @@ export class Hud {
       const fav = tk ? favouriteSide(tk.def) : null;
       this.hint.style.display = 'block';
       this.hint.textContent = (r.gkCommit !== undefined ? (r.gkCommit === 0 ? 'Standing tall. ' : 'You have picked your side. ') : '') +
-        `Their penalty${tk ? ` (${tk.def.short}${fav ? `, usually goes to your ${fav.side === 'L' ? 'right' : 'left'}` : ''})` : ''}: move along your line with the stick, point the way and press SHOOT to dive, or centred to stand tall. Go too early and he will see it`;
+        `Their penalty${tk ? ` (${tk.def.short}${fav ? `, usually puts it to his ${fav.side === 'L' ? 'left' : 'right'}` : ''})` : ''}: move along your line with the stick, point the way and press SHOOT to dive, or centred to stand tall. Go too early and he will see it`;
     } else if (r && r.type === 'freekick' && lt !== undefined && r.team !== lt && v.humans[lt] && Math.hypot(r.spot.x + PITCH.halfLength * v.attackDir[lt], r.spot.z) < 30) {
       this.hint.style.display = 'block';
       this.hint.textContent = 'Their free kick: move the stick to shift your wall, SWITCH changes how many stand in it, SHOOT makes it jump, PASS puts a man down behind it';

@@ -1638,12 +1638,14 @@ export function chooseRestartKick(m: Match, r: Restart, auto = false): KickReque
       return { kind: 'cross', receiver: t.id, target: { x: t.pos.x, y: 0, z: t.pos.z } };
     }
     case 'freekick': {
-      const goalD = dist(taker.pos, { x: dir * PITCH.halfLength, z: 0 });
-      if ((!r.indirect && goalD < 28 && Math.abs(taker.pos.z) < 18) || m.skill) {
+      // Measured from the ball, not the taker standing back for his run-up (20 Nov 2026), so a
+      // free kick in range is always a shot whichever angle he sets up at.
+      const goalD = dist(r.spot, { x: dir * PITCH.halfLength, z: 0 });
+      if ((!r.indirect && goalD < 26 && Math.abs(r.spot.z) < 18) || m.skill) {
         const gk = m.keeper(1 - team);
         const aimZ = (gk.pos.z > 0 ? -1 : 1) * m.rng.range(2.2, 3.1);
         // A knuckleball from further out now and then (20 Nov 2026).
-        if (SP_ON.knuckle && goalD > 22 && !m.skill && m.rng.chance(0.25)) return { kind: 'shot', power: m.rng.range(0.8, 0.92), placed: false, knuckle: true, target: { x: dir * PITCH.halfLength, y: 0, z: aimZ * 0.6 } };
+        if (SP_ON.knuckle && goalD > 20 && !m.skill && m.rng.chance(0.25)) return { kind: 'shot', power: m.rng.range(0.8, 0.92), placed: false, knuckle: true, target: { x: dir * PITCH.halfLength, y: 0, z: aimZ * 0.6 } };
         return { kind: 'shot', power: m.rng.range(0.65, 0.8), placed: true, target: { x: dir * PITCH.halfLength, y: 0, z: aimZ } };
       }
       break;

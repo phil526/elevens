@@ -1398,7 +1398,8 @@ export class GameRenderer {
       used.add(style);
       const m = this.markers[style];
       const show = live && view.humans[t] && pid >= 0;
-      m.sprite.visible = show;
+      // Behind the taker in the set-piece view, his pointer would sit in the middle of the picture.
+      m.sprite.visible = show && !(this.camera.setPieceK > 0.4 && view.restart && view.restart.taker === pid);
       m.ring.visible = m.arrow.visible = show && mk.playerRing !== false;
       if (!show) continue;
       const p = view.players[pid];

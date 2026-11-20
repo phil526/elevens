@@ -1,6 +1,7 @@
 // Browser checks for the 19 Nov 2026 gameplay additions: club playing styles on the club cards,
 // Settings rows (shot assistance, home crowd momentum), the momentum meter, power shot label,
 // modifier skill moves, free-kick bend and dip with its dotted line, and the tactical foul.
+// (The set-piece camera is off here: these key presses assume the broadcast view.)
 // Usage: npm run build && node scripts/e2e-gameplay6.mjs. Writes screenshots and a report to scripts/out/.
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -21,7 +22,7 @@ const browser = await chromium.launch({ executablePath: exe, args: ['--use-gl=an
 try {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
   await ctx.addInitScript((p) => {
-    localStorage.setItem('elevens.settings.v1', JSON.stringify({ graphics: { preset: p, renderScale: 1, shadows: true }, matchIntro: false }));
+    localStorage.setItem('elevens.settings.v1', JSON.stringify({ graphics: { preset: p, renderScale: 1, shadows: true }, matchIntro: false, camera: { setPiece: false } }));
   }, preset);
   const page = await ctx.newPage();
   page.on('pageerror', (e) => report.consoleErrors.push(e.message));
@@ -117,8 +118,11 @@ try {
   await waitFor(() => window.__elevens.session.match.restart?.ready, 15000);
   await sleep(200);
   // (Software rendering runs the match slower than real time, so hold the keys a little longer.)
-  await page.keyboard.down('KeyE'); await page.keyboard.down('KeyW'); await sleep(1100); await page.keyboard.up('KeyW');
-  await page.keyboard.down(fwd); await sleep(450); await page.keyboard.up(fwd); await page.keyboard.up('KeyE');
+  // Held until the value moves (20 Nov 2026: fixed holds missed it when the frame rate dipped).
+  await page.keyboard.down('KeyE'); await page.keyboard.down('KeyW');
+  await waitFor(() => Math.abs(window.__elevens.session.match.restart?.curve ?? 0) > 0.4, 5000); await page.keyboard.up('KeyW');
+  await page.keyboard.down(fwd);
+  await waitFor(() => (window.__elevens.session.match.restart?.dip ?? 0) > 0.3, 5000); await page.keyboard.up(fwd); await page.keyboard.up('KeyE');
   await sleep(150);
   const fk = await M(() => { const a = window.__elevens; const r = a.session.match.restart; return { curve: r?.curve ?? 0, dip: r?.dip ?? 0, line: !!a.renderer?.fkLine?.visible, hint: document.querySelector('.hint')?.textContent ?? '' }; });
   check('free kick: the modifier and stick set bend and dip, with the dotted line and hint', Math.abs(fk.curve) > 0.3 && fk.dip > 0.2 && fk.line && /bend/.test(fk.hint), JSON.stringify(fk));

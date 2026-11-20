@@ -259,6 +259,31 @@ When your team takes a free kick, corner or penalty, a yellow target appears. Mo
 
 The computer picks its own target when it takes a set piece.
 
+## Free kicks and penalties (20 Nov 2026)
+
+**Takers and ratings.** Every player has a penalty (PEN), free-kick (FK) and nerve rating, built from his attributes. The pause menu and Match settings → More options have **Set-piece takers**: press Penalties, Free-kick shots or Corners to go through the players (best first), or All auto. With nobody chosen, the best penalty taker and free-kick specialist step up. A higher rating means a smaller error; under pressure (late in a close game, extra time, a shootout) a nervous taker's timing ring wobbles, and a computer taker's error grows. The restart hint shows the taker's rating, nerve and the pressure.
+
+**Taking a penalty.** Aim along the line and time the ring as before, then:
+- **Stutter:** press the skill button (U; R3 on a controller) before the kick. He checks in his run-up; a computer keeper may go early, and a composed taker then sends it the other way. A little less accurate.
+- **Panenka:** chip (LOB and SHOOT). A soft dink down the middle: a goal if the keeper dives, a save if he stays.
+- **Side-foot:** a placed shot (tap SWITCH while holding SHOOT). Slower, most accurate, aimed inside the post.
+- **Blast:** a power shot (modifier + sprint + SHOOT). Fast and hard to save, but wilder.
+- Keepers remember: after three penalties the same way the computer keeper leans that way (a toast warns you).
+
+**Facing a penalty.** You are given your keeper. Move along the line with the stick (dancing on the line can put a nervous taker off), then point a way and press SHOOT to dive, or leave the stick centred and press SHOOT to stand tall. Commit too early and the taker sees it and goes the other way; save it after leaving your line too early and the referee orders a retake. The hint says which side the taker usually goes.
+
+**Direct free kicks** (within about 30 m):
+- **Run-up:** the skill button cycles standard, long (more pace, a little less accurate), short (tidier, softer) and straight-on (less curl). The taker moves to match.
+- **Knuckleball:** modifier + sprint + SHOOT. No spin: it wobbles in the air and dips late. Harder for the keeper, harder to control.
+- **Routines** (SWITCH before the kick): the free-kick list now also has **Two over the ball** (a second man runs over it first; a computer wall may jump at him) and **Attackers in the wall** (two of yours stand at the ends of their wall and peel off, unsighting the keeper).
+- The referee paces out the ten yards and sprays a line in front of the wall and a mark by the ball. Waiting too long gives a computer wall time to creep forward: the referee pushes it back, and books one of them the second time.
+
+**Defending a free kick:** as before, plus PASS puts a man lying down behind your wall against a shot under it. The computer sometimes does the same.
+
+**Shootouts.** Both teams stand arm in arm on the halfway line; each taker walks up to the spot (press SHOOT to skip the walk), the crowd whistles at the away side's kicks, and the score bug counts down to sudden death.
+
+**Set-piece camera** (Settings → Camera, on by default): for penalties and free kicks in shooting range the camera drops in behind the ball, looking at goal, then follows the shot. The stick works as you look in this view (up is towards goal). Off keeps your normal camera.
+
 ## Fouls, cards and advantage
 
 Fouls can bring a yellow card; a second yellow or a straight red sends the player off, and the team plays on with ten. Denying an obvious goal-scoring chance with a foul outside the area is a red card. If the fouled side keeps the ball in a useful position, the referee may play advantage (an "ADVANTAGE" banner); if they lose it within 2.5 seconds the free kick is given where the foul happened. Sent-off players show as red cards on the score bar; booked players show a yellow marker on the player card.

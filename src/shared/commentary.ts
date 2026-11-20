@@ -109,7 +109,8 @@ export class Commentary {
   private lastLine = -99;
   private lastFill = -99;
   private recent: string[] = [];
-  private lastShot: { id: number; at: number; far: boolean } = { id: -1, at: -99, far: false };
+  private lastShot: { id: number; at: number; far: boolean; pen?: boolean } = { id: -1, at: -99, far: false };
+  private lastRestart = '';
   private lastKicker = -1;
   private pendingSub: string[] = [];
   /** Seconds a line is assumed to take, for pacing (about 2.6 words a second). */
@@ -155,19 +156,22 @@ export class Commentary {
           break;
         case 'kick': {
           if (e.text === 'shot' || e.text === 'volley' || e.text === 'header') {
-            const far = (e.power ?? 0) > 22 && ctx.progress < 0.62;
-            this.lastShot = { id: e.player ?? -1, at: ctx.now, far };
+            // Far out: judged from where it was struck (the ball has no owner by the time the kick is heard).
+            const pen = this.lastRestart === 'penalty';
+            const far = !pen && (e.power ?? 0) > 22 && (e.x !== undefined ? PITCH.halfLength - Math.abs(e.x) > 20 : ctx.progress < 0.62);
+            this.lastShot = { id: e.player ?? -1, at: ctx.now, far, pen };
             if (far && this.rng.chance(0.5)) add(this.line('shotFar', 1, ctx, P));
           } else if (e.text === 'through' && this.rng.chance(0.25 * this.chat)) add(this.line('through', 0, ctx, P));
           else if (e.text === 'cross' && this.rng.chance(0.35 * this.chat)) add(this.line('cross', 0, ctx, P));
           this.lastKicker = e.player ?? -1;
+          if (e.text !== 'touch') this.lastRestart = '';
           break;
         }
         case 'goal': {
           if (ctx.shootout) { add(this.line('penScore', 4, ctx, P)); break; }
           const scorer = e.player ?? -1;
           const own = e.text === 'og';
-          const kind = own ? 'goalOwn' : e.text === 'pen' ? 'goalPen' : this.goalKind(ctx, scorer);
+          const kind = own ? 'goalOwn' : e.text === 'pen' || (this.lastShot.pen && this.lastShot.id === scorer && ctx.now - this.lastShot.at < 4) ? 'goalPen' : this.goalKind(ctx, scorer);
           const parts: string[] = [];
           const g = this.line(kind, 9, ctx, { ...P, t: tn(t) });
           if (g) parts.push(g.text);
@@ -204,6 +208,7 @@ export class Commentary {
           if (this.rng.chance(0.7 * this.chat)) add(this.line('foul', 2, ctx, P));
           break;
         case 'restart':
+          this.lastRestart = e.text ?? '';
           if (e.text === 'penalty') add(this.line('penAward', 7, ctx, { t: tn(t) }));
           else if (e.text === 'corner' && this.rng.chance(0.55 * this.chat)) add(this.line('corner', 1, ctx, { t: tn(t) }));
           else if (e.text === 'freekick' && Math.abs(e.x ?? 0) > 52.5 - 30 && Math.abs(e.z ?? 0) < 20 && ((e.x ?? 0) > 0) === (t === 0 ? ctx.progress >= -2 : true) && this.rng.chance(0.6)) add(this.line('freekickDanger', 2, ctx, { t: tn(t) }));

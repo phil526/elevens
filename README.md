@@ -4,7 +4,7 @@ An original browser-based 3D eleven-a-side football game. Play an exhibition aga
 
 - Two fictional clubs (Redmoor Rovers and Kestrel Bay), one stadium (the Harbourside Ground).
 - Full match flow: title, mode, club and kit, match settings, loading, kick-off, two halves, half-time, full time, results, rematch or menu.
-- Aimed free kicks, corners and penalties; fouls, yellow and red cards and the advantage rule; skill moves, sprint bursts, slide tackles and a teammate-press (contain) button; switching by stick flick or by clicking a player.
+- Aimed free kicks, corners and penalties (penalty techniques, a keeper duel, knuckleballs, run-ups, wall tricks, chosen takers with set-piece ratings, a set-piece camera and shootout drama); fouls, yellow and red cards and the advantage rule; skill moves, sprint bursts, slide tackles and a teammate-press (contain) button; switching by stick flick or by clicking a player.
 - Two camera views: Tracking (slides along the touchline) and Broadcast (a fixed TV gantry that pans and zooms).
 - Keyboard, controller and touch controls; basic tactics; scoreboard, clock, radar and control guide; audio and graphics settings (Low, Medium, High and Ultra presets; see docs/CONTROLS.md).
 - Realistic generated player models with motion-captured running and kicking from Medium quality up (Settings, Players: Realistic or Classic; see docs/ASSETS.md).

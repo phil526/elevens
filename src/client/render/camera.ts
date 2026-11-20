@@ -77,7 +77,9 @@ export class BroadcastCamera {
 
   /** Set-piece camera: how far it has blended in (0..1), and the shot it is holding. */
   private sp = new Spring(0);
-  private spShot: { from: THREE.Vector3; goalX: number; kicked: number } | null = null;
+  /** How far the set-piece view has blended in (0 to 1); the renderer hides the taker's pointer in it. */
+  setPieceK = 0;
+  private spShot: { from: THREE.Vector3; goalX: number; kicked: number; aim: THREE.Vector3 } | null = null;
   private _q = new THREE.Quaternion();
   private _p = new THREE.Vector3();
   private _m = new THREE.Matrix4();
@@ -104,7 +106,9 @@ export class BroadcastCamera {
       const gx = PITCH.halfLength * view.attackDir[rs.team];
       const g = new THREE.Vector3(gx - rs.spot.x, 0, -rs.spot.z).normalize();
       const back = rs.type === 'penalty' ? 9 : 8;
-      this.spShot = { from: new THREE.Vector3(rs.spot.x - g.x * back - g.z * 1.2, rs.type === 'penalty' ? 2.6 : 3.2, rs.spot.z - g.z * back + g.x * 1.2), goalX: gx, kicked: -1 };
+      this.spShot = { from: new THREE.Vector3(rs.spot.x - g.x * back - g.z * 1.2, rs.type === 'penalty' ? 2.6 : 3.2, rs.spot.z - g.z * back + g.x * 1.2), goalX: gx, kicked: -1,
+        // A free kick from further out looks at a point short of the goal, so the ball and the taker stay in shot.
+        aim: rs.type === 'penalty' ? new THREE.Vector3(gx, 1.2, 0) : new THREE.Vector3(rs.spot.x + (gx - rs.spot.x) * 0.28, 0, rs.spot.z * 0.72) };
     } else if (this.spShot && this.spShot.kicked < 0 && view.phase === 'play') this.spShot.kicked = 0;
     const sh = this.spShot;
     let want = 0;
@@ -114,9 +118,10 @@ export class BroadcastCamera {
       if (!want && this.sp.x < 0.02) this.spShot = null;
     }
     const k = this.sp.step(want, s.reducedMotion ? 2.5 : 4, dt);
+    this.setPieceK = sh ? k : 0;
     if (!sh || k < 0.005) return 0;
     // Look at the goal before the kick, then follow the ball.
-    const look = sh.kicked < 0 ? new THREE.Vector3(sh.goalX, 1.2, 0) : new THREE.Vector3(view.ball.pos.x, Math.max(0.6, view.ball.pos.y), view.ball.pos.z);
+    const look = sh.kicked < 0 ? sh.aim.clone() : new THREE.Vector3(view.ball.pos.x, Math.max(0.6, view.ball.pos.y), view.ball.pos.z);
     this._m.lookAt(sh.from, look, new THREE.Vector3(0, 1, 0));
     this._q.setFromRotationMatrix(this._m);
     this._p.copy(this.cam.position).lerp(sh.from, k);
