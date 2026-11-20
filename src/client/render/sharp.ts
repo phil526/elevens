@@ -71,11 +71,14 @@ export class SharpPass {
   frames = 0;
   /** Strength used for the last frame (tests). */
   strength = 0;
+  /** Smoothing samples for the frame texture (4x; 0 turns the smoothing off and only sharpens). */
+  samples = 4;
 
   render(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera, strength: number) {
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    if (this.target && this.target.samples !== this.samples) this.dispose();
     if (!this.target) {
-      this.target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: 4, generateMipmaps: false });
+      this.target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: this.samples, generateMipmaps: false });
     } else if (this.target.width !== size.x || this.target.height !== size.y) this.target.setSize(size.x, size.y);
     const prev = renderer.getRenderTarget();
     renderer.setRenderTarget(this.target);

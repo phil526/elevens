@@ -21,7 +21,7 @@ try {
     await page.click('[data-a=offline]'); await page.click('[data-a=next]'); await page.click('[data-a=go]');
     for (let i = 0; i < 150; i++) { const ph = await page.evaluate(() => window.__elevens?.session?.view()?.phase); if (ph === 'kickoff' || ph === 'play') break; await sleep(200); }
     for (let i = 0; i < 60; i++) { if (await page.evaluate(() => !!window.__elevens.renderer.playersReal)) break; await sleep(500); }
-    await page.evaluate(() => { window.__elevens.session.match.cfg.humans = [false, false]; });
+    await page.evaluate((n) => { window.__elevens.session.match.cfg.humans = [false, false]; if (n !== null) window.__elevens.renderer.sharp.samples = n; }, process.env.SAMPLES ? Number(process.env.SAMPLES) : null);
     await sleep(5000);
     const fps = [];
     for (let i = 0; i < 5; i++) { await sleep(2000); fps.push(await page.evaluate(() => window.__elevens.fps)); }

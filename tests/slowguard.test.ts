@@ -20,7 +20,7 @@ describe('slow graphics guard', () => {
     const s = settings();
     const steps: string[] = [];
     for (let i = 0; i < 10; i++) { const r = lowerGraphics(s); if (!r) break; steps.push(r); }
-    expect(steps).toEqual(['Quality is now Medium', 'Quality is now Low', 'Resolution is now 70%', 'Resolution is now 50%', 'The live menu stadium and match intro are off']);
+    expect(steps).toEqual(['Quality is now Medium', 'Quality is now Low', 'Sharper picture is now off', 'Resolution is now 70%', 'Resolution is now 50%', 'The live menu stadium and match intro are off']);
     expect(s.graphics.preset).toBe('low');
   });
   it('spots software drawing', () => {
@@ -28,6 +28,6 @@ describe('slow graphics guard', () => {
     expect(isSoftwareRenderer('Microsoft Basic Render Driver Direct3D11')).toBe(true);
     expect(isSoftwareRenderer('Intel, Intel(R) Iris(R) Plus Graphics Direct3D11, D3D11')).toBe(false);
     const s = settings(); softwareGraphics(s);
-    expect(s).toEqual({ graphics: { preset: 'low', renderScale: 0.5, shadows: false }, menuBackdrop: false, matchIntro: false });
+    expect(s).toEqual({ graphics: { preset: 'low', renderScale: 0.5, shadows: false, sharpen: false }, menuBackdrop: false, matchIntro: false });
   });
 });
