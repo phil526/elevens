@@ -58,6 +58,8 @@ export interface Settings {
   menuBackdrop: boolean;
   /** Set once a tablet's old Low default has been moved up to Medium (18 Nov 2026). */
   tabletMedium?: boolean;
+  /** Set once graphics were lowered for a browser that draws in software (no graphics acceleration, 20 Nov 2026). */
+  softwareLow?: boolean;
   /** Set once commentary has been turned off on phones and tablets (Philip, 20 Nov 2026: the captions sit over the middle of the pitch). */
   commentaryOffTouch?: boolean;
   /** Set once an old saved Tracking camera has been moved to the new Broadcast default (18 Nov 2026). */

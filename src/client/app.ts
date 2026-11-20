@@ -33,7 +33,8 @@ import { OnlineSession, type StartInfo } from './net/online';
 import { AUTO_RES_MIN, GameRenderer, realisticPlayers } from './render/renderer';
 import { MOW_NAMES, MOW_PATTERNS, type MowSetting } from './render/vfx';
 import { loadPlayerAssets, playerAssetStatus } from './render/realplayer';
-import { glStatusText } from './render/glcheck';
+import { glStatus, glStatusText } from './render/glcheck';
+import { isSoftwareRenderer, lowerGraphics, SlowGuard, softwareGraphics, type SlowSettings } from './render/slowguard';
 import type { CameraMode } from './render/camera';
 import { loadSettings, saveSettings, type Settings } from './settings';
 import { controlsTable, guideLine } from './ui/controls';
@@ -159,6 +160,10 @@ export class App {
   private rawMs = 16.7;
   private autoResOn = !new URLSearchParams(location.search).has('test') || new URLSearchParams(location.search).has('autores');
   private frameMs = 16;
+  /** Lowers graphics when a 3D scene keeps running under 15 fps (render/slowguard.ts). Off on test pages unless &slowguard. */
+  private slowGuard = new SlowGuard();
+  private slowScene = '';
+  private slowGuardOn = !new URLSearchParams(location.search).has('test') || new URLSearchParams(location.search).has('slowguard');
   private debugOn = new URLSearchParams(location.search).has('debug');
   private debugOverlay = this.debugOn;
   private debugDraw = false;
@@ -431,7 +436,23 @@ export class App {
       document.body.classList.toggle('menu-over', covered);
       if (covered) this.touchModel.clear();
     }
+    this.watchSpeed(raw, now);
     requestAnimationFrame((t) => this.frame(t));
+  }
+
+  /** Lower the graphics a step whenever a 3D scene keeps running too slowly to play. */
+  private watchSpeed(raw: number, now: number) {
+    if (!this.slowGuardOn || !this.renderer) return;
+    const scene = this.session ? (this.overlay === 'none' ? 'match' : '') : this.theatre.playing ? 'theatre' : this.backdrop.active ? 'menu' : '';
+    if (scene !== this.slowScene) { this.slowScene = scene; this.slowGuard.rearm(now); }
+    if (!scene || document.hidden || !this.slowGuard.feed(raw, now)) return;
+    const what = lowerGraphics(this.settings as unknown as SlowSettings);
+    if (!what) return;
+    saveSettings(this.settings);
+    this.renderer.applyGraphics(this.settings.graphics);
+    if (this.settings.menuBackdrop === false && this.backdrop.active && !this.session) this.backdrop.stop(this.renderer);
+    console.warn(`[graphics] running at under 15 fps: ${what}`);
+    this.hud.toast(`Running slowly on this computer: ${what}. Settings > Graphics can change it back.`, 5000);
   }
 
   /** Any controller button skips a cinematic (on the press, not while held). */
@@ -1295,6 +1316,16 @@ export class App {
     if (!this.renderer) {
       const canvas = document.getElementById('game') as HTMLCanvasElement;
       this.renderer = new GameRenderer(canvas, this.settings.graphics);
+      // No graphics acceleration (often work laptops): the browser draws in software at about a frame
+      // a second, so start from the lightest settings once (Settings can raise them again).
+      if (this.slowGuardOn && !this.settings.softwareLow && isSoftwareRenderer(glStatus.renderer)) {
+        softwareGraphics(this.settings as unknown as SlowSettings);
+        this.settings.softwareLow = true;
+        saveSettings(this.settings);
+        this.renderer.applyGraphics(this.settings.graphics);
+        console.warn(`[graphics] software drawing (${glStatus.renderer}): quality Low, 50% resolution, live menu stadium and intro off`);
+        setTimeout(() => this.hud.toast('This browser has no graphics acceleration, so the game is set to its lightest graphics. Turning on hardware acceleration in the browser settings makes it run far better.', 7000), 1500);
+      }
       // The match intro's floodlights clunking on, bank by bank.
       this.renderer.onFloodlight = (pan) => this.audio.floodlight(pan);
       // Click or tap on the pitch: switch to the teammate nearest that point.
