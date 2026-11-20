@@ -140,6 +140,12 @@ export class App {
   private compConfirm = false;
   /** The realistic player models have been downloaded (or we gave up waiting). */
   private playersReady = false;
+  /**
+   * The realistic players just failed to download: this kick-off goes ahead with the simple players
+   * (20 Nov 2026: v80 kept retrying instead, so a PC whose download failed never got past the loading
+   * card). Cleared as that match starts, so the next kick-off tries the download again.
+   */
+  private playersFailedOnce = false;
   /** Half-time / full-time panel: team stats or player ratings. */
   private resultsTab: 'stats' | 'ratings' = 'stats';
   private screenName = 'mode';
@@ -1443,17 +1449,23 @@ export class App {
       : `${comp ? (this.comp?.kind === 'league' ? 'League · ' : 'Cup · ') : ''}${diffName} · ${c.minutes} min`;
     const detailText = mode ? mode.detail : detail;
     const info = this.loadInfo(cfg.teams as [string, string], cfg.kits, detailText);
-    if (realisticPlayers(this.settings.graphics) && !this.playersReady) {
+    if (realisticPlayers(this.settings.graphics) && !this.playersReady && !this.playersFailedOnce) {
       this.loading('Bringing the players out…', () => {}, info, 0);
       const t0 = performance.now();
       void Promise.race([loadPlayerAssets(), new Promise((r) => setTimeout(() => r('slow'), 25000))]).then((got) => {
         // Loaded, or still coming after 25 s (they swap in when they arrive): don't wait again. Failed
         // (a dropped connection): play this one with the simple players and try again next kick-off.
         this.playersReady = !!got;
-        if (this.screenName === 'loading') { console.info(`players loaded in ${Math.round(performance.now() - t0)} ms`); this.startOffline(practice, challenge, comp, mode); }
+        this.playersFailedOnce = !got;
+        if (this.screenName === 'loading') { console.info(`players ${got ? 'loaded' : 'failed'} in ${Math.round(performance.now() - t0)} ms`); this.startOffline(practice, challenge, comp, mode); }
+      }).catch((err) => {
+        console.warn('[players] waiting for the realistic players failed:', err);
+        this.playersFailedOnce = true;
+        if (this.screenName === 'loading') this.startOffline(practice, challenge, comp, mode);
       });
       return;
     }
+    this.playersFailedOnce = false;
     this.loading(`Building ${groundInSentence(groundFor(teamById(cfg.teams[0])).name)}…`, () => {
       this.backdrop.stop(this.renderer, true);
       const r = this.ensureRenderer();
