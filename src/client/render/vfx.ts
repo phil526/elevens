@@ -515,6 +515,11 @@ export class BallTrail {
   private col: THREE.BufferAttribute;
   private static N = 28;
   private static LIFE = 0.32;
+  private rgb: [number, number, number] = [1, 1, 0.97];
+  /** Trail colour (null: the usual white). */
+  tint(c: number | null) {
+    this.rgb = c == null ? [1, 1, 0.97] : [((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255];
+  }
   constructor() {
     const n = BallTrail.N;
     const g = new THREE.BufferGeometry();
@@ -556,7 +561,8 @@ export class BallTrail {
       pa.set([q.p.x + side.x, q.p.y + side.y, q.p.z + side.z, q.p.x - side.x, q.p.y - side.y, q.p.z - side.z], i * 6);
       const alpha = Math.max(0, a) ** 1.4 * q.s * 0.55;
       if (alpha > 0.01) any = true;
-      ca.set([1, 1, 0.97, alpha, 1, 1, 0.97, alpha], i * 8);
+      const [r, g, b] = this.rgb;
+      ca.set([r, g, b, alpha, r, g, b, alpha], i * 8);
     }
     this.mesh.visible = any;
     this.pos.needsUpdate = true;

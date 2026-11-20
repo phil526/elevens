@@ -32,6 +32,8 @@ import { NetClient } from './net/netclient';
 import { isLocalHost, onServerState, PLAY_URL, serverState, serverUrl, wakeServer } from './net/hosting';
 import { TransferPanel } from './transfer';
 import { analysisHtml, MatchAnalysis, type AnalysisTab } from './analysis';
+import type { CelebKind } from './render/celebration';
+import { applyAccent, clearLevels, equipped, levelNoteHtml, levelOf, loadLevels, netColour, recordLevels, saveLevels, showLevels, titleOf, trailColour, type LevelStore, type MatchFacts } from './levels';
 import { OnlineSession, type StartInfo } from './net/online';
 import { AUTO_RES_MIN, GameRenderer, realisticPlayers } from './render/renderer';
 import { MOW_NAMES, MOW_PATTERNS, type MowSetting } from './render/vfx';
@@ -704,6 +706,36 @@ export class App {
     });
   }
 
+  /** Club level, weekly challenges and rewards for the active save slot (20 Nov 2026). */
+  private levels: LevelStore = loadLevels(0);
+  private levelSlot = -1;
+  /** A World tournament or friends league fixture is being played (they count as competitions). */
+  private tourMatch: { group: boolean } | null = null;
+  private friendsMatch: { league: string } | null = null;
+  /** What the last match did for the club level (shown on the full-time panel). */
+  private levelNote = '';
+
+  private syncLevels() {
+    if (this.levelSlot === this.store.active) return;
+    this.levelSlot = this.store.active;
+    this.levels = loadLevels(this.levelSlot);
+    applyAccent(equipped(this.levels, 'accent'));
+  }
+
+  /** The renderer wears your rewards: match ball, net and trail colours (your club's shirt for the club ones). */
+  private dressRenderer(r: GameRenderer, mine: TeamDef, kit: 'home' | 'away', side: 0 | 1) {
+    this.syncLevels();
+    const club = mine[kit].shirt;
+    r.cosmetics = { ball: equipped(this.levels, 'ball'), net: netColour(equipped(this.levels, 'net'), club), trail: trailColour(equipped(this.levels, 'trail'), club) };
+    this.cine.signature = this.levels.celebration && levelOf(this.levels.xp).level >= 13 ? { kind: this.levels.celebration as CelebKind, team: side } : null;
+  }
+
+  private openLevels() {
+    this.syncLevels();
+    this.screenName = 'levels';
+    showLevels({ set: (h, c) => this.set(h, c), on: (sel, fn) => this.on(sel, fn), back: () => this.showMode(), changed: () => saveLevels(this.levelSlot, this.levels) }, this.levels);
+  }
+
   /** Match analysis (20 Nov 2026): shot map with xG, heat maps, pass map, momentum and a tip. */
   private analysis = new MatchAnalysis();
   private analysisTab: AnalysisTab = 'shots';
@@ -1043,6 +1075,7 @@ export class App {
   private showMode() {
     this.screenName = 'mode';
     this.modes.syncSlot();
+    this.syncLevels();
     const p = this.profile;
     const fresh = !p.tutorialDone && p.stats.played === 0;
     const got = Object.keys(p.achievements).length;
@@ -1076,10 +1109,11 @@ export class App {
           <button class="btn" data-a="practice">Practice and tutorial</button>
           <button class="btn" data-a="online">Online match</button>
           <button class="btn" data-a="clubs">Profile and clubs</button>
+          <button class="btn" data-a="levels">Club level and challenges<small>Level ${levelOf(this.levels.xp).level} · ${this.levels.done.length}/3 this week</small></button>
           ${this.modes.menuButtons()}
         </div>` : ''}
       </div>
-      <div class="row center home-row"><button class="btn" data-a="controls">Controls</button><button class="btn" data-a="settings">Settings</button><button class="profile-chip" data-a="profile" title="Profile and save slots"><b>${esc(p.name)}</b><span>${p.stats.played} played · ${p.trophies.length} ${p.trophies.length === 1 ? 'trophy' : 'trophies'} · ${got}/${ACHIEVEMENTS.length} achievements</span></button></div>`, 'home');
+      <div class="row center home-row"><button class="btn" data-a="controls">Controls</button><button class="btn" data-a="settings">Settings</button><button class="profile-chip" data-a="profile" title="Profile and save slots"><b>${esc(p.name)} <i class="lvl-chip">Lv ${levelOf(this.levels.xp).level} · ${esc(titleOf(this.levels))}</i></b><span>${p.stats.played} played · ${p.trophies.length} ${p.trophies.length === 1 ? 'trophy' : 'trophies'} · ${got}/${ACHIEVEMENTS.length} achievements</span></button></div>`, 'home');
     this.on('[data-a=quick]', () => this.quickMatch());
     this.modes.bindMenu();
     this.on('[data-a=compnext]', () => {
@@ -1101,6 +1135,7 @@ export class App {
     this.on('[data-a=profile]', () => { this.profileTab = 'slots'; this.showProfile(); });
     this.on('[data-a=clubs]', () => { this.profileTab = 'career'; this.showProfile(); });
     this.on('[data-a=online]', () => this.showOnline());
+    this.on('[data-a=levels]', () => this.openLevels());
     this.on('[data-a=controls]', () => this.showControls(() => this.showMode()));
     this.on('[data-a=settings]', () => this.showSettings(() => this.showMode()));
   }
@@ -1608,6 +1643,8 @@ export class App {
     this.loading(`Building ${groundInSentence(groundFor(teamById(cfg.teams[0])).name)}…`, () => {
       this.backdrop.stop(this.renderer, true);
       const r = this.ensureRenderer();
+      const side = cfg.humans[0] || !cfg.humans[1] ? 0 : 1;
+      this.dressRenderer(r, side ? oppDef : teamById(cfg.teams[0]), cfg.kits[side], side);
       r.setupMatch([teamById(cfg.teams[0]), oppDef], cfg.kits, cfg.weather);
       this.lastTeams = { teams: [cfg.teams[0], cfg.teams[1]], kits: [cfg.kits[0], cfg.kits[1]] };
       this.kitOverride = oppDef !== teamById(opp) ? oppDef : null;
@@ -1637,6 +1674,7 @@ export class App {
     if (s instanceof OfflineSession && this.kitOverride && s.cfg.teams[1] === this.kitOverride.id) s.match.teams[1] = this.kitOverride;
     this.track = { restart: '', restartKick: '', lastKick: { text: '', x: 0, z: 0, player: -1, team: -1, from: '' }, goals: [] };
     this.analysis.reset(!(s instanceof OfflineSession && s.cfg.practice));
+    this.levelNote = '';
     this.resultsNote = null;
     this.coach?.dispose();
     this.coach = null;
@@ -2147,6 +2185,7 @@ export class App {
       <h3 style="text-align:center">${esc(title)}</h3>
       ${mm.kind === 'skill' ? '' : `<div class="final">${v.teams[0].abbr} ${v.score[0]} – ${v.score[1]} ${v.teams[1].abbr}</div>${pens ? `<div class="final small">Penalties ${pens[0]} – ${pens[1]}</div>` : ''}${this.motm(v)}${this.scorers(v)}`}
       ${res?.html ?? ''}
+      ${mm.kind === 'skill' ? '' : this.levelNote}
       ${mm.kind === 'skill' ? '' : this.statsBlock(v)}
       ${mm.kind === 'skill' ? '' : this.saveGoalsHtml(v)}
       <div class="row end">${mm.kind === 'skill' ? '' : this.highlightsButton(v, 'match') + this.analysisButton() + this.ratingsButton(v)}${mm.kind === 'skill' || mm.kind === 'scenario' ? '<button class="btn" data-a="again">Try again</button>' : ''}<button class="btn primary" data-a="mcont">${esc(res?.label ?? 'Continue')}</button></div>
@@ -2300,6 +2339,7 @@ export class App {
       <p class="note rematch-note">${online && !this.room?.ranked ? 'A rematch starts when both players choose it.' : ''}</p>
       ${online && this.room?.ranked ? `<div class="rank-note">${this.rankRes ? rankedResultHtml(this.rankRes) : '<p class="note">Updating your division…</p>'}</div>` : ''}
       ${compNote}
+      ${this.levelNote}
       ${online ? '' : this.saveGoalsHtml(v)}
       <div class="row end">${online ? '' : this.highlightsButton(v, 'match')}${this.analysisButton()}${this.ratingsButton(v)}<button class="btn" data-a="menu">Main menu</button>${this.compMatch ? '<button class="btn primary" data-a="comp">Continue</button>' : online && this.room?.ranked ? '<button class="btn primary" data-a="rankmenu">Ranked menu</button>' : '<button class="btn primary" data-a="rematch">Rematch</button>'}</div>
     </div></div>`;
@@ -2389,6 +2429,17 @@ export class App {
     };
     this.announce(recordMatch(this.profile, m));
     this.saveProfile();
+    // Club level and weekly challenges.
+    this.syncLevels();
+    const mp = this.analysis.passes.filter((x) => x.team === me);
+    const facts: MatchFacts = { ...m, passPct: mp.length >= 10 ? mp.filter((x) => x.ok).length / mp.length : NaN, kind: this.modeMatch?.kind ?? (this.tourMatch ? 'tournament' : this.friendsMatch ? 'friends' : mode) };
+    const lr = recordLevels(this.levels, facts);
+    saveLevels(this.levelSlot, this.levels);
+    this.levelNote = levelNoteHtml(this.levels, lr);
+    this.announce([
+      ...(lr.after > lr.before ? [{ id: 'lvl', icon: '⬆️', name: `Club level ${lr.after}`, text: lr.unlocks.length ? `Unlocked ${lr.unlocks.map((u) => u.name).join(', ')}` : 'Keep going for the next reward.' }] : []),
+      ...lr.finished.map((c) => ({ id: 'wk-' + c.id, icon: '★', name: 'Weekly challenge done', text: c.text })),
+    ] as Achievement[]);
     // The club's history (Trophy cabinet and club history): offline matches against the computer.
     if (off) this.modes.recordClub({ club: m.club, opp: m.opp, oppName: m.oppName, gf: m.gf, ga: m.ga, pens, scorers: v.goals.filter((g) => g.team === me && !g.ownGoal).map((g) => v.players[g.player]?.def.short ?? '?'), mode: this.modeMatch?.kind ?? mode });
   }
@@ -2610,6 +2661,8 @@ export class App {
       this.store.slots[i] = null;
       // The slot's career, Be a Pro, cabinet and club history go with it.
       clearModes(i);
+      clearLevels(i);
+      this.levelSlot = -1;
       this.modes.syncSlot(true);
       if (!this.store.slots.some(Boolean)) this.store.slots[i] = newProfile('Player 1');
       if (!this.store.slots[this.store.active]) this.store.active = this.store.slots.findIndex(Boolean);
@@ -2634,6 +2687,7 @@ export class App {
   private useSlot(i: number) {
     if (!this.store.slots[i]) return;
     this.store.active = i;
+    this.syncLevels();
     applyClubs(this.profile);
     this.saveProfile();
     this.compConfirm = false;
@@ -3403,6 +3457,7 @@ export class App {
         this.loading(`Building ${groundInSentence(groundFor(teamById(info.teams[0])).name)}…`, () => {
           this.backdrop.stop(this.renderer, true);
           const r = this.ensureRenderer();
+          this.dressRenderer(r, teamById(info.teams[info.side]), info.kits[info.side], info.side as 0 | 1);
           r.setupMatch([teamById(info.teams[0]), teamById(info.teams[1])], info.kits, cleanWeather(info.weather));
           this.lastTeams = { teams: [info.teams[0], info.teams[1]], kits: [info.kits[0], info.kits[1]] };
           // Online the server is already counting: no minimum time on the card.

@@ -44,7 +44,7 @@ import { GrassBlades } from './grassblades';
 import { updateCrowd } from './crowd';
 import type { Arena } from './arena';
 import { canvasTex } from './textures';
-import { ballMaterial, BallSpin } from './ball';
+import { ballMaterial, BallSpin, setBallDesign } from './ball';
 import { ReactionDirector } from './reactions';
 import { GlCheck } from './glcheck';
 import { INJURY } from '../../shared/injury';
@@ -986,6 +986,7 @@ export class GameRenderer {
     this.tunnelSet.build(this.scene, tunnelOf(this.stadium), k0.shirt);
     this.scene.add(this.varLines.group);
     this.collectEffects(this.stadium);
+    this.applyCosmetics();
     const aniso = QUALITY[this.gfx.preset] > 1 ? this.renderer.capabilities.getMaxAnisotropy() : 4;
     this.stadium.traverse((o) => {
       const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
@@ -998,6 +999,7 @@ export class GameRenderer {
     // Ball and its shadow (always shown: it is what makes height readable).
     // Drawn larger than life (as broadcast games do) so it reads at camera distance; physics uses BALL.radius.
     const bq = QUALITY[this.gfx.preset];
+    setBallDesign(this.cosmetics.ball);
     this.ball = new THREE.Mesh(new THREE.SphereGeometry(BALL.radius * BALL_DRAW_SCALE, bq > 0 ? 40 : 24, bq > 0 ? 28 : 16), ballMaterial(bq));
     this.ballSpinner.reset();
     this.ball.castShadow = this.renderer.shadowMap.enabled;
@@ -1084,6 +1086,21 @@ export class GameRenderer {
     this.mowPattern = (MOW_PATTERNS as readonly string[]).includes(forced ?? '') ? forced as MowPattern
       : set !== 'random' ? set : test ? 'stripes' : MOW_PATTERNS[Math.floor(Math.random() * MOW_PATTERNS.length)];
     if (this.grassU?.uMow) this.grassU.uMow.value = MOW_PATTERNS.indexOf(this.mowPattern);
+  }
+
+  /** Club-level rewards (20 Nov 2026): the match ball, net colour and ball trail colour. */
+  cosmetics: { ball: string; net: number | null; trail: number | null } = { ball: 'ball-elevens', net: null, trail: null };
+
+  /** Applies cosmetics now (nets and trail at once; the ball from the next match set-up). */
+  applyCosmetics() {
+    const seen = new Set<THREE.Material>();
+    for (const n of this.nets) {
+      const m = n.mesh.material as THREE.MeshBasicMaterial;
+      if (seen.has(m)) continue;
+      seen.add(m);
+      m.color.set(this.cosmetics.net ?? 0xffffff);
+    }
+    this.trail.tint(this.cosmetics.trail);
   }
 
   /** Find the stadium's nets, floodlights and grass, and set up the per-match effects. */

@@ -53,7 +53,7 @@ export function describeSave(b: SaveBundle): string {
     if (slots.length) parts.push(`${slots.length === 1 ? `profile ${slots[0].name}` : `${slots.length} profiles (${slots.map((s) => s.name).join(', ')})`}`, `${slots.reduce((n, s) => n + (s.stats?.played ?? 0), 0)} matches played`);
   } catch { /* unreadable profile: still offer the rest */ }
   if (Object.keys(b.data).some((k) => k.startsWith('elevens.modes.v1.') && /"career":\{/.test(b.data[k]))) parts.push('a career');
-  if (b.data['elevens.levels.v1']) parts.push('club levels');
+  if (Object.keys(b.data).some((k) => k.startsWith('elevens.levels.v1.'))) parts.push('club levels');
   if (b.data['elevens.settings.v1']) parts.push('settings and controls');
   return parts.join(', ') || 'nothing yet';
 }
