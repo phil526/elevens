@@ -21,7 +21,7 @@ export const COACH_STEPS: CoachStep[] = [
   { id: 'sprint', title: 'Sprint', text: 'Hold {sprint} while moving to sprint. It tires players, so use it in bursts.', when: 'any' },
   { id: 'switch', title: 'Switch player', text: 'Without the ball, press {switch} to take the teammate nearest the ball.', when: 'defend' },
   { id: 'jockey', title: 'Jockey', text: 'Hold {jockey} to jockey: you stay goal-side and face the attacker.', when: 'defend' },
-  { id: 'tackle', title: 'Tackle', text: 'Get close and press {pass} to tackle. {lob} is a sliding tackle (risky).', when: 'defend' },
+  { id: 'tackle', title: 'Tackle', text: 'Get close and press {pass} to tackle as his touch knocks the ball away from his foot. {lob} is a sliding tackle (risky).', when: 'defend' },
   { id: 'pass', title: 'Pass', text: 'Press {pass} to pass. Point where you want it; hold longer for a teammate further away.', when: 'attack' },
   { id: 'through', title: 'Through ball', text: 'Press {through} to play the ball into space ahead of a runner.', when: 'attack' },
   { id: 'lob', title: 'Lofted pass', text: 'Press {lob} for a lofted pass over the defenders (from wide, it is a cross).', when: 'attack' },

@@ -13,7 +13,20 @@ import type { ViewState } from '../view';
 import { MOMENTUM } from '../../shared/momentum';
 
 /** Calls handled by Hud.g6Call (any team). */
-const G6_CALLS = new Set(['crowd', 'tactical', 'trapped', 'deflection', 'hold', 'muscle', 'aerial', 'scramble', 'heavy', 'beat', 'turned']);
+const G6_CALLS = new Set(['crowd', 'tactical', 'trapped', 'deflection', 'hold', 'muscle', 'aerial', 'scramble', 'heavy', 'beat', 'turned', 'tacklegood', 'tackleearly']);
+
+/** What the computer has spotted about how you attack (20 Nov 2026), and the hint to beat it. */
+export const HABIT_TEXT: Record<string, string> = {
+  'habit-lane-a': 'They have seen your attacks come down the same wing, so they are shifting across. Switch the play',
+  'habit-lane-b': 'They have seen your attacks come down the same wing, so they are shifting across. Switch the play',
+  'habit-cut-a': 'They know you cut inside: now they show you down the line',
+  'habit-cut-b': 'They know you go down the line: now they show you inside',
+  'habit-corner-a': 'Their keeper has spotted you go for the near post. Try the far corner',
+  'habit-corner-b': 'Their keeper has spotted you go for the far post. Try the near post',
+  'habit-side-a': 'Their keeper is reading your finishes and cheating to one side. Pick the other corner',
+  'habit-side-b': 'Their keeper is reading your finishes and cheating to one side. Pick the other corner',
+  'habit-through-a': 'They are dropping deeper to stop your through balls. Play it to feet',
+};
 import { possessionTeam } from '../view';
 
 const hex = (c: number) => '#' + c.toString(16).padStart(6, '0');
@@ -191,7 +204,12 @@ export class Hud {
       case 'heavy': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast('Heavy touch', 900); break;
       case 'beat': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast('Left him for dead', 900); break;
       case 'turned': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast('Turned him with the first touch', 1000); break;
-      default: break;
+      // Timed tackles (20 Nov 2026): only for your own player.
+      case 'tacklegood': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast('Perfectly timed tackle', 900); break;
+      case 'tackleearly': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast('Mistimed: he skipped past you', 1000); break;
+      default:
+        if (mine && e.text && HABIT_TEXT[e.text]) this.toast(HABIT_TEXT[e.text], 3200);
+        break;
     }
   }
 
@@ -277,7 +295,7 @@ export class Hud {
       else if (e.type === 'sub' && e.text) { const [o, n] = e.text.split('>'); this.toast(`Substitution${tm ? ` · ${tm}` : ''}: ${o} off, ${n} on`, 2600); }
       else if (e.type === 'addedtime') this.board(e.power ?? 1);
       else if (e.type === 'recovery') this.toast('Referee drops the ball');
-      else if (e.type === 'call' && e.text && G6_CALLS.has(e.text)) this.g6Call(view, e, tm);
+      else if (e.type === 'call' && e.text && (G6_CALLS.has(e.text) || e.text.startsWith('habit-'))) this.g6Call(view, e, tm);
       else if ((e.type === 'call' || e.type === 'rush') && e.team !== undefined && this.localSet.has(e.team)) {
         const p = e.player !== undefined && e.player >= 0 ? view.players[e.player] : null;
         if (e.text?.startsWith('routine:')) {

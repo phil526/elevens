@@ -56,3 +56,14 @@ export const SWITCH = {
   /** Margin and cool-down multipliers for Calm, Normal and Eager. */
   sens: { calm: 1.45, normal: 1, eager: 0.7 } as Record<'calm' | 'normal' | 'eager', number>,
 };
+
+// On-pitch play (20 Nov 2026 evening): `P20_OFF=bodies,timing,habits` in the benches and tests.
+// bodies = solid bodies (players can't run through each other: heavier, stronger and planted
+// players give less ground and a runner loses the speed he carries into someone); timing = a
+// standing tackle is won by timing it as the dribbler's touch goes out, not by a dice roll;
+// habits = a computer side learns how a human team attacks over the match and adapts.
+export const P20 = { bodies: true, timing: true, habits: true };
+export type P20Key = keyof typeof P20;
+export function p20Off(list: string | undefined) {
+  for (const k of (list ?? '').split(',').map((s) => s.trim()).filter(Boolean)) if (k in P20) P20[k as P20Key] = false;
+}

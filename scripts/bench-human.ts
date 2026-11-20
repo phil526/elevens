@@ -7,11 +7,12 @@ import type { Difficulty } from '../src/shared/config';
 import { mulberry } from './bench-rng';
 import { DIFFICULTY } from '../src/shared/config';
 import { laneBlock } from '../src/shared/kick';
-import { bcOff, g6Off } from '../src/shared/switches';
+import { bcOff, g6Off, p20Off } from '../src/shared/switches';
 // BC_OFF=attr,heavy,... turns the 19 Nov 2026 ball-control features off to compare.
 bcOff(process.env.BC_OFF);
 // G6_OFF=momentum,keeper,... turns the 19 Nov 2026 gameplay features off to compare.
 g6Off(process.env.G6_OFF);
+p20Off(process.env.P20_OFF);
 // `nohelp` as a 4th argument measures without the human help (as before 18 Nov).
 if (process.argv[5] === 'nohelp') for (const k of Object.keys(DIFFICULTY) as (keyof typeof DIFFICULTY)[]) DIFFICULTY[k].help = 0;
 
@@ -47,7 +48,8 @@ for (let seed = first; seed < first + count; seed++) {
       sprint = R() < 0.6;
       if (m.time >= nextAct && me.action.type === 'none') {
         if (dg < 22 && R() < 0.5) {
-          const corner = (R() < 0.5 ? 1 : -1) * 3;
+          // SAME_CORNER=1: always the near post (a habit the computer can learn, 20 Nov 2026).
+          const corner = (process.env.SAME_CORNER ? Math.sign(me.pos.z) || 1 : R() < 0.5 ? 1 : -1) * 3;
           const ax = gx - me.pos.x, az = corner - me.pos.z, l = Math.hypot(ax, az);
           mx = ax / l; mz = az / l;
           ev.push({ k: 'shoot', p: 0.5 + R() * 0.5 });
@@ -169,6 +171,9 @@ for (let seed = first; seed < first + count; seed++) {
     }
   }
   add('matches');
+  // What the computer learned about the bot's habits (20 Nov 2026).
+  const hb = m.habits[0];
+  if (hb) for (const [k, v] of Object.entries(hb.told)) if (v) add(`habit_${k}_${v > 0 ? 'a' : 'b'}`);
   add('onTargetH', m.stats[0].onTarget); add('passesH', m.stats[0].passes); add('passesOkH', m.stats[0].passesCompleted);
   add('aiShots', m.stats[1].shots); add('aiPasses', m.stats[1].passes); add('aiPassesOk', m.stats[1].passesCompleted);
 }

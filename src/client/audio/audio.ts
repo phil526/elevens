@@ -566,6 +566,24 @@ export class GameAudio {
     this.kick(14, x, 'touch');
   }
 
+  /** Two bodies bumping (solid bodies, 20 Nov 2026): a soft, low thud, louder for a harder hit (k 0..1). */
+  bump(x = 0, k = 0.5) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const out = ctx.createGain();
+    out.connect(this.pan(x)).connect(this.fx);
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(150, now);
+    o.frequency.exponentialRampToValueAtTime(55, now + 0.12);
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.08 + 0.14 * Math.min(1, k), now);
+    og.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+    o.connect(og).connect(out);
+    o.start(now); o.stop(now + 0.17);
+  }
+
   /** Two players colliding in a tackle: a dull thud and a scuff of studs on grass. */
   tackle(x = 0, hard = false) {
     const ctx = this.ctx;
