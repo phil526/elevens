@@ -795,6 +795,8 @@ export class App {
 
   /** The last shot struck (for commentary on how good it was). */
   private lastShotCall = { t: -99, great: false };
+  /** Commentator bookkeeping: the restart already called, the late-on line, the last kick's kind. */
+  private talk = { restart: '', late: false, kick: '' };
 
   /** Rumble the controller if it is in use and rumble is on. */
   /** The match config's auto-switch style and sensitivity, from Settings (both sides; a computer side ignores them). */
@@ -846,6 +848,7 @@ export class App {
       switch (e.type) {
         case 'kick':
           this.audio.kick(e.power ?? 10, e.x ?? 0, e.text);
+          if (e.text !== 'touch') this.talk.kick = e.text ?? '';
           if (e.text === 'shot' || e.text === 'volley') {
             this.audio.anticipate();
             this.lastShotCall = { t: now, great: (e.power ?? 0) >= 24 || PITCH.halfLength - Math.abs(e.x ?? 0) >= 22 };
@@ -859,29 +862,48 @@ export class App {
             if (e.text !== 'manual') this.buzz(0.1, 0.3, 70);
           }
           break;
-        case 'post': case 'bar': this.audio.post(e.x ?? 0); this.audio.react('ooh'); if (greatShot() || Math.random() < 0.5) this.audio.call('shot', 0.6); break;
+        case 'post': case 'bar': this.audio.post(e.x ?? 0); this.audio.react('ooh'); if (greatShot() || Math.random() < 0.7) this.audio.say('woodwork', 0.5); break;
         case 'whistle':
           this.audio.whistle(e.text && e.text in WHISTLES ? (e.text as WhistleKind) : (e.power ?? 1));
           if (e.text === 'halftime' || e.text === 'fulltime' || (e.text === 'kickoff' && v.clock < 1 && v.half === 1)) this.audio.react('applause');
           // An away penalty (the home end is behind the goal in a shootout): boos and whistles.
           if (e.text === 'penalty' && v.restart?.team === 1) this.audio.penaltyWhistles(v.shootout ? 1.2 : 0.9);
+          if (e.text === 'kickoff' && v.clock < 1) this.audio.say('kickoff', 1.4);
+          else if (e.text === 'halftime') this.audio.say('halftime', 0.9);
+          else if (e.text === 'fulltime') this.audio.say('fulltime', 0.9);
+          else if (e.text === 'offside') this.audio.say('offside', 0.6);
+          else if (e.text === 'penalty' && !v.shootout) this.audio.say('penalty', 0.5);
+          else if (e.text === 'foul' && Math.random() < 0.3) this.audio.say('foul', 0.5);
           break;
         case 'goal':
           this.audio.net(e.x ?? 0); this.audio.react('goal');
-          if (e.text !== 'og') this.audio.call('goal', 0.5);
+          if (e.text !== 'og') this.audio.say(e.text === 'pen' || this.talk.restart.startsWith('penalty') ? 'pengoal' : v.score[0] === v.score[1] && v.score[0] > 0 ? 'equaliser' : this.talk.kick === 'header' ? 'header' : 'goal', 0.5);
           if (Math.random() < 0.5) this.audio.stomp(0.75, 4.5); // the stands keep it going
           break;
-        case 'save': this.audio.react('gasp'); if (greatShot()) this.audio.call('shot', 0.45); break;
-        case 'chance': this.audio.react('ooh'); break;
-        case 'tackle': this.audio.tackle(e.x ?? 0, false); break;
+        case 'save':
+          this.audio.react('gasp');
+          if (v.shootout || this.talk.restart.startsWith('penalty')) this.audio.say('pensave', 0.4);
+          else if (greatShot() || Math.random() < 0.4) this.audio.say('save', 0.45);
+          break;
+        case 'chance': this.audio.react('ooh'); if (Math.random() < 0.6) this.audio.say('miss', 0.5); break;
+        case 'tackle': this.audio.tackle(e.x ?? 0, false); if (Math.random() < 0.12) this.audio.say('tackle', 0.3); break;
         case 'call': if (e.text === 'bump' && Math.abs(e.power ?? 0) > 4) this.audio.bump(e.x ?? 0, (Math.abs(e.power ?? 0) - 4) / 4); break;
         case 'foul': this.audio.tackle(e.x ?? 0, true); if (Math.random() < 0.45) this.audio.react('boo'); break;
-        case 'card': this.audio.react('boo'); break;
+        case 'card': this.audio.react('boo'); this.audio.say(e.text === 'yellow' ? 'yellow' : 'red', 0.8); break;
         case 'bounce': if ((e.power ?? 0) > 5) this.audio.kick((e.power ?? 0) * 0.5, e.x ?? 0, 'touch'); break;
         default: break;
       }
     }
-    void v;
+    // Restarts worth a word (once each): corners, free kicks in shooting range; late in the game.
+    const r = v.restart;
+    const key = r ? `${r.type}:${r.team}:${Math.round(r.spot.x)}:${Math.round(r.spot.z)}` : '';
+    if (key && key !== this.talk.restart) {
+      this.talk.restart = key;
+      const goalX = (v.attackDir[r!.team] ?? 1) * PITCH.halfLength;
+      if (r!.type === 'corner' && Math.random() < 0.5) this.audio.say('corner', 0.8);
+      else if (r!.type === 'freekick' && Math.hypot(goalX - r!.spot.x, r!.spot.z) < 30) this.audio.say('freekick', 1);
+    } else if (!r && this.talk.restart && v.phase === 'play' && this.talk.restart !== 'done') this.talk.restart = this.talk.restart.startsWith('penalty') ? this.talk.restart : '';
+    if (!this.talk.late && v.half === 2 && v.realMinutes && v.clock >= 85 * 60 && v.phase === 'play') { this.talk.late = true; this.audio.say('late', 0.2); }
   }
 
   // ------------------------------------------------------------- screens
@@ -1721,6 +1743,8 @@ export class App {
     this.track = { restart: '', restartKick: '', lastKick: { text: '', x: 0, z: 0, player: -1, team: -1, from: '' }, goals: [] };
     this.analysis.reset(!(s instanceof OfflineSession && s.cfg.practice));
     this.audio.setVenue(s instanceof OfflineSession && !!s.cfg.street);
+    this.audio.loadCommentary();
+    this.talk = { restart: '', late: false, kick: '' };
     this.levelNote = '';
     // World tournament: both anthems before kick-off.
     if (s instanceof OfflineSession && this.modeMatch?.kind === 'tournament') this.audio.anthems([...s.cfg.teams]);
