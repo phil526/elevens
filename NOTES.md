@@ -77,3 +77,4 @@ Philip: "Optimize the game for mobile phone. Ensure all the character models loa
 - e2e scripts that used Low for speed now say players: 'classic' so they behave as before.
 - Not done: Low still caps the pixel ratio at 1 (637x290 on an iPhone 13 at render scale 0.85): sharp enough? Not measured on a real phone.
 
+- Playable v80 = index-2r2x2cmd.js (published 20 Nov 08:17 UTC, Philip OKed the card).
