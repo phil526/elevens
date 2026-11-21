@@ -15,6 +15,17 @@ export const SLOW_MO = {
   woodwork: { speed: 0.45, hold: 0.55, ease: 0.4 },
 } as const satisfies Record<string, SlowMoShape>;
 
+/**
+ * Hit-stop (21 Nov 2026): the picture all but freezes for a few hundredths of a second as a
+ * thunderous shot is struck or a crunching tackle goes in, so big contacts land with weight.
+ * Offline only (an online match can't wait), and only with Settings > Camera > Big moments on.
+ */
+export const HIT_STOP = {
+  strike: { speed: 0.04, hold: 0.07, ease: 0.07 },
+  tackle: { speed: 0.12, hold: 0.045, ease: 0.05 },
+  woodwork: { speed: 0.03, hold: 0.09, ease: 0.05 },
+} as const satisfies Record<string, SlowMoShape>;
+
 export class SlowMo {
   private t = 0;
   private shape: SlowMoShape | null = null;

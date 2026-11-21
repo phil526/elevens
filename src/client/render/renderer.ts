@@ -215,6 +215,12 @@ function ring(inner: number, outer: number, colour: number, opacity: number, the
 /** Dots in the free-kick bend line. */
 const FK_DOTS = 22;
 
+/** Smooth cuts: glide length (s) and the one-frame camera move (m) that counts as a cut. */
+export const CUT_BLEND = { time: 0.7, jump: 9 } as const;
+
+/** How long a camera punch lasts, in seconds (renderer.punch). */
+const PUNCH_TIME = 0.38;
+
 export class GameRenderer {
   renderer: THREE.WebGLRenderer;
   scene = new THREE.Scene();
@@ -1321,7 +1327,9 @@ export class GameRenderer {
     }
     this.updateLiveHandheld(view, dt);
     this.applyCine();
+    this.smoothCuts(dt, cam);
     this.applyShake(dt, cam);
+    this.applyPunch(dt);
     if (!this.cine) this.lightsOn = 1;
     this.applyLit(this.lightsOn);
     // Reactions wait while a cinematic (intro, goal replay) shows recorded play.
@@ -1670,6 +1678,79 @@ export class GameRenderer {
     if (!this.bigMomentsOn()) return;
     this.trauma = Math.min(1, Math.max(this.trauma, amount));
   }
+
+  /**
+   * A big moment's camera punch (21 Nov 2026): the lens pushes in a few per cent and eases back
+   * out over about a third of a second (goals, the woodwork, thunderous shots).
+   */
+  punch(amount: number) {
+    if (!this.bigMomentsOn()) return;
+    this.punchK = Math.min(0.08, Math.max(this.punchK, amount));
+    this.punchT = 0;
+  }
+  private punchK = 0;
+  private punchT = 0;
+  /** The punch in force now (0 = none), for tests. */
+  get punchLevel() { return this.punchT < PUNCH_TIME ? this.punchK : 0; }
+
+  private applyPunch(dt: number) {
+    if (this.punchK <= 0) return;
+    this.punchT += dt;
+    if (this.punchT >= PUNCH_TIME) { this.punchK = 0; return; }
+    if (this.cine || this.liveCam) return;
+    // Quick in (first 15%), slow out.
+    const u = this.punchT / PUNCH_TIME;
+    const env = u < 0.15 ? u / 0.15 : 1 - (u - 0.15) / 0.85;
+    const c = this.camera.cam;
+    c.fov *= 1 - this.punchK * env * env * (3 - 2 * env);
+    c.updateProjectionMatrix();
+  }
+
+  /**
+   * Smooth camera cuts (21 Nov 2026). The match camera used to jump in one frame in a few places:
+   * back from the pitchside celebration camera after a goal, after changing the camera view in
+   * Settings, and whenever play was put somewhere new (a restart after a long stoppage). Now it
+   * glides from where it was to where it should be over about 0.7 s (eased, so it starts and
+   * settles gently). Cinematics keep their own cuts through black; Reduced camera motion keeps
+   * plain cuts.
+   */
+  private smoothCuts(dt: number, cam: CameraSettings) {
+    const c = this.camera.cam;
+    const b = this.camBlend;
+    const scripted = !!this.cine || !!this.viewOverride;
+    const live = !!this.liveCam;
+    if (!scripted && !live && !cam.reducedMotion && b.ready) {
+      const jumped = b.t >= CUT_BLEND.time && c.position.distanceTo(b.prevPos) > CUT_BLEND.jump;
+      if (b.wasLive || (!b.wasScripted && jumped)) {
+        b.fromPos.copy(b.prevPos);
+        b.fromQ.copy(b.prevQ);
+        b.fromFov = b.prevFov;
+        b.t = 0;
+        this.cutBlends++;
+      }
+    }
+    if (scripted || live || cam.reducedMotion) b.t = CUT_BLEND.time;
+    if (b.t < CUT_BLEND.time) {
+      b.t += dt;
+      const u = Math.min(1, b.t / CUT_BLEND.time);
+      const k = u * u * (3 - 2 * u);
+      c.position.lerpVectors(b.fromPos, c.position, k);
+      c.quaternion.slerpQuaternions(b.fromQ, c.quaternion.clone(), k);
+      const fov = b.fromFov + (c.fov - b.fromFov) * k;
+      if (Math.abs(fov - c.fov) > 0.01) { c.fov = fov; c.updateProjectionMatrix(); }
+    }
+    b.prevPos.copy(c.position);
+    b.prevQ.copy(c.quaternion);
+    b.prevFov = c.fov;
+    b.wasLive = live;
+    b.wasScripted = scripted;
+    b.ready = true;
+  }
+  private camBlend = { t: 1, fromPos: new THREE.Vector3(), fromQ: new THREE.Quaternion(), fromFov: 30, prevPos: new THREE.Vector3(), prevQ: new THREE.Quaternion(), prevFov: 30, wasLive: false, wasScripted: true, ready: false };
+  /** How many glides the match camera has made instead of cutting (tests). */
+  cutBlends = 0;
+  /** True while the camera is gliding after a cut (tests). */
+  get cutBlending() { return this.camBlend.t < CUT_BLEND.time; }
 
   /** Current shake (0..1), for tests. */
   get shakeLevel() {

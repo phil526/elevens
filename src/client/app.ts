@@ -25,7 +25,8 @@ import { OfflineSession } from './game/offline';
 import { defaultPicks, listDevices, localKind, moveToken, seatsFor, splitKeyMap, SPLIT_KEYS, type LocalDevice, type Seat, type SidePick } from './game/local';
 import { signalBars, type Session } from './game/session';
 import { ActionLayer, type InputSource } from './input/actions';
-import { GamepadSource } from './input/gamepad';
+import { GamepadSource, padLabels } from './input/gamepad';
+import { keyCap, padKey } from './ui/glyphs';
 import { attachKeyboard, KeyboardState } from './input/keyboard';
 import { attachMouse, MouseSource } from './input/mouse';
 import { isTouchDevice, TouchControls, TouchModel, type TouchContext } from './input/touch';
@@ -49,7 +50,7 @@ import { Hud } from './ui/hud';
 import { statsGraphic, TvGraphics } from './ui/tvgfx';
 import { WEATHER_NAMES } from './render/weather';
 import type { ViewState } from './view';
-import { SLOW_MO, SlowMo } from './slowmo';
+import { HIT_STOP, SLOW_MO, SlowMo } from './slowmo';
 import { CUP_SIZES, LEAGUE_SIZES, cupRounds, leagueTable, myFixture, newCompetition, opponentOf, recordResult, roundName, scoreText, type CompKind, type Competition, type Fixture } from '../shared/competition';
 import { ACHIEVEMENTS, SLOT_COUNT, applyClubs, goalSequence, loadStore, newProfile, recordMatch, recordTrophy, saveStore, today, trophyName, unlock, type Achievement, type GoalDetail, type MatchSummary, type Profile, type ProfileStore } from './profile';
 import { badgeSvg, clubBadge } from './ui/badge';
@@ -71,7 +72,7 @@ import { StreetScreens } from './modes/street';
 import { addResult, friendsListHtml, leagueHtml, loadLeagues, mergeLeague, missingChunks, placeIn, saveLeagues, type LocalLeague } from './modes/friends';
 import { LEAGUE_CODE_RE, newLeagueCode } from '../shared/friends';
 import { clearModes } from './modes/store';
-import { ClipTheatre, makeClip, saveClip, shareVideo, type GoalClip } from './modes/clips';
+import { ClipTheatre, deleteSlotClips, makeClip, saveClip, shareVideo, type GoalClip } from './modes/clips';
 import type { SwitchSens, SwitchStyle } from '../shared/types';
 
 /** Auto-switch style and sensitivity choices (20 Nov 2026). */
@@ -99,6 +100,8 @@ export class App {
   /** Test pages (?test) skip the intro and replays unless they ask for them (&cine). */
   /** Slow motion after goals and the woodwork (offline). */
   private slowMo = new SlowMo();
+  /** Hit-stop: a split-second freeze on thunderous strikes, the woodwork and your crunching tackles (offline). */
+  private hitStop = new SlowMo();
   private cineOff = new URLSearchParams(location.search).has('test') && !new URLSearchParams(location.search).has('cine');
   renderer: GameRenderer | null = null;
   keyboard = new KeyboardState();
@@ -436,8 +439,8 @@ export class App {
       this.tv.tick(dt);
       // Big moments (offline): play runs in slow motion for a moment after a goal or the woodwork.
       // (A cinematic such as the goal replay or highlights always plays at its own speed.)
-      if (this.cine.active) this.slowMo.stop();
-      const k = this.slowMo.scale(dt);
+      if (this.cine.active) { this.slowMo.stop(); this.hitStop.stop(); }
+      const k = this.slowMo.scale(dt) * this.hitStop.scale(dt);
       this.session.update(dt * k, now);
       const v = this.session.view();
       if (v) this.renderFrame(v, dt * k, now);
@@ -451,6 +454,10 @@ export class App {
     // A menu over the match (pause, half-time, full-time, photo mode): the on-screen controls sit
     // above the menus, so they go while it is open or their stick area and buttons take its taps.
     const covered = this.overlay !== 'none';
+    // Paused behind a menu (not the half-time or full-time panels): the commentator stops and the
+    // crowd goes quiet and muffled until play resumes (audio.pauseMix).
+    const muffle = covered && !!this.session && this.overlay !== 'halftime' && this.overlay !== 'fulltime' && !(this.session instanceof OnlineSession);
+    if (muffle !== this.audio.paused) { this.audio.pauseMix(muffle); if (muffle) this.commentator.silence(); }
     if (covered !== this.touchCovered) {
       this.touchCovered = covered;
       document.body.classList.toggle('menu-over', covered);
@@ -511,6 +518,7 @@ export class App {
   }
 
   private renderFrame(v: ViewState, dt: number, now: number) {
+    this.syncButtonKeys();
     const s = this.session!;
     const evs = s.drainEvents();
     this.playEvents(v, evs);
@@ -533,7 +541,7 @@ export class App {
       this.coach.show(this.overlay === 'none' && !this.cine.active && !this.tv.holding);
       if (this.overlay === 'none' && !this.cine.active) {
         const h = this.actions.held();
-        this.coach.update(v, evs, dt, { team: s.localTeams[0] ?? 0, attacking: s.attacking(), held: { sprint: h.sprint, jockey: h.jockey, switch: h.switch || Math.hypot(h.rsx, h.rsy) > 0.7, pass: h.pass, lob: h.lob }, name: (a) => this.coachName(a), move: this.moveName() });
+        this.coach.update(v, evs, dt, { team: s.localTeams[0] ?? 0, attacking: s.attacking(), held: { sprint: h.sprint, jockey: h.jockey, switch: h.switch || Math.hypot(h.rsx, h.rsy) > 0.7, pass: h.pass, lob: h.lob }, name: (a) => this.coachName(a), key: (a) => this.buttonHtml(a), move: this.moveName() });
       }
     }
     // Intro or replay: draw the staged view from the cinematic camera instead of the match.
@@ -821,11 +829,15 @@ export class App {
   private bigMoments(s: Session, evs: MatchEvent[]) {
     if (this.settings.graphics.bigMoments === false || this.settings.camera.reducedMotion) return;
     const offline = s instanceof OfflineSession && !this.cine.active;
+    const v = s.view();
+    const ctl = v ? s.localTeams.map((t) => v.ctl[t]) : [];
     for (const e of evs) {
-      if (e.type === 'goal') { this.renderer?.shake(0.75); if (offline) this.slowMo.start(SLOW_MO.goal); }
-      else if (e.type === 'post' || e.type === 'bar') { this.renderer?.shake(0.5); if (offline) this.slowMo.start(SLOW_MO.woodwork); }
+      if (e.type === 'goal') { this.renderer?.shake(0.75); this.renderer?.punch(0.06); if (offline) this.slowMo.start(SLOW_MO.goal); }
+      else if (e.type === 'post' || e.type === 'bar') { this.renderer?.shake(0.5); this.renderer?.punch(0.05); if (offline) { this.hitStop.start(HIT_STOP.woodwork); this.slowMo.start(SLOW_MO.woodwork); } }
       else if (e.type === 'save') this.renderer?.shake(0.28);
-      else if (e.type === 'kick' && (e.text === 'shot' || e.text === 'volley') && (e.power ?? 0) > 27) this.renderer?.shake(0.2);
+      else if (e.type === 'kick' && (e.text === 'shot' || e.text === 'volley') && (e.power ?? 0) > 27) { this.renderer?.shake(0.2); this.renderer?.punch(0.025); if (offline) this.hitStop.start(HIT_STOP.strike); }
+      // A crunching tackle or foul involving your own player.
+      else if ((e.type === 'tackle' || e.type === 'foul') && offline && e.player !== undefined && ctl.includes(e.player)) this.hitStop.start(HIT_STOP.tackle);
     }
   }
 
@@ -870,7 +882,7 @@ export class App {
             if (e.text !== 'manual') this.buzz(0.1, 0.3, 70);
           }
           break;
-        case 'post': case 'bar': this.audio.post(e.x ?? 0); this.audio.react('ooh'); if (greatShot() || Math.random() < 0.7) this.audio.say('woodwork', 0.5); break;
+        case 'post': case 'bar': this.audio.post(e.x ?? 0, e.power ?? 22); this.audio.react('ooh'); if (greatShot() || Math.random() < 0.7) this.audio.say('woodwork', 0.5); break;
         case 'whistle':
           this.audio.whistle(e.text && e.text in WHISTLES ? (e.text as WhistleKind) : (e.power ?? 1));
           if (e.text === 'halftime' || e.text === 'fulltime' || (e.text === 'kickoff' && v.clock < 1 && v.half === 1)) this.audio.react('applause');
@@ -1745,6 +1757,7 @@ export class App {
   }
 
   private beginSession(s: Session) {
+    this.hud.clearToasts();
     this.session?.dispose();
     // A change kit is only for looks: the score bug, radar and line-ups read it from the match's club (also on restarts and rematches).
     if (s instanceof OfflineSession && this.kitOverride && s.cfg.teams[1] === this.kitOverride.id) s.match.teams[1] = this.kitOverride;
@@ -1897,6 +1910,7 @@ export class App {
   }
 
   private endSession() {
+    this.hud.clearToasts();
     this.session?.dispose();
     this.session = null;
     this.modeMatch = null;
@@ -1943,6 +1957,9 @@ export class App {
   private applyTouchMode() {
     document.body.classList.toggle('touch', this.touchMode);
     this.touch.show(this.touchMode && !!this.session);
+    // Skip prompts say "tap" on a touch screen (the line-ups used to say "Press any button").
+    this.tv.touch = this.touchMode;
+    this.cine.touch = this.touchMode;
   }
 
   private checkOrientation() {
@@ -2297,7 +2314,7 @@ export class App {
       const h = this.cine.book.list[i];
       if (!h || this.savedGoals.has(i)) return;
       const live = this.session?.view() ?? v;
-      const clip = makeClip(live, h.clip, h.t, `${h.who} ${h.minute}`, `${v.teams[0].name} ${v.score[0]}–${v.score[1]} ${v.teams[1].name}`);
+      const clip = makeClip(live, h.clip, h.t, `${h.who} ${h.minute}`, `${v.teams[0].name} ${v.score[0]}–${v.score[1]} ${v.teams[1].name}`, this.store.active);
       el.setAttribute('disabled', '');
       el.textContent = 'Saving…';
       void saveClip(clip).then((ok) => {
@@ -2529,6 +2546,29 @@ export class App {
     if (off) this.modes.recordClub({ club: m.club, opp: m.opp, oppName: m.oppName, gf: m.gf, ga: m.ga, pens, scorers: v.goals.filter((g) => g.team === me && !g.ownGoal).map((g) => v.players[g.player]?.def.short ?? '?'), mode: this.modeMatch?.kind ?? mode });
   }
 
+  /**
+   * The button for an action as an icon, for the device in use: a drawn controller button, a key
+   * cap, or the on-screen button's name on a touch screen.
+   */
+  buttonHtml(a: BindAction): string {
+    if (this.touchMode && this.actions.lastDevice !== 'gamepad') return `<kbd>${this.coachName(a)}</kbd>`;
+    if (this.actions.lastDevice === 'gamepad') return padKey(padLabels(this.padStyleShown, this.settings.controls)[a] ?? '—', this.padStyleShown);
+    const l = keysText(this.mouseMode ? mouseAsKeys(this.settings.controls) : this.settings.controls, a);
+    return l.length ? keyCap(l[0]) : '<span class="unbound">none</span>';
+  }
+
+  private buttonKeysFor = '';
+  /** Keep the hint line's button icons in step with the device in use and the bindings. */
+  private syncButtonKeys() {
+    const dev = this.touchMode && this.actions.lastDevice !== 'gamepad' ? 'touch' : this.actions.lastDevice === 'keyboard' && this.mouseMode ? 'mouse' : this.actions.lastDevice;
+    const key = `${dev}|${this.padStyleShown}|${JSON.stringify(this.settings.controls)}`;
+    if (key === this.buttonKeysFor) return;
+    this.buttonKeysFor = key;
+    if (dev === 'touch') { this.hud.setButtonKeys(null); return; }
+    const words: [string, BindAction][] = [['PASS', 'pass'], ['SHOOT', 'shoot'], ['LOB', 'lob'], ['THROUGH', 'through'], ['SKILL', 'skill'], ['SWITCH', 'switch']];
+    this.hud.setButtonKeys(Object.fromEntries(words.map(([w, a]) => [w, this.buttonHtml(a)])));
+  }
+
   private coachName(a: BindAction): string {
     if (this.touchMode) return ({ pass: 'PASS', shoot: 'SHOOT', lob: 'LOB', through: 'THROUGH', sprint: 'SPRINT', jockey: 'JOCKEY', switch: 'SWITCH', skill: 'SKILL' } as Record<string, string>)[a] ?? a.toUpperCase();
     return this.bindingName(a);
@@ -2746,6 +2786,7 @@ export class App {
       this.store.slots[i] = null;
       // The slot's career, Be a Pro, cabinet and club history go with it.
       clearModes(i);
+      void deleteSlotClips(i);
       clearLevels(i);
       TournamentScreens.clear(i);
       StreetScreens.clear(i);
@@ -2907,7 +2948,8 @@ export class App {
           // A second slot can only be filled after the first.
           const dis = i > list.length ? 'disabled' : '';
           const start = i === 0 && a.id === (dev === 'keys' ? 'up' : 'pass') ? ' data-padstart' : '';
-          return `<button class="bind${listening ? ' listening' : ''}${v === undefined ? ' empty' : ''}" data-bind="${a.id}" data-slot="${i}"${start} ${dis}>${esc(text)}</button>`;
+          const shown = dev === 'pad' && !listening && v !== undefined ? padKey(text, style) : esc(text);
+          return `<button class="bind${listening ? ' listening' : ''}${v === undefined ? ' empty' : ''}" data-bind="${a.id}" data-slot="${i}"${start} ${dis}>${shown}</button>`;
         }).join('');
         const clr = list.length ? `<button class="bind clr" data-clear="${a.id}" title="Remove the last ${DEV_WORD[dev]}" aria-label="Remove the last ${DEV_WORD[dev]} for ${esc(a.name)}">✕</button>` : '<span></span>';
         const fixed = dev !== 'pad' && a.id === 'pause' ? '<small>Esc also pauses</small>' : '';

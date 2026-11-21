@@ -29,6 +29,13 @@ export const HABIT_TEXT: Record<string, string> = {
 };
 import { possessionTeam } from '../view';
 
+/** How important an on-screen message is: 0 a small battle call, 1 match information, 2 must be read. */
+export type ToastPrio = 0 | 1 | 2;
+interface ToastItem { msg: string; ms: number; prio: ToastPrio; at: number; until: number }
+/** Messages that may wait behind the one showing, and how long (ms, times priority + 1) one may wait. */
+const TOAST_QUEUE = 3;
+const TOAST_STALE = 2500;
+
 const hex = (c: number) => '#' + c.toString(16).padStart(6, '0');
 const RESTART_NAMES: Record<string, string> = { throwin: 'Throw-in', goalkick: 'Goal kick', corner: 'Corner', freekick: 'Free kick', penalty: 'Penalty', kickoff: 'Kick-off', dropball: 'Dropped ball' };
 
@@ -79,6 +86,10 @@ export class Hud {
   private bannerTimer = 0;
   private toastTimer = 0;
   private lastBug = '';
+  /** The score last drawn, to pop the number that goes up. */
+  private lastScore: { key: string; s: [number, number] } | null = null;
+  /** How many score pops have played (tests). */
+  pops = 0;
   private lastCard = '';
 
   constructor(root: HTMLElement) {
@@ -144,6 +155,29 @@ export class Hud {
     return this.challenge ? `${this.practice} ${Math.min(v.attempts, this.challenge)}/${this.challenge}` : this.practice;
   }
 
+  /**
+   * Button icons for the hint line (21 Nov 2026): the action words in it (PASS, SHOOT, LOB,
+   * THROUGH, SKILL, SWITCH) get the button in front of them, drawn for the device in use. Null on a
+   * touch screen, where those words are the on-screen buttons' own names.
+   */
+  setButtonKeys(keys: Record<string, string> | null) {
+    this.buttonKeys = keys;
+    this.hintShown = '\u0000';
+  }
+  private buttonKeys: Record<string, string> | null = null;
+  private hintShown = '';
+
+  private setHint(text: string) {
+    if (text === this.hintShown) return;
+    this.hintShown = text;
+    if (!text) { this.hint.style.display = 'none'; return; }
+    this.hint.style.display = 'block';
+    const k = this.buttonKeys;
+    if (!k) { this.hint.textContent = text; return; }
+    const safe = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    this.hint.innerHTML = safe.replace(/\b(PASS|SHOOT|LOB|THROUGH|SKILL|SWITCH)\b/g, (w) => (k[w] ? `${k[w]} ${w}` : w));
+  }
+
   setHighContrast(v: boolean) {
     this.el.classList.toggle('hc', v);
   }
@@ -158,11 +192,76 @@ export class Hud {
     setTimeout(() => el.remove(), 3800);
   }
 
-  toast(msg: string, ms = 2500) {
-    this.toastEl.textContent = msg;
-    this.toastEl.classList.add('show');
+  /**
+   * On-screen messages (21 Nov 2026): one shows at a time and the rest wait their turn, most
+   * important first, so a new message never wipes out one you haven't read. Priorities: 2 must be
+   * read (what the computer has learned, substitutions, connection news), 1 match information,
+   * 0 small battle calls ("Heavy touch", "Deflected!"), which are simply dropped when something else
+   * is on screen or waiting, so they never pile up. A more important message takes over at once;
+   * the one it replaces goes back to the front of the queue. Messages that waited too long are
+   * dropped, and the same message is never queued twice.
+   */
+  toast(msg: string, ms = 2500, prio: ToastPrio = 2) {
+    const now = performance.now();
+    const q = this.toastQ;
+    const cur = this.toastNow;
+    if (cur && cur.msg === msg) { cur.until = Math.max(cur.until, now + ms); this.armToast(cur.until - now); return; }
+    if (q.some((t) => t.msg === msg)) return;
+    const item: ToastItem = { msg, ms, prio, at: now, until: 0 };
+    if (!cur) { this.showToast(item); return; }
+    if (prio === 0) return;
+    if (prio > cur.prio) {
+      // Take over; the message it replaces comes back next if it still has a while to run.
+      if (cur.prio > 0 && cur.until - now > 700) q.unshift({ ...cur, ms: cur.until - now, at: now });
+      this.showToast(item);
+      return;
+    }
+    q.push(item);
+    q.sort((x, y) => y.prio - x.prio || x.at - y.at);
+    if (q.length > TOAST_QUEUE) q.length = TOAST_QUEUE;
+  }
+
+  /** The message showing now and those waiting (tests). */
+  get toasts() { return { now: this.toastNow?.msg ?? null, waiting: this.toastQ.map((t) => t.msg) }; }
+
+  /** Drop every message (a new match, or back to the menus). */
+  clearToasts() {
+    this.toastQ = [];
+    this.toastNow = null;
     clearTimeout(this.toastTimer);
-    this.toastTimer = window.setTimeout(() => this.toastEl.classList.remove('show'), ms);
+    this.toastEl.classList.remove('show');
+  }
+
+  private toastQ: ToastItem[] = [];
+  private toastNow: ToastItem | null = null;
+
+  private showToast(t: ToastItem) {
+    const now = performance.now();
+    t.until = now + t.ms;
+    this.toastNow = t;
+    this.toastEl.textContent = t.msg;
+    this.toastEl.dataset.prio = String(t.prio);
+    this.toastEl.classList.add('show');
+    this.shownToasts.push(t.msg);
+    if (this.shownToasts.length > 30) this.shownToasts.shift();
+    this.armToast(t.ms);
+  }
+  /** Messages shown so far, newest last (tests). */
+  shownToasts: string[] = [];
+
+  private armToast(ms: number) {
+    clearTimeout(this.toastTimer);
+    this.toastTimer = window.setTimeout(() => {
+      this.toastEl.classList.remove('show');
+      this.toastNow = null;
+      // The next one after the fade, unless it has gone stale.
+      this.toastTimer = window.setTimeout(() => {
+        const now = performance.now();
+        this.toastQ = this.toastQ.filter((t) => now - t.at < TOAST_STALE * (t.prio + 1));
+        const next = this.toastQ.shift();
+        if (next) this.showToast(next);
+      }, 220);
+    }, ms);
   }
 
   flash(big: string, sub: string, kind = '', ms = 2200) {
@@ -193,22 +292,22 @@ export class Hud {
     const who = p ? `#${p.def.number} ${p.def.short}` : '';
     const mine = e.team !== undefined && this.localSet.has(e.team);
     switch (e.text) {
-      case 'crowd': this.toast(`The ${view.teams[0].abbr} crowd is lifting their side`, 2200); break;
-      case 'tactical': this.toast(`Tactical foul${who ? `: ${who}` : ''} stops the break`, 1800); break;
-      case 'trapped': this.toast(`Caught by the ${tm} offside trap`, 1800); break;
-      case 'deflection': this.toast('Deflected!', 1100); break;
-      case 'hold': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast(`${who} holds them off`, 1000); break;
-      case 'muscle': if (!mine && this.ctlIds.has(e.power ?? -1)) this.toast(`${who} muscles you off the ball`, 1000); break;
-      case 'aerial': if (mine) this.toast(`${who} wins the header`, 1000); break;
+      case 'crowd': this.toast(`The ${view.teams[0].abbr} crowd is lifting their side`, 2200, 1); break;
+      case 'tactical': this.toast(`Tactical foul${who ? `: ${who}` : ''} stops the break`, 1800, 1); break;
+      case 'trapped': this.toast(`Caught by the ${tm} offside trap`, 1800, 1); break;
+      case 'deflection': this.toast('Deflected!', 1100, 0); break;
+      case 'hold': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast(`${who} holds them off`, 1000, 0); break;
+      case 'muscle': if (!mine && this.ctlIds.has(e.power ?? -1)) this.toast(`${who} muscles you off the ball`, 1000, 0); break;
+      case 'aerial': if (mine) this.toast(`${who} wins the header`, 1000, 0); break;
       // Ball control (19 Nov 2026): only for your own player.
-      case 'heavy': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast('Heavy touch', 900); break;
-      case 'beat': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast('Left him for dead', 900); break;
-      case 'turned': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast('Turned him with the first touch', 1000); break;
+      case 'heavy': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast('Heavy touch', 900, 0); break;
+      case 'beat': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast('Left him for dead', 900, 0); break;
+      case 'turned': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast('Turned him with the first touch', 1000, 0); break;
       // Timed tackles (20 Nov 2026): only for your own player.
-      case 'tacklegood': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast('Perfectly timed tackle', 900); break;
-      case 'tackleearly': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast('Mistimed: he skipped past you', 1000); break;
+      case 'tacklegood': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast('Perfectly timed tackle', 900, 0); break;
+      case 'tackleearly': if (mine && this.ctlIds.has(e.player ?? -1)) this.toast('Mistimed: he skipped past you', 1000, 0); break;
       default:
-        if (mine && e.text && HABIT_TEXT[e.text]) this.toast(HABIT_TEXT[e.text], 3200);
+        if (mine && e.text && HABIT_TEXT[e.text]) this.toast(HABIT_TEXT[e.text], 3200, 2);
         break;
     }
   }
@@ -262,25 +361,25 @@ export class Hud {
         this.flash('GOAL!', `${tm} · ${p ? p.def.short : ''}${e.text === 'og' ? ' (own goal)' : ''} ${minuteText(view.clock, view.half)}`, 'goal', 2800);
       } else if (e.type === 'offside') this.flash('OFFSIDE', tm, '', 1600);
       else if (e.type === 'foul') this.flash('FOUL', tm, '', 1400);
-      else if (e.type === 'advantage' && e.text === 'over') this.toast('Advantage over: play on', 1500);
+      else if (e.type === 'advantage' && e.text === 'over') this.toast('Advantage over: play on', 1500, 1);
       else if (e.type === 'advantage') this.flash('ADVANTAGE', tm ? `Play on · ${tm}` : 'Play on', 'adv', 1500);
       else if (e.type === 'switch' && e.text === 'keeper' && e.team !== undefined && this.localSet.has(e.team) && view.restart?.type === 'penalty') { /* the penalty hint explains it */ }
-      else if (e.type === 'switch' && e.text === 'keeper' && e.team !== undefined && this.localSet.has(e.team)) this.toast('You have the keeper: SHOOT dives, PASS comes out. SKILL hands him back', 2600);
+      else if (e.type === 'switch' && e.text === 'keeper' && e.team !== undefined && this.localSet.has(e.team)) this.toast('You have the keeper: SHOOT dives, PASS comes out. SKILL hands him back', 2600, 2);
       else if (e.type === 'call' && e.text?.startsWith('pen:')) {
         // Penalty techniques everyone sees: a Panenka or a blast.
         const t = e.text.slice(4) as PenTech;
-        if (t === 'panenka') this.toast('Panenka!', 1400);
-        else if (t === 'blast' && e.team !== undefined && this.localSet.has(e.team)) this.toast('Blasted!', 900);
+        if (t === 'panenka') this.toast('Panenka!', 1400, 1);
+        else if (t === 'blast' && e.team !== undefined && this.localSet.has(e.team)) this.toast('Blasted!', 900, 0);
       }
-      else if (e.type === 'call' && e.text === 'stutter' && e.team !== undefined && this.localSet.has(e.team)) this.toast(e.power ? 'Stutter run-up: ON (he checks, the keeper may go first)' : 'Stutter run-up: off', 1600);
+      else if (e.type === 'call' && e.text === 'stutter' && e.team !== undefined && this.localSet.has(e.team)) this.toast(e.power ? 'Stutter run-up: ON (he checks, the keeper may go first)' : 'Stutter run-up: off', 1600, 1);
       else if (e.type === 'call' && e.text === 'retake') this.flash('RETAKE', 'Keeper off his line too early', '', 2000);
-      else if (e.type === 'call' && e.text === 'wallback') this.toast(e.power && e.power >= 2 ? 'The wall crept in again: booked' : 'Referee: the wall has crept in, back ten yards', 2000);
-      else if (e.type === 'call' && e.text === 'knuckle') this.toast('Knuckleball!', 1100);
-      else if (e.type === 'call' && e.text === 'lieblock') this.toast('Blocked by the man lying behind the wall', 1600);
-      else if (e.type === 'call' && e.text === 'runup' && e.team !== undefined && this.localSet.has(e.team)) this.toast(`Run-up: ${['standard', 'long (more pace)', 'short (tidier)', 'straight on (less curl, more knuckle)'][e.power ?? 0]}`, 1600);
-      else if (e.type === 'call' && e.text === 'lie' && e.team !== undefined && this.localSet.has(e.team)) this.toast(e.power ? 'A man lies down behind the wall' : 'Nobody lying behind the wall', 1400);
+      else if (e.type === 'call' && e.text === 'wallback') this.toast(e.power && e.power >= 2 ? 'The wall crept in again: booked' : 'Referee: the wall has crept in, back ten yards', 2000, 1);
+      else if (e.type === 'call' && e.text === 'knuckle') this.toast('Knuckleball!', 1100, 0);
+      else if (e.type === 'call' && e.text === 'lieblock') this.toast('Blocked by the man lying behind the wall', 1600, 1);
+      else if (e.type === 'call' && e.text === 'runup' && e.team !== undefined && this.localSet.has(e.team)) this.toast(`Run-up: ${['standard', 'long (more pace)', 'short (tidier)', 'straight on (less curl, more knuckle)'][e.power ?? 0]}`, 1600, 1);
+      else if (e.type === 'call' && e.text === 'lie' && e.team !== undefined && this.localSet.has(e.team)) this.toast(e.power ? 'A man lies down behind the wall' : 'Nobody lying behind the wall', 1400, 1);
       else if (e.type === 'call' && e.text === 'dummy2') { /* seen on the pitch */ }
-      else if (e.type === 'call' && e.text === 'habit' && e.team !== undefined && this.localSet.has(e.team)) this.toast(`Their keeper has seen your last ${e.power ?? 3} penalties go the same way`, 2600);
+      else if (e.type === 'call' && e.text === 'habit' && e.team !== undefined && this.localSet.has(e.team)) this.toast(`Their keeper has seen your last ${e.power ?? 3} penalties go the same way`, 2600, 2);
       else if (e.type === 'call' && (e.text === 'gkcommit' || e.text === 'check')) { /* seen on the pitch */ }
       else if (e.type === 'card') {
         const p = e.player !== undefined && e.player >= 0 ? view.players[e.player] : null;
@@ -292,26 +391,26 @@ export class Hud {
         if (e.text === 'penalty') this.flash('PENALTY', tm, '', 2200);
         else if (this.restartCaptions) this.flash(RESTART_NAMES[e.text] ?? '', tm, '', 1300);
       } else if (e.type === 'kickoff') this.flash(view.half === 1 && view.clock < 1 ? 'KICK-OFF' : '', view.half === 2 && view.clock < 2700.5 ? 'Second half' : view.half === 3 && view.clock < 5400.5 ? 'Extra time' : '', '', 1200);
-      else if (e.type === 'sub' && e.text) { const [o, n] = e.text.split('>'); this.toast(`Substitution${tm ? ` · ${tm}` : ''}: ${o} off, ${n} on`, 2600); }
+      else if (e.type === 'sub' && e.text) { const [o, n] = e.text.split('>'); this.toast(`Substitution${tm ? ` · ${tm}` : ''}: ${o} off, ${n} on`, 2600, 1); }
       else if (e.type === 'addedtime') this.board(e.power ?? 1);
-      else if (e.type === 'recovery') this.toast('Referee drops the ball');
+      else if (e.type === 'recovery') this.toast('Referee drops the ball', 2500, 1);
       else if (e.type === 'call' && e.text && (G6_CALLS.has(e.text) || e.text.startsWith('habit-'))) this.g6Call(view, e, tm);
       else if ((e.type === 'call' || e.type === 'rush') && e.team !== undefined && this.localSet.has(e.team)) {
         const p = e.player !== undefined && e.player >= 0 ? view.players[e.player] : null;
         if (e.text?.startsWith('routine:')) {
           const kind = e.text.slice(8) as 'corner' | 'freekick' | 'throwin';
-          this.toast(`${kind === 'corner' ? 'Corner' : kind === 'throwin' ? 'Throw-in' : 'Free kick'} routine: ${ROUTINES[kind]?.[e.power ?? 0] ?? ''}`, 1600);
+          this.toast(`${kind === 'corner' ? 'Corner' : kind === 'throwin' ? 'Throw-in' : 'Free kick'} routine: ${ROUTINES[kind]?.[e.power ?? 0] ?? ''}`, 1600, 1);
         } else if (e.text?.startsWith('plan:')) {
           const pl = e.text.slice(5) as GamePlan;
           this.flash(GAME_PLAN_NAMES[pl] ?? '', 'Game plan', 'plan', 1400);
-        } else if (e.text === 'wall') this.toast(`Wall: ${e.power ?? ''} men`, 1000);
+        } else if (e.text === 'wall') this.toast(`Wall: ${e.power ?? ''} men`, 1000, 1);
         else if (e.text?.startsWith('link:')) {
           const q = e.power !== undefined && e.power >= 0 ? view.players[e.power] : null;
           const pair = `#${p?.def.number ?? ''} ${p?.def.short ?? ''} & #${q?.def.number ?? ''} ${q?.def.short ?? ''}`;
-          this.toast(e.text === 'link:2' ? `Partnership: ${pair} have a great understanding` : `Partnership: ${pair} are linking up`, 2200);
+          this.toast(e.text === 'link:2' ? `Partnership: ${pair} have a great understanding` : `Partnership: ${pair} are linking up`, 2200, 1);
         }
         else if (e.text === 'jump' || e.text === 'dive') { /* seen on the pitch */ }
-        else this.toast(e.type === 'rush' ? 'Keeper rushes out' : e.text === 'press' ? 'Team press!' : e.text === 'trap' ? 'Offside trap: line steps up' : e.text === 'dummy' ? 'Dummy: let it run' : e.text === 'onetwo' ? `One-two: #${p?.def.number ?? ''} ${p?.def.short ?? ''} goes` : `#${p?.def.number ?? ''} ${p?.def.short ?? ''}: run in behind`, 1300);
+        else this.toast(e.type === 'rush' ? 'Keeper rushes out' : e.text === 'press' ? 'Team press!' : e.text === 'trap' ? 'Offside trap: line steps up' : e.text === 'dummy' ? 'Dummy: let it run' : e.text === 'onetwo' ? `One-two: #${p?.def.number ?? ''} ${p?.def.short ?? ''} goes` : `#${p?.def.number ?? ''} ${p?.def.short ?? ''}: run in behind`, 1300, 1);
       }
     }
   }
@@ -328,8 +427,13 @@ export class Hud {
     const bug = `${v.teams[0].abbr}|${v.score[0]}|${v.score[1]}|${v.teams[1].abbr}|${this.practiceText(v) ?? this.clockFor(v)}|${half}|${reds.join(',')}|${so}`;
     if (bug !== this.lastBug) {
       this.lastBug = bug;
-      this.bug.innerHTML = `<div class="tm"><i class="chip" style="background:${hex(k0.shirt)}"></i>${v.teams[0].abbr}${rc(reds[0])}</div><div class="sc">${v.score[0]} – ${v.score[1]}</div><div class="tm">${rc(reds[1])}${v.teams[1].abbr}<i class="chip" style="background:${hex(k1.shirt)}"></i></div><div class="clk">${this.practiceText(v) ?? this.clockFor(v)}<span class="half">${half}</span></div>${so}`;
+      // A goal: the scorer's number pops and the score box flashes (not on the first draw or a new match).
+      const sk = `${v.teams[0].abbr}|${v.teams[1].abbr}`;
+      const popped = this.lastScore && this.lastScore.key === sk ? [0, 1].filter((t) => v.score[t] > this.lastScore!.s[t]) : [];
+      this.lastScore = { key: sk, s: [v.score[0], v.score[1]] };
+      this.bug.innerHTML = `<div class="tm"><i class="chip" style="background:${hex(k0.shirt)}"></i>${v.teams[0].abbr}${rc(reds[0])}</div><div class="sc${popped.length ? ' pop' : ''}"><span class="${popped.includes(0) ? 'up' : ''}">${v.score[0]}</span> – <span class="${popped.includes(1) ? 'up' : ''}">${v.score[1]}</span></div><div class="tm">${rc(reds[1])}${v.teams[1].abbr}<i class="chip" style="background:${hex(k1.shirt)}"></i></div><div class="clk">${this.practiceText(v) ?? this.clockFor(v)}<span class="half">${half}</span></div>${so}`;
       this.momKey = '';
+      if (popped.length) this.pops++;
     }
     this.momentumMeter(v, hex(k0.shirt), hex(k1.shirt));
     // Controlled player card.
@@ -412,10 +516,10 @@ export class Hud {
       if (b.textContent !== ed.label) b.textContent = ed.label;
     } else if (this.edgeEl.style.display !== 'none') this.edgeEl.style.display = 'none';
     // Restart hint for a human taker.
+    let hintText = '';
     const r = v.restart;
     if (r && r.ready && lt !== undefined && r.team === lt && v.ctl[lt] === r.taker && v.humans[lt]) {
-      this.hint.style.display = 'block';
-      this.hint.textContent = r.type === 'kickoff' ? 'Kick-off: pass to start'
+      hintText = r.type === 'kickoff' ? 'Kick-off: pass to start'
         : r.type === 'penalty' ? `${this.takerLine(v, r.taker, 'pen')}: aim, hold SHOOT and release as the ring closes · SKILL stutter${r.stutter ? ' (on)' : ''} · LOB+SHOOT Panenka · SWITCH+SHOOT side-foot · modifier+sprint blast`
         : r.type === 'corner' ? 'Corner: move the target, LOB to cross or PASS short'
         : r.type === 'freekick' ? (r.quick ? 'Quick free kick: pass, lob or shoot' : (Math.hypot(r.spot.x - PITCH.halfLength * v.attackDir[lt], r.spot.z) < 32 ? `${this.takerLine(v, r.taker, 'fk')} · ` : '') + (Math.abs(r.curve ?? 0) > 0.02 || (r.dip ?? 0) > 0.02 ? `Free kick: bend ${Math.round(Math.abs(r.curve ?? 0) * 100)}% ${(r.curve ?? 0) >= 0 ? 'right' : 'left'}, dip ${Math.round((r.dip ?? 0) * 100)}%. Shoot as the ring closes` : 'Free kick: move the target, then pass, lob or shoot as the ring closes. Hold the modifier and move to bend or dip a shot') + (Math.hypot(r.spot.x - PITCH.halfLength * v.attackDir[lt], r.spot.z) < 30 ? '. SKILL: run-up · modifier+sprint+SHOOT: knuckleball · THROUGH+SHOOT: low under the wall · SWITCH: routine' : ''))
@@ -425,20 +529,17 @@ export class Hud {
       // Penalty keeper duel.
       const tk = v.players[r.taker];
       const fav = tk ? favouriteSide(tk.def) : null;
-      this.hint.style.display = 'block';
-      this.hint.textContent = (r.gkCommit !== undefined ? (r.gkCommit === 0 ? 'Standing tall. ' : 'You have picked your side. ') : '') +
+      hintText = (r.gkCommit !== undefined ? (r.gkCommit === 0 ? 'Standing tall. ' : 'You have picked your side. ') : '') +
         `Their penalty${tk ? ` (${tk.def.short}${fav ? `, usually puts it to his ${fav.side === 'L' ? 'left' : 'right'}` : ''})` : ''}: move along your line with the stick, point the way and press SHOOT to dive, or centred to stand tall. Go too early and he will see it`;
     } else if (r && r.type === 'freekick' && lt !== undefined && r.team !== lt && v.humans[lt] && Math.hypot(r.spot.x + PITCH.halfLength * v.attackDir[lt], r.spot.z) < 30) {
-      this.hint.style.display = 'block';
-      this.hint.textContent = 'Their free kick: move the stick to shift your wall, SWITCH changes how many stand in it, SHOOT makes it jump, PASS puts a man down behind it';
+      hintText = 'Their free kick: move the stick to shift your wall, SWITCH changes how many stand in it, SHOOT makes it jump, PASS puts a man down behind it';
     } else if (v.ball.state === 'held' && v.ball.owner >= 0 && lt !== undefined && v.players[v.ball.owner].team === lt && v.humans[lt] && v.phase === 'play') {
-      this.hint.style.display = 'block';
-      this.hint.textContent = 'Keeper\'s ball: PASS rolls it out, LOB throws, THROUGH drop-kicks, SHOOT punts. Aim with the stick, hold for distance';
+      hintText = 'Keeper\'s ball: PASS rolls it out, LOB throws, THROUGH drop-kicks, SHOOT punts. Aim with the stick, hold for distance';
     } else if (v.skill?.task) {
       // Ball control drill: what to do now.
-      this.hint.style.display = 'block';
-      this.hint.textContent = v.skill.task;
-    } else this.hint.style.display = 'none';
+      hintText = v.skill.task;
+    }
+    this.setHint(hintText);
     this.guideEl.innerHTML = info.guide;
     this.guideEl.style.display = info.guide ? 'block' : 'none';
     if (info.debug !== null) { this.debugEl.style.display = 'block'; this.debugEl.textContent = info.debug; }

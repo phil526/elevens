@@ -5,6 +5,7 @@
 
 import { defaultBindings, keysText, type BindAction, type ControlBindings } from '../input/bindings';
 import { padLabels, type PadStyle } from '../input/gamepad';
+import { padKey } from './glyphs';
 
 export type TipDevice = 'keyboard' | 'gamepad' | 'touch';
 
@@ -49,7 +50,7 @@ export function loadingTips(device: TipDevice, style: PadStyle = 'xbox', b: Cont
     const html = esc(t.text).replace(/\{(\w+)\}/g, (_, id: string) => {
       const l = label(id);
       if (!l || l === '—') missing = true;
-      return `<kbd>${esc(l)}</kbd>`;
+      return device === 'gamepad' ? padKey(l, style) : `<kbd>${esc(l)}</kbd>`;
     });
     return missing ? '' : html;
   }).filter(Boolean);

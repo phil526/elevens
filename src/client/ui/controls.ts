@@ -2,6 +2,7 @@
 
 import { defaultBindings, keyLabel, keysText, mouseAsKeys, type BindAction, type ControlBindings } from '../input/bindings';
 import { padLabels, type PadStyle } from '../input/gamepad';
+import { padKey } from './glyphs';
 
 // Keyboard column: {k:x} = every key bound to x ("K or Space"), {k1:x} = its first key. Controller column: {x}.
 const ROWS: [string, string, string, string][] = [
@@ -75,7 +76,7 @@ function fillCell(s: string, b: ControlBindings, style: PadStyle): string {
     if (id === 'move') return moveHtml(b);
     if (k) return keysHtml(b, id as BindAction, k === 'k1:');
     const l = pad[id] ?? id;
-    return l === '—' ? '<span class="unbound">none</span>' : kbd(l);
+    return l === '—' ? '<span class="unbound">none</span>' : padKey(l, style);
   });
 }
 
@@ -114,10 +115,11 @@ export function guideLine(device: 'keyboard' | 'gamepad' | 'touch' | 'mouse', st
       : `Point to run · ${k('pass')} Tackle · ${k('lob')} Slide · ${k('through')} Contain · ${k('jockey')} Jockey · ${k('switch')} Switch · ${k('keeper')} Take keeper`;
   }
   if (device === 'gamepad') {
-    const p = padLabels(style, b);
+    const l = padLabels(style, b);
+    const p = Object.fromEntries(Object.entries(l).map(([k, v]) => [k, padKey(v, style)])) as Record<string, string>;
     return attacking
-      ? `<kbd>${p.pass}</kbd> Pass (hold = further) · <kbd>${p.shoot}</kbd> Shoot · <kbd>${p.lob}</kbd>+<kbd>${p.shoot}</kbd> Chip · <kbd>${p.through}</kbd> Through · <kbd>${p.jockey}</kbd> Driven/finesse · <kbd>${p.close}</kbd> Close control · <kbd>${p.switch}</kbd> Call run`
-      : `<kbd>${p.pass}</kbd> Tackle · <kbd>${p.lob}</kbd> Slide · <kbd>${p.through}</kbd> Contain · <kbd>${p.jockey}</kbd> Jockey · <kbd>${p.switch}</kbd>/<kbd>${p.flick}</kbd> Switch · <kbd>${p.skill}</kbd> Take keeper`;
+      ? `${p.pass} Pass (hold = further) · ${p.shoot} Shoot · ${p.lob}+${p.shoot} Chip · ${p.through} Through · ${p.jockey} Driven/finesse · ${p.close} Close control · ${p.switch} Call run`
+      : `${p.pass} Tackle · ${p.lob} Slide · ${p.through} Contain · ${p.jockey} Jockey · ${p.switch}/${p.flick} Switch · ${p.skill} Take keeper`;
   }
   const k = (a: BindAction) => kbd(keysText(b, a)[0] ?? '—');
   return attacking

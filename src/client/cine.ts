@@ -75,6 +75,8 @@ export class CineDirector {
   private tagEl: HTMLElement;
   private goalEl: HTMLElement;
   private skipEl: HTMLElement;
+  /** Touch screen in use: the skip prompt says tap rather than press a button. */
+  set touch(on: boolean) { this.skipEl.textContent = on ? 'Tap the screen to skip' : 'Press any button to skip'; }
   /** Called when a cinematic starts and ends (pause / resume the match, hide the HUD). */
   onChange: (mode: CineMode) => void = () => {};
   onCue: (cue: 'walkout' | 'goal' | 'chance' | 'trophy' | 'firework' | 'flash') => void = () => {};

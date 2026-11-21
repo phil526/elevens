@@ -62,7 +62,12 @@ export interface Profile {
 
 export interface ProfileStore { active: number; slots: (Profile | null)[] }
 
-export const today = () => new Date().toISOString().slice(0, 10);
+/**
+ * Today's date (YYYY-MM-DD) on this device's own calendar. It used to be the UTC date, so the daily
+ * scenario turned over at 1 am in a UK summer (and mid-afternoon or evening elsewhere).
+ */
+export const localDay = (d: Date = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+export const today = () => localDay();
 
 export function newProfile(name: string): Profile {
   return {

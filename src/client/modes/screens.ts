@@ -20,14 +20,14 @@ import { SKILL_GAMES, SKILL_HELP, SKILL_NAMES, type SkillGame } from '../../shar
 import { ALL_CLUBS, HR, ROLES, SK, teamById, teamRatings, type TeamDef } from '../../shared/teams';
 import type { MatchConfig } from '../../shared/types';
 import type { Match } from '../../shared/match';
-import { trophyName, type Profile, type Trophy } from '../profile';
+import { localDay, trophyName, type Profile, type Trophy } from '../profile';
 import { clubBadge } from '../ui/badge';
 import type { ViewState } from '../view';
 import { deleteClip, listClips, type GoalClip } from './clips';
 import { addToCabinet, dailyStreak, loadModes, recordClubMatch, saveModes, type CabinetItem, type ModeStore } from './store';
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
-const todayStr = () => new Date().toISOString().slice(0, 10);
+const todayStr = () => localDay();
 const niceDate = (d: string) => { try { return new Date(d.length === 10 ? `${d}T12:00:00` : d).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); } catch { return d; } };
 
 export type ModeKind = 'career' | 'pro' | 'scenario' | 'skill' | 'tournament' | 'street';
@@ -694,7 +694,7 @@ export class ModeScreens {
   // ------------------------------------------------------------------ my goals (clips)
 
   async showClips(note = '') {
-    const clips = await listClips();
+    const clips = await listClips(this.h.slot());
     this.h.set(`<div class="panel mode-panel">
       <h2>My goals</h2>
       <p class="note">Goals you saved from the full-time screen. Watch them again, or share one as a video (on iPad the share sheet opens; on a PC it downloads).</p>

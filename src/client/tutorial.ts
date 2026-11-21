@@ -36,6 +36,8 @@ export interface CoachContext {
   /** Buttons held this frame (from the action layer). */
   held: { sprint: boolean; jockey: boolean; switch: boolean; pass: boolean; lob: boolean };
   name: (a: BindAction) => string;
+  /** The button as an icon (controller buttons drawn, keys as key caps); falls back to the name. */
+  key?: (a: BindAction) => string;
   move: string;
 }
 
@@ -111,7 +113,7 @@ export class Coach {
   private draw(c: CoachContext) {
     const step = this.current(c.attacking);
     const n = this.done.size, total = COACH_STEPS.length;
-    const fill = (t: string) => t.replace(/\{(\w+)\}/g, (_, a: string) => (a === 'move' ? `<kbd>${c.move}</kbd>` : `<kbd>${c.name(a as BindAction)}</kbd>`));
+    const fill = (t: string) => t.replace(/\{(\w+)\}/g, (_, a: string) => (a === 'move' ? `<kbd>${c.move}</kbd>` : c.key ? c.key(a as BindAction) : `<kbd>${c.name(a as BindAction)}</kbd>`));
     const html = step
       ? `<div class="coach-head"><span>Guided first match</span><b>${n} / ${total}</b></div>
          <div class="coach-title">${this.flashT > 0 ? '<span class="coach-tick">✓ Nice!</span> ' : ''}${step.title}</div>

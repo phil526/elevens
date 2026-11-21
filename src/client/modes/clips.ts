@@ -22,7 +22,12 @@ export interface GoalClip {
   tg: number;
   base: ViewState;
   snaps: Snap[];
+  /** The save slot (profile) it belongs to; clips saved before 21 Nov 2026 have none and count as the first slot's. */
+  slot?: number;
 }
+
+/** Clips of one save slot (each profile has its own My goals). */
+export const clipsOfSlot = (all: GoalClip[], slot: number) => all.filter((c) => (c.slot ?? 0) === slot);
 
 export const CLIP_MAX = 40;
 const DB = 'elevens-clips', STORE = 'clips';
@@ -48,11 +53,16 @@ async function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBReq
   });
 }
 
-export async function listClips(): Promise<GoalClip[]> {
+export async function listClips(slot?: number): Promise<GoalClip[]> {
   try {
     const all = await tx<GoalClip[]>('readonly', (s) => s.getAll() as IDBRequest<GoalClip[]>);
-    return all.sort((a, b) => (a.date < b.date ? 1 : -1));
+    return (slot === undefined ? all : clipsOfSlot(all, slot)).sort((a, b) => (a.date < b.date ? 1 : -1));
   } catch { return []; }
+}
+
+/** Delete every clip of a save slot (the slot was deleted). */
+export async function deleteSlotClips(slot: number): Promise<void> {
+  for (const c of await listClips(slot)) await deleteClip(c.id);
 }
 
 export async function saveClip(c: GoalClip): Promise<boolean> {
@@ -69,13 +79,13 @@ export async function deleteClip(id: string): Promise<void> {
 }
 
 /** A clip from a highlight of the match that has just been played. */
-export function makeClip(live: ViewState, clip: ReplayRecorder, tg: number, title: string, sub: string): GoalClip {
+export function makeClip(live: ViewState, clip: ReplayRecorder, tg: number, title: string, sub: string, slot = 0): GoalClip {
   const snaps = clip.snapshots();
   // About 20 snapshots a second is plenty (playback interpolates between them).
   const thin: Snap[] = [];
   for (const s of snaps) if (!thin.length || s.t - thin[thin.length - 1].t >= 0.048 || s === snaps[snaps.length - 1]) thin.push(s);
   const base = JSON.parse(JSON.stringify({ ...live, ratings: undefined, stats: live.stats })) as ViewState;
-  return { id: `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`, date: new Date().toISOString(), title, sub, tg, base, snaps: JSON.parse(JSON.stringify(thin)) };
+  return { id: `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`, date: new Date().toISOString(), title, sub, tg, base, snaps: JSON.parse(JSON.stringify(thin)), slot };
 }
 
 const CLIP = { slow: 0.55, after: 1.2, beforeNet: 3.2 } as const;

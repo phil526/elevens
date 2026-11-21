@@ -71,6 +71,48 @@ export const CALL_GAP = 9;
 /** Level of the recorded crowd bed relative to the crowd intensity. */
 const BED_GAIN = 1.6;
 
+/**
+ * Sound mix (21 Nov 2026): recordings that come in pairs or sets are levelled to one loudness, so
+ * one take of a kick, an ooh or a commentary line is never suddenly louder than the next. The
+ * targets are each set's average (measured with levelOf), so the overall balance stays as tuned.
+ */
+export const LEVEL_TARGET: Partial<Record<SampleName, number>> = {
+  ooh: 0.2, ooh2: 0.2, chant: 0.143, chant2: 0.143, kick1: 0.075, kick2: 0.075, crowdA: 0.069, crowdB: 0.069,
+  callShot: 0.18, callStrike: 0.18, callIncredible: 0.18,
+};
+/** Commentary lines are levelled to this (their average). */
+export const LINE_TARGET = 0.305;
+
+/**
+ * How loud a recording is when something is happening: the 90th percentile of its loudness in
+ * 50 ms windows (so long quiet tails and single spikes don't count).
+ */
+export function levelOf(data: Float32Array, sampleRate: number): number {
+  const w = Math.max(1, Math.round(sampleRate * 0.05));
+  const n = Math.floor(data.length / w);
+  if (n < 1) { let e = 0; for (let i = 0; i < data.length; i++) e += data[i] * data[i]; return Math.sqrt(e / Math.max(1, data.length)); }
+  const r: number[] = [];
+  for (let j = 0; j < n; j++) {
+    let e = 0;
+    for (let i = j * w, end = i + w; i < end; i++) e += data[i] * data[i];
+    r.push(Math.sqrt(e / w));
+  }
+  r.sort((a, b) => a - b);
+  return r[Math.min(n - 1, Math.floor(n * 0.9))];
+}
+
+/** Gain that brings a recording to a target loudness, kept within about ±3 dB. */
+export function levelTrim(level: number, target: number): number {
+  if (!(level > 0)) return 1;
+  return Math.max(0.7, Math.min(1.45, target / level));
+}
+
+/**
+ * The mix ducks (dips) the crowd and the music while the commentator speaks and the referee
+ * blows, so both cut through; and while the game is paused the crowd is muffled and quieter.
+ */
+export const MIX = { duckVoice: 0.62, duckVoiceBig: 0.78, duckWhistle: 0.8, attack: 0.06, release: 0.35, pauseCrowd: 0.35, pauseCutoff: 650 } as const;
+
 export class GameAudio {
   ctx: AudioContext | null = null;
   private master!: GainNode;
@@ -97,6 +139,18 @@ export class GameAudio {
   musicUrl = 'music/menu.mp3';
   private musicBus!: GainNode;
   private voiceBus!: GainNode;
+  /** Ducking (dips under the commentator and whistles) and the paused muffle, after the crowd and music levels. */
+  private crowdDuck!: GainNode;
+  private pauseLP!: BiquadFilterNode;
+  private pauseGain!: GainNode;
+  /** Level trims per recording (see LEVEL_TARGET) and per commentary line. */
+  private trims: Partial<Record<SampleName, number>> = {};
+  private lineTrim = new Map<string, number>();
+  /** True while the game is paused behind a menu (pauseMix). */
+  paused = false;
+  /** The duck in force: until when (audio clock) and how deep, so a longer one is never cut short. */
+  private duckUntil = 0;
+  private duckDepth = 1;
   private lastCall = -99;
   private lastLine: SampleName | null = null;
   /** Recorded commentator lines (audio/commentary.ts), loaded once commentary is wanted. */
@@ -141,7 +195,12 @@ export class GameAudio {
     this.fx = ctx.createGain();
     this.fx.connect(this.master);
     this.crowdBus = ctx.createGain();
-    this.crowdBus.connect(this.master);
+    this.crowdDuck = ctx.createGain();
+    this.pauseLP = ctx.createBiquadFilter();
+    this.pauseLP.type = 'lowpass';
+    this.pauseLP.frequency.value = 20000;
+    this.pauseGain = ctx.createGain();
+    this.crowdBus.connect(this.crowdDuck).connect(this.pauseLP).connect(this.pauseGain).connect(this.master);
     this.musicBus = ctx.createGain();
     this.musicBus.connect(this.master);
     this.voiceBus = ctx.createGain();
@@ -204,7 +263,10 @@ export class GameAudio {
           const r = await fetch(url);
           if (!r.ok) { st.error = `${SAMPLES[k]}: HTTP ${r.status}`; if (r.status === 404) break; continue; }
           const buf = await r.arrayBuffer();
-          this.samples[k] = await decode(ctx, buf);
+          const ab = await decode(ctx, buf);
+          this.samples[k] = ab;
+          const target = LEVEL_TARGET[k];
+          if (target) this.trims[k] = levelTrim(levelOf(ab.getChannelData(0), ab.sampleRate), target);
         } catch (e) { st.error = `${SAMPLES[k]}: ${String((e as Error)?.message ?? e).slice(0, 80)}`; }
       }
       if (this.samples[k]) st.loaded++; else st.failed++;
@@ -229,7 +291,9 @@ export class GameAudio {
         try {
           const r = await fetch(this.sfxBase + f);
           if (!r.ok) continue;
-          this.lines.set(f, await decode(ctx, await r.arrayBuffer()));
+          const ab = await decode(ctx, await r.arrayBuffer());
+          this.lineTrim.set(f, levelTrim(levelOf(ab.getChannelData(0), ab.sampleRate), LINE_TARGET));
+          this.lines.set(f, ab);
           this.commentaryStatus.loaded++;
         } catch { /* skipped: the line just isn't said */ }
       }
@@ -245,7 +309,7 @@ export class GameAudio {
    */
   say(kind: CommentKind, delay = 0.3): boolean {
     const ctx = this.ctx;
-    if (!ctx || this.settings.commentary === false || this.commentaryMuted) return false;
+    if (!ctx || this.settings.commentary === false || this.commentaryMuted || this.paused) return false;
     const files = COMMENTARY[kind].map((_, i) => commentFile(kind, i)).filter((f) => this.lines.has(f));
     if (!files.length) {
       // No recorded pack (yet): the older calls cover goals, saves and the woodwork.
@@ -269,12 +333,56 @@ export class GameAudio {
     const src = ctx.createBufferSource();
     src.buffer = buf;
     const g = ctx.createGain();
-    g.gain.value = 1;
+    g.gain.value = this.lineTrim.get(f) ?? 1;
     src.connect(g).connect(this.voiceBus);
     src.start(now + delay);
+    this.duck(prio >= 3 ? MIX.duckVoiceBig : MIX.duckVoice, now + delay, buf.duration);
     this.speaking = { until: now + delay + buf.duration, prio, src, gain: g };
     this.lastCall = now + delay + buf.duration;
     return true;
+  }
+
+  /**
+   * Dip the crowd (to `depth` of its level) from `at` for `dur` seconds, then let it back up. While
+   * dips overlap the deeper one holds and the later end wins, so a whistle never cuts short a dip
+   * under the commentator.
+   */
+  duck(depth: number, at: number, dur: number) {
+    const ctx = this.ctx;
+    if (!ctx || !this.crowdDuck) return;
+    const g = this.crowdDuck.gain;
+    const overlapping = at < this.duckUntil;
+    const d = overlapping ? Math.min(depth, this.duckDepth) : depth;
+    const until = Math.max(at + dur, this.duckUntil);
+    g.cancelScheduledValues(at);
+    g.setTargetAtTime(d, at, MIX.attack);
+    g.setTargetAtTime(1, until, MIX.release);
+    this.duckDepth = d;
+    this.duckUntil = until;
+  }
+
+  /** How far the crowd is dipped right now (1 = not at all), for tests. */
+  get duckLevel() { return this.crowdDuck ? this.crowdDuck.gain.value : 1; }
+
+  /**
+   * The game paused behind a menu (or resumed): the commentator stops mid-line, chants wait, and
+   * the crowd goes quieter and muffled, as if heard from the tunnel. Menu sounds stay clear.
+   */
+  pauseMix(on: boolean) {
+    this.paused = on;
+    const ctx = this.ctx;
+    if (!ctx || !this.pauseLP) return;
+    const t = ctx.currentTime;
+    this.pauseLP.frequency.cancelScheduledValues(t);
+    this.pauseLP.frequency.setTargetAtTime(on ? MIX.pauseCutoff : 20000, t, on ? 0.12 : 0.25);
+    this.pauseGain.gain.cancelScheduledValues(t);
+    this.pauseGain.gain.setTargetAtTime(on ? MIX.pauseCrowd : 1, t, on ? 0.12 : 0.25);
+    if (on && this.speaking && t < this.speaking.until) {
+      const sp = this.speaking;
+      sp.gain.gain.setTargetAtTime(0.0001, t, 0.05);
+      try { sp.src.stop(t + 0.25); } catch { /* already stopped */ }
+      this.speaking = { ...sp, until: t };
+    }
   }
 
   /** True once a recorded sound has loaded (tests and the settings screen use it). */
@@ -295,7 +403,7 @@ export class GameAudio {
       src.buffer = buf;
       src.loop = true;
       const g = ctx.createGain();
-      g.gain.value = beds.length > 1 ? 0.5 : 1;
+      g.gain.value = (beds.length > 1 ? 0.5 : 1) * (this.trims[i === 0 && this.samples.crowdA ? 'crowdA' : 'crowdB'] ?? 1);
       if (beds.length > 1) {
         // Slow swell between the two beds so the loop points are never obvious.
         const lfo = ctx.createOscillator();
@@ -320,7 +428,7 @@ export class GameAudio {
     src.buffer = buf;
     src.playbackRate.value = opts.rate ?? 1;
     const g = ctx.createGain();
-    g.gain.setValueAtTime(gain, now);
+    g.gain.setValueAtTime(gain * (this.trims[k] ?? 1), now);
     const dur = Math.min(opts.dur ?? buf.duration, buf.duration - (opts.offset ?? 0));
     if (opts.fade) g.gain.setTargetAtTime(0.0001, now + Math.max(0, dur - opts.fade * 2), opts.fade);
     let out: AudioNode = g;
@@ -374,7 +482,7 @@ export class GameAudio {
   /** Now and then during a match, a chant rises out of the crowd. */
   private maybeChant() {
     const ctx = this.ctx!;
-    if (this.crowdTarget <= 0.05 || !this.samples.chant || ctx.state !== 'running') return;
+    if (this.crowdTarget <= 0.05 || !this.samples.chant || ctx.state !== 'running' || this.paused) return;
     const now = ctx.currentTime;
     if (this.nextChant === 0) { this.nextChant = now + 20 + Math.random() * 25; return; }
     if (now < this.nextChant) return;
@@ -450,7 +558,7 @@ export class GameAudio {
    */
   call(kind: 'shot' | 'goal', delay = 0.35): SampleName | null {
     const ctx = this.ctx;
-    if (!ctx || this.settings.commentary === false) return null;
+    if (!ctx || this.settings.commentary === false || this.paused) return null;
     const now = ctx.currentTime;
     if (now - this.lastCall < CALL_GAP) return null;
     const options: SampleName[] = (kind === 'goal' ? ['callStrike', 'callIncredible'] as SampleName[] : ['callShot'] as SampleName[]).filter((k) => this.samples[k]);
@@ -460,6 +568,7 @@ export class GameAudio {
     this.lastCall = now;
     this.lastLine = pick;
     window.setTimeout(() => this.play(pick, this.voiceBus, 1, { fade: 0.15 }), delay * 1000);
+    this.duck(MIX.duckVoiceBig, now + delay, this.samples[pick]?.duration ?? 3);
     return pick;
   }
 
@@ -513,22 +622,54 @@ export class GameAudio {
     o.onended = () => { this.activeKicks--; };
   }
 
-  post(x = 0) {
+  /**
+   * The ball striking the woodwork (21 Nov 2026): a dull thud of the impact, then the clang of an
+   * aluminium frame ringing (inharmonic partials of a struck tube, each a close pair so it
+   * shimmers), with a bright click on contact. Harder hits (power, m/s) ring louder and longer.
+   */
+  post(x = 0, power = 22) {
     const ctx = this.ctx;
     if (!ctx) return;
     const now = ctx.currentTime;
+    const k = Math.max(0.45, Math.min(1.15, power / 24));
     const out = ctx.createGain();
+    out.gain.value = 0.9 * k;
     out.connect(this.pan(x)).connect(this.fx);
-    for (const [f, d] of [[880, 0.6], [1320, 0.4], [2210, 0.25]] as const) {
-      const o = ctx.createOscillator();
-      o.frequency.value = f;
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(0.25, now);
-      g.gain.exponentialRampToValueAtTime(0.001, now + d);
-      o.connect(g).connect(out);
-      o.start(now);
-      o.stop(now + d);
+    // Thud of the ball on the frame.
+    const th = ctx.createOscillator();
+    th.type = 'sine';
+    th.frequency.setValueAtTime(150, now);
+    th.frequency.exponentialRampToValueAtTime(62, now + 0.12);
+    const tg = ctx.createGain();
+    tg.gain.setValueAtTime(0.42, now);
+    tg.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+    th.connect(tg).connect(out);
+    th.start(now); th.stop(now + 0.18);
+    // The ring: modes of a struck tube (1 : 2.76 : 5.40 : 8.93), lower ones last longest.
+    const f0 = 440 + Math.random() * 60;
+    const modes: [number, number, number][] = [[1, 0.2, 1.5], [2.76, 0.14, 0.95], [5.4, 0.08, 0.5], [8.93, 0.045, 0.28]];
+    for (const [r, amp, decay] of modes) {
+      for (const det of [1, 1.004]) {
+        const o = ctx.createOscillator();
+        o.frequency.value = f0 * r * det;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, now);
+        g.gain.linearRampToValueAtTime(amp * 0.5, now + 0.004);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + decay * (0.7 + 0.3 * k));
+        o.connect(g).connect(out);
+        o.start(now); o.stop(now + decay + 0.05);
+      }
     }
+    // Click of contact.
+    const n = ctx.createBufferSource();
+    n.buffer = this.noise;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass'; bp.frequency.value = 3400; bp.Q.value = 1.2;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.3, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + 0.035);
+    n.connect(bp).connect(ng).connect(out);
+    n.start(now, Math.random()); n.stop(now + 0.05);
   }
 
   /**
@@ -543,11 +684,13 @@ export class GameAudio {
     const ctx = this.ctx;
     if (!ctx) return;
     const k: WhistleKind = typeof kind === 'number' ? (kind >= 3 ? 'fulltime' : kind === 2 ? 'foul' : 'restart') : kind;
-    let t = ctx.currentTime + 0.02;
+    const t0 = ctx.currentTime + 0.02;
+    let t = t0;
     for (const [len, level, gap] of WHISTLES[k]) {
       this.blast(t, len, level);
       t += len + gap;
     }
+    this.duck(MIX.duckWhistle, t0, t - t0);
   }
 
   /**

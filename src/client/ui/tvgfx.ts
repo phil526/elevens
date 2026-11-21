@@ -109,6 +109,8 @@ export class TvGraphics {
   private now = 0;
   private pendingGoal: L3 | null = null;
   private statsShown = new Set<number>();
+  /** Touch screen in use: prompts say tap rather than press a button. */
+  touch = false;
   private lu: { t: number; dur: number; hold: boolean; done: () => void } | null = null;
   private tickerItems: { el: HTMLElement; until: number }[] = [];
 
@@ -164,7 +166,7 @@ export class TvGraphics {
       const x = 50 + (p.pos.x / 105) * 100, y = 50 + (p.pos.z / 68) * 100;
       return `<span class="dot" style="left:${Math.max(2, Math.min(98, x)).toFixed(1)}%;top:${Math.max(3, Math.min(97, y)).toFixed(1)}%;--c:${hex(c)};--ci:${ink(c)}">${p.def.number}</span>`;
     }).join('');
-    this.lineupsEl.innerHTML = `<div class="tv-lu"><header><b>Team line-ups</b><span>${esc(opts.venue)} · ${esc(opts.weather)}</span></header><div class="cols">${team(0)}<div class="pitch">${dots}</div>${team(1)}</div>${opts.hold ? '<div class="skip">Press any button to kick off</div>' : ''}<footer><i></i></footer></div>`;
+    this.lineupsEl.innerHTML = `<div class="tv-lu"><header><b>Team line-ups</b><span>${esc(opts.venue)} · ${esc(opts.weather)}</span></header><div class="cols">${team(0)}<div class="pitch">${dots}</div>${team(1)}</div>${opts.hold ? `<div class="skip">${this.touch ? 'Tap the screen to kick off' : 'Press any button to kick off'}</div>` : ''}<footer><i></i></footer></div>`;
     this.lineupsEl.classList.add('show');
     this.lu = { t: 0, dur: opts.hold ? 9 : 7, hold: opts.hold, done: opts.done ?? (() => {}) };
   }
