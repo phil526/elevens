@@ -167,6 +167,7 @@ export class Hud {
   }
   private buttonKeys: Record<string, string> | null = null;
   private hintShown = '';
+  private guideShown: string | null = null;
 
   private setHint(text: string) {
     if (text === this.hintShown) return;
@@ -196,7 +197,8 @@ export class Hud {
   /**
    * On-screen messages (21 Nov 2026): one shows at a time and the rest wait their turn, most
    * important first, so a new message never wipes out one you haven't read. Priorities: 2 must be
-   * read (what the computer has learned, substitutions, connection news), 1 match information,
+   * read (what the computer has learned, substitutions, connection news, answers to your own presses
+   * such as calling a run), 1 match information,
    * 0 small battle calls ("Heavy touch", "Deflected!"), which are simply dropped when something else
    * is on screen or waiting, so they never pile up. A more important message takes over at once;
    * the one it replaces goes back to the front of the queue. Messages that waited too long are
@@ -406,14 +408,14 @@ export class Hud {
         } else if (e.text?.startsWith('plan:')) {
           const pl = e.text.slice(5) as GamePlan;
           this.flash(GAME_PLAN_NAMES[pl] ?? '', 'Game plan', 'plan', 1400);
-        } else if (e.text === 'wall') this.toast(`Wall: ${e.power ?? ''} men`, 1000, 1);
+        } else if (e.text === 'wall') this.toast(`Wall: ${e.power ?? ''} men`, 1000, 2);
         else if (e.text?.startsWith('link:')) {
           const q = e.power !== undefined && e.power >= 0 ? view.players[e.power] : null;
           const pair = `#${p?.def.number ?? ''} ${p?.def.short ?? ''} & #${q?.def.number ?? ''} ${q?.def.short ?? ''}`;
           this.toast(e.text === 'link:2' ? `Partnership: ${pair} have a great understanding` : `Partnership: ${pair} are linking up`, 2200, 1);
         }
         else if (e.text === 'jump' || e.text === 'dive') { /* seen on the pitch */ }
-        else this.toast(e.type === 'rush' ? 'Keeper rushes out' : e.text === 'press' ? 'Team press!' : e.text === 'trap' ? 'Offside trap: line steps up' : e.text === 'dummy' ? 'Dummy: let it run' : e.text === 'onetwo' ? `One-two: #${p?.def.number ?? ''} ${p?.def.short ?? ''} goes` : `#${p?.def.number ?? ''} ${p?.def.short ?? ''}: run in behind`, 1300, 1);
+        else this.toast(e.type === 'rush' ? 'Keeper rushes out' : e.text === 'press' ? 'Team press!' : e.text === 'trap' ? 'Offside trap: line steps up' : e.text === 'dummy' ? 'Dummy: let it run' : e.text === 'onetwo' ? `One-two: #${p?.def.number ?? ''} ${p?.def.short ?? ''} goes` : `#${p?.def.number ?? ''} ${p?.def.short ?? ''}: run in behind`, 1300, 2); // answers your own press: shows at once
       }
     }
   }
@@ -551,8 +553,11 @@ export class Hud {
       hintText = v.skill.task;
     }
     this.setHint(hintText);
-    this.guideEl.innerHTML = info.guide;
-    this.guideEl.style.display = info.guide ? 'block' : 'none';
+    if (info.guide !== this.guideShown) {
+      this.guideShown = info.guide;
+      this.guideEl.innerHTML = info.guide;
+      this.guideEl.style.display = info.guide ? 'block' : 'none';
+    }
     if (info.debug !== null) { this.debugEl.style.display = 'block'; this.debugEl.textContent = info.debug; }
     else this.debugEl.style.display = 'none';
     const fps = info.fps ?? null;

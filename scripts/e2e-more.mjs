@@ -40,7 +40,7 @@ try {
   const visible = (sel) => M((s) => { const e = document.querySelector(s); return !!e && !!e.offsetParent; }, sel);
   const endMatch = (score) => M((sc) => {
     const m = window.__elevens.session.match;
-    m.half = 2; m.clock = 45 * 60 - 0.5; m.addedTime = 0; m.score = sc;
+    m.half = 2; m.addedTime = 1; m.clock = 46 * 60 - 0.5; m.score = sc; // added time is set a minute before the 45th
   }, score);
 
   // --- a match, then instant replay from the pause menu
@@ -55,6 +55,7 @@ try {
   await page.keyboard.press('KeyJ');
   await waitFor(() => window.__elevens.session.match.phase === 'play', 15000);
   await sleep(7000); // some play to replay
+  await waitFor(() => window.__elevens.cine.canInstant, 60000); // software rendering runs the match slowly
   // Rumble: the woodwork and a goal against reach the fake controller.
   const r0 = await M(() => window.__rumbles.length);
   await M(() => { const m = window.__elevens.session.match; m.emit('post', { x: 50 }); });
