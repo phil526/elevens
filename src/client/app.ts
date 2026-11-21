@@ -447,6 +447,7 @@ export class App {
       // (A cinematic such as the goal replay or highlights always plays at its own speed.)
       if (this.cine.active) { this.slowMo.stop(); this.hitStop.stop(); }
       const k = this.slowMo.scale(dt) * this.hitStop.scale(dt);
+      if (this.renderer) this.renderer.frameLoad = this.frameMs;
       this.session.update(dt * k, now);
       const v = this.session.view();
       if (v) this.renderFrame(v, dt * k, now);
@@ -1668,7 +1669,9 @@ export class App {
     }
     const min = this.animOff ? 0 : 1600;
     const started = this.loadScreen?.started ?? performance.now();
-    const compile = r ? Promise.race([r.renderer.compileAsync(r.scene, r.camera.cam).catch(() => {}), new Promise((ok) => setTimeout(ok, 4000))]) : Promise.resolve();
+    // Everything hidden for now (celebration props, the trophy, flares, weather, replay screens ...)
+    // is compiled too, so its first appearance mid-match doesn't stutter while its shader builds.
+    const compile = r ? Promise.race([r.warmUp().catch(() => {}), new Promise((ok) => setTimeout(ok, 4000))]) : Promise.resolve();
     void compile.then(() => {
       const wait = Math.max(0, min - (performance.now() - started));
       setTimeout(() => {

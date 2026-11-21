@@ -1665,7 +1665,7 @@ export class GameRenderer {
       this.feedHideFor = arena;
       this.feedHideQ = q;
     }
-    this.feed.update(this.renderer, this.scene, view, dt, Math.max(this.cheerT[0], this.cheerT[1]) > 1, this.feedHide, !this.cine);
+    this.feed.update(this.renderer, this.scene, view, dt, Math.max(this.cheerT[0], this.cheerT[1]) > 1, this.feedHide, !this.cine, this.frameLoad);
   }
 
   private bigMomentsOn(cam?: CameraSettings) {
@@ -1982,6 +1982,24 @@ export class GameRenderer {
       this.camera.resetLens();
     }
   }
+
+  /**
+   * Compile every material in the scene, the hidden ones too (three only compiles what is
+   * visible), so nothing stutters the first time it appears. Shown objects go back as they were
+   * straight away: compileAsync gathers the materials before it returns its promise.
+   */
+  warmUp(): Promise<void> {
+    const hidden: THREE.Object3D[] = [];
+    this.scene.traverse((o) => { if (!o.visible) { hidden.push(o); o.visible = true; } });
+    let p: Promise<unknown>;
+    try { p = this.renderer.compileAsync(this.scene, this.camera.cam); } finally { for (const o of hidden) o.visible = false; }
+    this.warmedHidden = hidden.length;
+    return p.then(() => {});
+  }
+  /** Hidden objects included in the last warm-up (tests). */
+  warmedHidden = 0;
+  /** Smoothed frame time (ms) the app measures; the big-screen feed films less often when frames run long. */
+  frameLoad = 16;
 
   snapCamera(view: ViewState) {
     this.camera.snap(view);

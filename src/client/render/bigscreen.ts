@@ -24,6 +24,8 @@ export class BigScreenFeed {
   private head = 0; // next slot to write
   private filled = 0;
   private acc = 0;
+  /** The gap between pictures last used (s), for tests. */
+  lastStep = 0;
   private readonly step: number;
   private look = new THREE.Vector3(0, 0, 0);
   private pos = new THREE.Vector3(0, 18, 46);
@@ -79,7 +81,7 @@ export class BigScreenFeed {
    * page (the replay starts once it ends). hide: meshes to leave out of the feed (the screens).
    * capture false (cinematics): keep the clock going but film nothing.
    */
-  update(renderer: THREE.WebGLRenderer, scene: THREE.Scene, view: ViewState, dt: number, goalShowing: boolean, hide: THREE.Object3D[], capture = true) {
+  update(renderer: THREE.WebGLRenderer, scene: THREE.Scene, view: ViewState, dt: number, goalShowing: boolean, hide: THREE.Object3D[], capture = true, load = 16) {
     // The camera: high on the near side, following the ball like the broadcast.
     const b = view.ball.pos;
     const tx = THREE.MathUtils.clamp(b.x, -40, 40), tz = THREE.MathUtils.clamp(b.z, -26, 26);
@@ -111,9 +113,14 @@ export class BigScreenFeed {
       return;
     }
     if (this.frozen || !capture) return;
+    // Smoother frame rate (21 Nov 2026): each picture for the screens renders the whole stadium
+    // again, so when frames already run long (under about 50 a second) the screens film half as
+    // often, and under about 33 a second a quarter as often, rather than add a slow frame to slow ones.
+    const step = this.step * (load > 30 ? 4 : load > 20 ? 2 : 1);
     this.acc += dt;
-    if (this.acc < this.step) return;
-    this.acc = Math.min(this.acc - this.step, this.step);
+    if (this.acc < step) return;
+    this.acc = Math.min(this.acc - step, step);
+    this.lastStep = step;
     this.capture(renderer, scene, hide);
   }
 
