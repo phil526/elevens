@@ -546,7 +546,7 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .achieve b { font-size: 17px; } .achieve span { font-size: 12px; color: var(--muted); }
 
 /* Text size (Settings > Text size): menus and the main on-screen text grow together. */
-body.text-big #ui .screen > *, body.text-big .scorebug, body.text-big .mom, body.text-big .pcard, body.text-big .toast, body.text-big .hint, body.text-big .coach, body.text-big .achieve-stack, body.text-big .photo-panel, body.text-big .tv-lower, body.text-big .cine-cap { zoom: var(--ui-zoom, 1); }
+body.text-big #ui .screen > *, body.text-big .scorebug, body.text-big .mom, body.text-big .pcard, body.text-big .toast, body.text-big .hint, body.text-big .coach, body.text-big .tipcard, body.text-big .achieve-stack, body.text-big .photo-panel, body.text-big .tv-lower, body.text-big .cine-cap { zoom: var(--ui-zoom, 1); }
 
 /* Local multiplayer: Choose sides */
 .side-head, .side-row { display: grid; grid-template-columns: 1fr 44px 1fr 44px 1fr; gap: 8px; align-items: center; }
@@ -725,3 +725,23 @@ kbd.pad-stick { width: 1.65em; min-width: 0; padding: 0; border-radius: 50%; bac
 kbd.pad-small { border-radius: 0.8em; font-size: 0.72em; height: 1.5em; padding: 0 0.6em; font-weight: 800; }
 kbd.key { min-width: 1.6em; text-align: center; display: inline-block; }
 .bind kbd.pad { pointer-events: none; }
+
+/* Settings tidy-up (21 Nov 2026, ui/settingsmeta.ts). */
+.settings-panel .set-jump { position: sticky; top: -1px; z-index: 2; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0; margin: -4px 0 4px; background: rgb(18, 24, 33); }
+.settings-panel h3[data-sec] { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; scroll-margin-top: 56px; }
+.settings-panel .sec-reset { font-size: 12px; padding: 4px 10px; }
+.settings-panel .sec-reset[disabled] { opacity: 0.45; }
+.settings-panel .lbl .desc { display: block; font-weight: 400; font-size: 12px; line-height: 1.35; color: var(--muted); margin-top: 2px; letter-spacing: 0; text-transform: none; }
+.settings-panel .row.changed > .lbl::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-right: 7px; vertical-align: 2px; }
+.settings-panel details.more { margin-top: 4px; }
+.settings-panel details.more summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 6px 0; }
+.settings-panel details.more[open] summary { color: var(--text); }
+
+/* One-time tips (21 Nov 2026, ui/tips.ts). */
+.tipcard { position: absolute; left: calc(12px + var(--safe-l)); top: calc(150px + var(--safe-t)); width: min(330px, calc(100vw - 24px)); background: rgba(11, 15, 20, 0.92); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; padding: 10px 12px; font-size: 14px; line-height: 1.45; opacity: 0; transform: translateX(-12px); transition: opacity 0.25s, transform 0.25s; pointer-events: none; z-index: 3; }
+.tipcard.show { opacity: 1; transform: none; }
+.tipcard b { display: block; color: var(--accent); font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 3px; }
+.tipcard small { display: block; color: var(--muted); font-size: 11px; margin-top: 5px; }
+.tipcard kbd { font-size: 12px; }
+body.touch .tipcard { top: calc(96px + var(--safe-t)); }
+@media (prefers-reduced-motion: reduce) { .tipcard { transition: opacity 0.25s; transform: none; } }

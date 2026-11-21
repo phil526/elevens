@@ -27,6 +27,8 @@ import { signalBars, type Session } from './game/session';
 import { ActionLayer, type InputSource } from './input/actions';
 import { GamepadSource, padLabels } from './input/gamepad';
 import { keyCap, padKey } from './ui/glyphs';
+import { SETTING_DESC, SETTING_SECTIONS, resetSection, type SettingSection } from './ui/settingsmeta';
+import { TipCards } from './ui/tips';
 import { attachKeyboard, KeyboardState } from './input/keyboard';
 import { attachMouse, MouseSource } from './input/mouse';
 import { isTouchDevice, TouchControls, TouchModel, type TouchContext } from './input/touch';
@@ -43,7 +45,7 @@ import { loadPlayerAssets, playerAssetStatus } from './render/realplayer';
 import { glStatus, glStatusText } from './render/glcheck';
 import { isSoftwareRenderer, lowerGraphics, SlowGuard, softwareGraphics, type SlowSettings } from './render/slowguard';
 import type { CameraMode } from './render/camera';
-import { loadSettings, saveSettings, type Settings } from './settings';
+import { defaultSettings, loadSettings, saveSettings, type Settings } from './settings';
 import { controlsTable, guideLine } from './ui/controls';
 import { assign, BIND_ACTIONS, clearSlot, defaultBindings, keyLabel, keysText, mouseAsKeys, padLabel, padText, RESERVED_KEYS, unboundActions, type BindAction, type BindDevice } from './input/bindings';
 import { Hud } from './ui/hud';
@@ -211,6 +213,9 @@ export class App {
   /** Screen transitions (off on ?test pages unless &anim, and with reduced motion). */
   private transitions: ScreenTransitions;
   private animOff = new URLSearchParams(location.search).has('test') && !new URLSearchParams(location.search).has('anim');
+  /** One-time tips (off on ?test pages unless &tips). */
+  private tipsOff = new URLSearchParams(location.search).has('test') && !new URLSearchParams(location.search).has('tips');
+  tips!: TipCards;
   /** Set for a moment by a Back press, so the next screen slides in from the other side. */
   private goingBack = 0;
   private loadScreen: LoadingScreen | null = null;
@@ -260,6 +265,7 @@ export class App {
     });
     this.announcer.onLine = (cheer) => { if (cheer) { this.audio.cheer(0.45); this.renderer?.crowdMoment('chant', 0); } };
     this.hud = new Hud(document.getElementById('hud')!);
+    this.tips = new TipCards(document.getElementById('hud')!, () => this.settings.tipsSeen ?? [], (id) => { (this.settings.tipsSeen ??= []).push(id); saveSettings(this.settings); }, (a) => this.buttonHtml(a));
     this.tv = new TvGraphics(document.getElementById('hud')!);
     this.commentator = new Commentator(document.getElementById('hud')!);
     this.modes = new ModeScreens({
@@ -544,6 +550,8 @@ export class App {
         this.coach.update(v, evs, dt, { team: s.localTeams[0] ?? 0, attacking: s.attacking(), held: { sprint: h.sprint, jockey: h.jockey, switch: h.switch || Math.hypot(h.rsx, h.rsy) > 0.7, pass: h.pass, lob: h.lob }, name: (a) => this.coachName(a), key: (a) => this.buttonHtml(a), move: this.moveName() });
       }
     }
+    this.tips.enabled = this.settings.tips !== false && !this.tipsOff && !this.coach;
+    this.tips.update(v, s.localTeams[0] ?? -1, dt, this.overlay === 'none' && !this.cine.active && !this.tv.holding);
     // Intro or replay: draw the staged view from the cinematic camera instead of the match.
     const allowReplay = s instanceof OfflineSession && this.settings.goalReplays && !this.cineOff && !s.cfg.practice && !v.shootout && this.overlay === 'none';
     this.cine.varScreens = this.settings.varChecks !== false;
@@ -929,10 +937,17 @@ export class App {
   // ------------------------------------------------------------- screens
 
   private set(html: string, cls = '') {
+    // A redraw of the same screen (a Settings option changing, say) keeps its scroll position.
+    const where = `${this.screenName}|${this.overlay}`;
+    const top = where === this.setWhere ? this.ui.querySelector<HTMLElement>('.screen')?.scrollTop ?? 0 : 0;
+    this.setWhere = where;
     this.ui.innerHTML = `<div class="screen ${cls}">${html}</div>`;
+    if (top) this.ui.querySelector<HTMLElement>('.screen')!.scrollTop = top;
     const first = this.ui.querySelector<HTMLElement>('[autofocus]') ?? this.ui.querySelector<HTMLElement>('.btn.primary, .btn');
     if (first && !this.touchMode) first.focus({ preventScroll: true });
   }
+
+  private setWhere = '';
 
   private on(sel: string, fn: (el: HTMLElement) => void) {
     this.ui.querySelectorAll<HTMLElement>(sel).forEach((el) => el.addEventListener('click', () => fn(el)));
@@ -1758,6 +1773,7 @@ export class App {
 
   private beginSession(s: Session) {
     this.hud.clearToasts();
+    this.tips?.hide();
     this.session?.dispose();
     // A change kit is only for looks: the score bug, radar and line-ups read it from the match's club (also on restarts and rematches).
     if (s instanceof OfflineSession && this.kitOverride && s.cfg.teams[1] === this.kitOverride.id) s.match.teams[1] = this.kitOverride;
@@ -1911,6 +1927,7 @@ export class App {
 
   private endSession() {
     this.hud.clearToasts();
+    this.tips?.hide();
     this.session?.dispose();
     this.session = null;
     this.modeMatch = null;
@@ -3165,9 +3182,17 @@ export class App {
     if (overlay) this.overlay = 'settings';
     else this.screenName = 'settings';
     const s = this.settings;
+    this.set(this.settingsHtml(s), overlay ? 'translucent' : '');
+    this.decorateSettings(s, () => this.showSettings(back, overlay));
+    this.bindSettings(s, back, overlay);
+  }
+
+  /** The Settings panel for these settings (also drawn, unseen, for the defaults: see decorateSettings). */
+  private settingsHtml(s: Settings): string {
     const range = (id: string, v: number, min = 0, max = 1, step = 0.05) => `<input type="range" data-r="${id}" min="${min}" max="${max}" step="${step}" value="${v}">`;
-    this.set(`<div class="panel narrow"><h2>Settings</h2>
-      <h3>Audio</h3>
+    return `<div class="panel narrow settings-panel"><h2>Settings</h2>
+      <nav class="set-jump">${SETTING_SECTIONS.map((x) => `<button class="btn small" data-jump="${x.id}">${x.name}</button>`).join('')}</nav>
+      <h3 data-sec="audio">Audio</h3>
       <div class="stack">
         <div class="row between"><span class="lbl">Master</span>${range('master', s.audio.master)}</div>
         <div class="row between"><span class="lbl">Effects</span>${range('effects', s.audio.effects)}</div>
@@ -3185,7 +3210,7 @@ export class App {
         <p class="note voice-status">${this.voiceStatus()}</p>
         <div class="row between"><span class="lbl">Mute</span>${this.seg('mute', [['off', 'Sound on'], ['on', 'Muted']], s.audio.muted ? 'on' : 'off')}</div>
       </div>
-      <h3>Graphics</h3>
+      <h3 data-sec="graphics">Graphics</h3>
       <div class="stack">
         <div class="row between"><span class="lbl">Quality</span>${this.seg('preset', [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['ultra', 'Ultra']], s.graphics.preset)}</div>
         <div class="row between"><span class="lbl">Render scale</span>${range('scale', s.graphics.renderScale, 0.5, 1.5, 0.05)}</div>
@@ -3209,7 +3234,7 @@ export class App {
         <div class="row between"><span class="lbl">Menu background</span>${this.seg('menubg', [['on', 'Live stadium'], ['off', 'Plain']], s.menuBackdrop !== false ? 'on' : 'off')}</div>
         <p class="note">Weather starts with the next match; Random picks clear, rain or snow each time. It changes how the ball plays: on a wet pitch it skids on and rolls further and keepers spill more, snow slows it down, and wind (shown by the arrow on the radar) carries crosses, long balls and shots. Wind Off keeps every match still. Pitch and kit wear: the grass scuffs and churns to mud where play goes (more in the rain), and kits pick up mud from slides, falls and dives and darken with sweat as the match goes on (realistic players). TV graphics shows the team line-ups before kick-off and match stats along the bottom of the screen. Menu background Live stadium shows a computer match in the stadium behind the menus (30 frames a second on phones and tablets); Plain saves battery. Sharper picture smooths jagged edges (on Low too) and sharpens the picture so lines, kits and faces look crisp, most of all on phones and tablets; Off draws a little faster on very old devices. TV colour grade gives the picture a broadcast look: softer shadows, richer colour in the grass and kits, and on High and Ultra a soft glow round the floodlights. Big screens Live pictures shows play on the two big screens (Medium and up), with a slowed replay after each goal; Scores only shows the score and sponsors, which is a little faster. Mowing picks the pattern cut into the grass for the next match (Random changes it each time). Auto resolution draws slightly fewer pixels (never below ${Math.round(AUTO_RES_MIN * 100)}% of the render scale) when the frame rate drops during a match, and goes back up when it recovers. Frame rate Show puts a small readout at the top of the match screen: frames a second, the average and slowest frame time over the last half second, the quality and the resolution in use.</p>
       </div>
-      <h3>Camera</h3>
+      <h3 data-sec="camera">Camera</h3>
       <div class="stack">
         <div class="row between"><span class="lbl">View</span>${this.seg('cmode', [['tracking', 'Tracking'], ['wide', 'Wide'], ['panoramic', 'Panoramic'], ['broadcast', 'Broadcast']], s.camera.mode ?? 'tracking')}</div>
         <div class="row between"><span class="lbl">Height</span>${this.seg('height', [['low', 'Low'], ['standard', 'Standard'], ['high', 'High']], s.camera.height)}</div>
@@ -3228,8 +3253,9 @@ export class App {
         <p class="note">Set-piece camera: for penalties, shootouts and free kicks in shooting range the view moves behind the ball, then follows the shot.</p>
         <div class="row between"><span class="lbl">Reduced camera motion</span>${this.seg('reduced', [['off', 'Off'], ['on', 'On']], s.camera.reducedMotion ? 'on' : 'off')}</div>
         <p class="note">These play in matches against the computer, and any button skips them. Pre-match ceremony: mascots walk out holding the players' hands, then the handshake line and both team photos. Goal celebrations: the scorer's knee slide, crest kiss, huddle or cheer, before the replay. Celebration camera Handheld films them from a camera on the operator's shoulder by the touchline (online it cuts to it live after a goal); Steady keeps the shots smooth. Offside checks: the moment is shown again with the offside lines drawn, full screen and on the big screens. TV cutaways: when play stops after a near miss, a big save, a booking or a bad foul, a few seconds of the player's face, his manager on the touchline or the fans behind the goal. Half-time aerials: blimp and drone shots over the ground before the highlights.</p>
+        <p class="note">Tracking slides along the touchline with play; Wide and Panoramic sit higher and further back to show more of the pitch. Broadcast is a fixed TV camera above the halfway line that pans and zooms; movement stays relative to the screen. Match intro flies over the stadium and follows the teams out of the tunnel before kick-off; Goal replays show each goal again from inside the net. Half-time highlights shows the goals, saves, near misses and shots off the woodwork at half-time and full time (the Highlights button on those screens shows them again). Both are for matches against the computer and any button skips them. Big moments shakes the camera for goals, saves and shots off the woodwork, slows play down for a moment after a goal or the woodwork (against the computer), and on Medium and up softens the background in close-ups, replays and goal celebrations; Reduced camera motion turns the shake and slow motion off. Pass receiver Late picks the teammate when you release the button (a longer hold looks further away); Early locks the teammate when you press it, and the hold sets how firm the pass is. Pass assistance Assisted picks the teammate and weighs the pass for you; Semi aims at a teammate near where you point, but the hold alone sets how far the ball goes; Manual sends the ball exactly where you point, as far as the hold says. Right-stick switch: when defending, flick the right stick towards a teammate to take control of them, measured from your player or from the ball. Player ring shows a circle and facing arrow on the grass under your player; the pointer above the head always shows. Quality preset and player changes apply fully at the next kick-off. Players Realistic shows the motion-captured players on every quality, Low included; Classic shows the simple ones, which are a little quicker on old phones.</p>
       </div>
-      <h3>Gameplay and accessibility</h3>
+      <h3 data-sec="gameplay">Gameplay and accessibility</h3>
       <div class="stack">
         <div class="row between"><span class="lbl">Mouse control</span>${this.seg('mctl', [['off', 'Off'], ['on', 'On']], s.mouseControl ? 'on' : 'off')}</div>
         <p class="note">Mouse control (PC): your player runs towards the mouse pointer. Left click passes, right click shoots (hold to power up), A plays a long ball, S a through ball, Shift sprints and Space switches player. Change them in Controls, Mouse.</p>
@@ -3248,10 +3274,12 @@ export class App {
         <p class="note">Against the computer, it watches how you attack: which wing you use, whether your wingers cut inside or go down the line, which corner you shoot for, and how often you play through balls. Once it spots a habit (a message says so) its team slides over to that side, the defender shows you the other way, the keeper cheats towards your favourite corner and the back line drops off for through balls. Mix it up and it forgets within a few attacks. It learns more on the harder levels.</p>
         <div class="row between"><span class="lbl">Right-stick switch from</span>${this.seg('sswitch', [['player', 'Your player'], ['ball', 'The ball']], s.stickSwitch ?? 'player')}</div>
         <div class="row between"><span class="lbl">Controller rumble</span>${this.seg('rumble', [['on', 'On'], ['off', 'Off']], s.rumble ? 'on' : 'off')}</div>
-        <p class="note">${this.gamepad.index < 0 ? 'Connect a controller to check rumble.' : this.gamepad.canRumble() ? 'This controller and browser support rumble.' : 'This browser does not offer rumble for this controller, so it stays still.'}</p>
+        <p class="note rumble-status">${this.gamepad.index < 0 ? 'Connect a controller to check rumble.' : this.gamepad.canRumble() ? 'This controller and browser support rumble.' : 'This browser does not offer rumble for this controller, so it stays still.'}</p>
         <div class="row between"><span class="lbl">Player ring</span>${this.seg('pring', [['on', 'On'], ['off', 'Off']], s.playerRing ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Next-switch marker</span>${this.seg('nextm', [['on', 'On'], ['off', 'Off']], s.showNextMarker ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Button hints</span>${this.seg('chints', [['on', 'On'], ['off', 'Off']], s.controlHints !== false ? 'on' : 'off')}</div>
+        <div class="row between"><span class="lbl">One-time tips</span>${this.seg('tips', [['on', 'On'], ['off', 'Off']], s.tips !== false ? 'on' : 'off')}</div>
+        ${(s.tipsSeen?.length ?? 0) > 0 ? `<div class="row between"><span class="lbl">Tips seen</span><button class="btn small" data-a="tipsagain">Show all ${s.tipsSeen!.length} again</button></div>` : ''}
         <div class="row between"><span class="lbl">Restart captions</span>${this.seg('rcap', [['on', 'On'], ['off', 'Off']], s.restartCaptions ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">High-contrast markers</span>${this.seg('hc', [['off', 'Off'], ['on', 'On']], s.highContrast ? 'on' : 'off')}</div>
         <div class="row between"><span class="lbl">Colour-blind kits</span>${this.seg('cvd', COLOUR_VISION, s.colourVision ?? 'off')}</div>
@@ -3260,7 +3288,7 @@ export class App {
         <div class="row between"><span class="lbl">Sprint</span>${this.seg('stoggle', [['hold', 'Hold'], ['toggle', 'Toggle']], s.sprintToggle ? 'toggle' : 'hold')}</div>
         <p class="note">Colour-blind kits: when the two sides' kits would be hard to tell apart with red-weak, green-weak or blue-weak colour vision, the computer side changes into its other kit or a plain change kit that stands apart. Text size makes the menus, score, player card and messages bigger. Kick hold time makes the power bar fill more slowly (1.5 or 2 times as long), so there is more time to pick the power. Sprint Toggle: press once to sprint and again (or let go of the stick) to stop.</p>
       </div>
-      <h3>App</h3>
+      <h3 data-sec="app">App</h3>
       <div class="stack">
         ${(() => { const i = installInfo(); return `
         ${i.canFullscreen ? '<div class="row between"><span class="lbl">Full screen</span><button class="btn small" data-a="fullscreen">Full screen on or off</button></div>' : ''}
@@ -3268,8 +3296,95 @@ export class App {
           ? 'Home-screen app: this copy of the game runs inside the claude.ai page, which cannot be installed as an app or work offline (the page keeps that to itself). To get an ELEVENS icon on your iPad home screen that opens full screen and works without a connection, the game needs its own web address: the built game folder can be put on any free static web host, then open it in Safari and choose Share, Add to Home Screen.' + (i.canFullscreen ? '' : ' Full screen is not allowed from inside the claude.ai page either.')
           : `Home-screen app: ${i.ios ? 'in Safari choose Share, then Add to Home Screen' : 'use your browser\'s Install or Add to Home Screen option'} to get an ELEVENS icon that opens full screen. ${i.offline ? 'Offline play is ready: files you have loaded are kept, so matches against the computer work with no connection.' : 'Offline play starts once the game has been opened from its own web address over https.'}`}</p>`; })()}
       </div>
-      <p class="note">Tracking slides along the touchline with play; Wide and Panoramic sit higher and further back to show more of the pitch. Broadcast is a fixed TV camera above the halfway line that pans and zooms; movement stays relative to the screen. Match intro flies over the stadium and follows the teams out of the tunnel before kick-off; Goal replays show each goal again from inside the net. Half-time highlights shows the goals, saves, near misses and shots off the woodwork at half-time and full time (the Highlights button on those screens shows them again). Both are for matches against the computer and any button skips them. Big moments shakes the camera for goals, saves and shots off the woodwork, slows play down for a moment after a goal or the woodwork (against the computer), and on Medium and up softens the background in close-ups, replays and goal celebrations; Reduced camera motion turns the shake and slow motion off. Pass receiver Late picks the teammate when you release the button (a longer hold looks further away); Early locks the teammate when you press it, and the hold sets how firm the pass is. Pass assistance Assisted picks the teammate and weighs the pass for you; Semi aims at a teammate near where you point, but the hold alone sets how far the ball goes; Manual sends the ball exactly where you point, as far as the hold says. Right-stick switch: when defending, flick the right stick towards a teammate to take control of them, measured from your player or from the ball. Player ring shows a circle and facing arrow on the grass under your player; the pointer above the head always shows. Quality preset and player changes apply fully at the next kick-off. Players Realistic shows the motion-captured players on every quality, Low included; Classic shows the simple ones, which are a little quicker on old phones.</p>
-      <div class="row end"><button class="btn primary" data-a="back">Done</button></div></div>`, overlay ? 'translucent' : '');
+      <div class="row end"><button class="btn primary" data-a="back">Done</button></div></div>`;
+  }
+
+  /**
+   * Settings tidy-up: a line under each option saying what it does, a dot on anything changed from
+   * the default (found by drawing the panel for the defaults and comparing), a Reset button per
+   * section, jump buttons along the top, and the long notes tucked under "More about these
+   * settings" (status lines stay in view).
+   */
+  private decorateSettings(s: Settings, redraw: () => void) {
+    const root = this.ui.querySelector<HTMLElement>('.settings-panel');
+    if (!root) return;
+    const tpl = document.createElement('template');
+    tpl.innerHTML = this.settingsHtml(defaultSettings());
+    const defSeg = (name: string) => tpl.content.querySelector<HTMLElement>(`[data-seg="${name}"] button.on`)?.dataset.v;
+    const defRange = (name: string) => tpl.content.querySelector<HTMLInputElement>(`input[data-r="${name}"]`)?.value;
+    let changed = 0;
+    root.querySelectorAll<HTMLElement>('.stack > .row').forEach((row) => {
+      const seg = row.querySelector<HTMLElement>('[data-seg]');
+      const rng = row.querySelector<HTMLInputElement>('input[data-r]');
+      const id = seg ? seg.dataset.seg! : rng ? `r:${rng.dataset.r}` : '';
+      if (!id) return;
+      const lbl = row.querySelector<HTMLElement>('.lbl');
+      const desc = SETTING_DESC[id];
+      if (lbl && desc) lbl.insertAdjacentHTML('beforeend', `<small class="desc">${desc}</small>`);
+      const differs = seg ? seg.querySelector<HTMLElement>('button.on')?.dataset.v !== defSeg(seg.dataset.seg!) : rng ? Math.abs(Number(rng.value) - Number(defRange(rng.dataset.r!))) > 1e-6 : false;
+      if (differs) { row.classList.add('changed'); lbl?.setAttribute('title', 'Changed from the default'); changed++; }
+    });
+    root.dataset.changed = String(changed);
+    // Long notes under a "More" fold at the end of each section; status lines stay where they are.
+    root.querySelectorAll<HTMLElement>('h3[data-sec]').forEach((h) => {
+      const id = h.dataset.sec as SettingSection['id'];
+      const stack = h.nextElementSibling as HTMLElement | null;
+      if (!stack || !stack.classList.contains('stack')) return;
+      const n = stack.querySelectorAll('.row.changed').length;
+      if (id !== 'app') {
+        const confirm = this.resetConfirm === id;
+        h.insertAdjacentHTML('beforeend', `<button class="btn small sec-reset${confirm ? ' danger' : ''}" data-reset="${id}" ${n || confirm ? '' : 'disabled'} title="Put this section back to the defaults">${confirm ? 'Sure? Press again' : n ? `Reset (${n} changed)` : 'All default'}</button>`);
+        const notes = [...stack.querySelectorAll<HTMLElement>(':scope > p.note')].filter((p) => p.classList.length === 1);
+        if (notes.length) {
+          const d = document.createElement('details');
+          d.className = 'more';
+          d.innerHTML = '<summary>More about these settings</summary>';
+          notes.forEach((p) => d.appendChild(p));
+          stack.appendChild(d);
+        }
+      }
+    });
+    this.on('[data-jump]', (b) => {
+      this.ui.querySelector<HTMLElement>(`h3[data-sec="${b.dataset.jump}"]`)?.scrollIntoView({ behavior: this.settings.camera.reducedMotion ? 'auto' : 'smooth', block: 'start' });
+    });
+    this.on('[data-reset]', (b) => {
+      const id = b.dataset.reset as SettingSection['id'];
+      if (this.resetConfirm !== id) { this.resetConfirm = id; redraw(); return; }
+      this.resetConfirm = '';
+      const before = s.mouseControl;
+      resetSection(s, defaultSettings(), id);
+      if (s.mouseControl !== before) this.setMouseControl(!!s.mouseControl);
+      this.applySettingsLive(s);
+      redraw();
+    });
+  }
+  private resetConfirm = '';
+
+  /** Settings changed in bulk (a section reset): save them and pass them to everything that keeps a copy. */
+  private applySettingsLive(s: Settings) {
+    saveSettings(s);
+    this.audio.apply(s.audio);
+    this.renderer?.applyGraphics(s.graphics);
+    this.hud.setHighContrast(s.highContrast);
+    this.hud.restartCaptions = s.restartCaptions;
+    this.tv.enabled = s.tvGraphics !== false;
+    this.commentator.mode = s.commentator ?? 'captions';
+    this.actions.passAssist = s.passAssist ?? 'assisted';
+    this.actions.shotAssist = s.shotAssist ?? 'assisted';
+    this.actions.receiverMode = s.receiver;
+    this.actions.stickSwitch = s.stickSwitch ?? 'player';
+    this.actions.chargeScale = CHARGE_SCALE[s.chargeSpeed ?? 'normal'];
+    this.actions.sprintToggle = !!s.sprintToggle;
+    applyTextSize(s.textSize ?? 'normal');
+    if (!s.audio.announcer) this.announcer.stop();
+    if (this.session instanceof OfflineSession) {
+      const c0 = this.session.match.ctrl[0];
+      c0.autoSwitch = s.autoSwitch; c0.quickRestarts = s.quickRestarts;
+      c0.style = s.switchStyle ?? 'full'; c0.sens = s.switchSens ?? 'normal';
+    }
+  }
+
+  private bindSettings(s: Settings, back: () => void, overlay: boolean) {
     const save = () => {
       saveSettings(s);
       this.audio.apply(s.audio);
@@ -3359,6 +3474,8 @@ export class App {
     this.bindSeg('pring', (v) => { s.playerRing = v === 'on'; save(); redraw(); });
     this.bindSeg('nextm', (v) => { s.showNextMarker = v === 'on'; save(); redraw(); });
     this.bindSeg('chints', (v) => { s.controlHints = v === 'on'; save(); redraw(); });
+    this.bindSeg('tips', (v) => { s.tips = v === 'on'; save(); redraw(); });
+    this.on('[data-a=tipsagain]', () => { s.tipsSeen = []; save(); redraw(); });
     this.bindSeg('rcap', (v) => { s.restartCaptions = v === 'on'; this.hud.restartCaptions = s.restartCaptions; save(); redraw(); });
     this.bindSeg('hc', (v) => { s.highContrast = v === 'on'; save(); redraw(); });
     this.bindSeg('cvd', (v) => { s.colourVision = v as ColourVision; save(); redraw(); });

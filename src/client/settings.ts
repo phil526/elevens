@@ -45,6 +45,10 @@ export interface Settings {
   restartCaptions: boolean;
   /** Bar of button hints along the bottom of the match screen ("Pass (hold = further) · Shoot ..."); on by default. */
   controlHints: boolean;
+  /** One-time tips (21 Nov 2026): a short card the first time each situation comes up (default on). */
+  tips?: boolean;
+  /** The one-time tips already shown on this device. */
+  tipsSeen?: string[];
   /** A small frame-rate readout at the top of the match screen (19 Nov 2026). */
   showFps?: boolean;
   /** Stadium fly-in and tunnel walk-out before kick-off (offline). */
