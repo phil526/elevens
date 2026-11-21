@@ -1,6 +1,6 @@
 /* Career, Be a Pro, scenarios, skill games, trophy cabinet, goal clips, commentary captions (19 Nov 2026). */
 .panel.wide { width: min(1080px, 100%); }
-.more-modes .btn small { display: block; font-size: 11px; color: var(--muted); font-weight: 600; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.more-modes .btn small { display: block; font-size: 11px; color: var(--muted); font-weight: 600; margin-top: 2px; line-height: 1.3; text-wrap: balance; }
 .more-modes .btn.primary small { color: inherit; opacity: 0.75; }
 .mode-panel h2 small { color: var(--muted); font-size: 0.6em; }
 .mode-panel .tab { background: var(--ink-3); border: 1px solid var(--line); color: var(--text); border-radius: 999px; padding: 7px 14px; font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
