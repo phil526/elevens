@@ -640,7 +640,7 @@ export class App {
     const edge = edgeAt && edgeP ? { ...edgeAt, label: `${edgeP.def.number}` } : null;
     this.hud.update(v, {
       localTeams: s.localTeams, charge, chargeLabel, chargeTicks, powerAt, ringAt, conn: s.conn(), extraPower, edge,
-      guide: this.settings.controlHints !== false && (this.settings.highContrast || !this.touchMode) ? guideLine(this.actions.lastDevice === 'keyboard' && this.mouseMode ? 'mouse' : this.actions.lastDevice, this.gamepad.style, attacking, this.settings.controls) : '',
+      guide: this.settings.controlHints !== false && (this.settings.highContrast || !this.touchMode) ? guideLine(this.actions.lastDevice === 'keyboard' && this.mouseMode ? 'mouse' : this.actions.lastDevice, this.padStyleShown, attacking, this.settings.controls) : '',
       fps: this.settings.showFps ? this.fpsReadout(now) : null,
       debug: this.debugOverlay ? `fps ${this.fps.toFixed(0)}  frame ${this.frameMs.toFixed(1)} ms  res ${Math.round(this.renderer!.resolutionScale * 100)}%  draw calls ${info.calls}  tris ${info.tris}\n${s.debugText()}` : null,
     });

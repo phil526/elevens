@@ -215,8 +215,11 @@ function ring(inner: number, outer: number, colour: number, opacity: number, the
 /** Dots in the free-kick bend line. */
 const FK_DOTS = 22;
 
-/** Smooth cuts: glide length (s) and the one-frame camera move (m) that counts as a cut. */
-export const CUT_BLEND = { time: 0.7, jump: 9 } as const;
+/**
+ * Smooth cuts: glide length (s), and the one-frame camera move that counts as a cut: `jump` metres
+ * plus `perSec` metres for each second the frame took (so a slow frame's normal follow isn't one).
+ */
+export const CUT_BLEND = { time: 0.7, jump: 5, perSec: 30 } as const;
 
 /** How long a camera punch lasts, in seconds (renderer.punch). */
 const PUNCH_TIME = 0.38;
@@ -1720,7 +1723,7 @@ export class GameRenderer {
     const scripted = !!this.cine || !!this.viewOverride;
     const live = !!this.liveCam;
     if (!scripted && !live && !cam.reducedMotion && b.ready) {
-      const jumped = b.t >= CUT_BLEND.time && c.position.distanceTo(b.prevPos) > CUT_BLEND.jump;
+      const jumped = b.t >= CUT_BLEND.time && c.position.distanceTo(b.prevPos) > CUT_BLEND.jump + CUT_BLEND.perSec * Math.min(dt, 0.25);
       if (b.wasLive || (!b.wasScripted && jumped)) {
         b.fromPos.copy(b.prevPos);
         b.fromQ.copy(b.prevQ);

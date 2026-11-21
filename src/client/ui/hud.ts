@@ -86,6 +86,7 @@ export class Hud {
   private bannerTimer = 0;
   private toastTimer = 0;
   private lastBug = '';
+  private lastClock = '';
   /** The score last drawn, to pop the number that goes up. */
   private lastScore: { key: string; s: [number, number] } | null = null;
   /** How many score pops have played (tests). */
@@ -233,6 +234,8 @@ export class Hud {
   }
 
   private toastQ: ToastItem[] = [];
+  /** How long a waiting message stays worth showing, per priority step (ms; tests raise it). */
+  toastStale = TOAST_STALE;
   private toastNow: ToastItem | null = null;
 
   private showToast(t: ToastItem) {
@@ -257,7 +260,7 @@ export class Hud {
       // The next one after the fade, unless it has gone stale.
       this.toastTimer = window.setTimeout(() => {
         const now = performance.now();
-        this.toastQ = this.toastQ.filter((t) => now - t.at < TOAST_STALE * (t.prio + 1));
+        this.toastQ = this.toastQ.filter((t) => now - t.at < this.toastStale * (t.prio + 1));
         const next = this.toastQ.shift();
         if (next) this.showToast(next);
       }, 220);
@@ -424,16 +427,24 @@ export class Hud {
     const rc = (n: number) => '<i class="rc"></i>'.repeat(n);
     const dots = (k: boolean[]) => k.map((x) => `<i class="pk ${x ? 'in' : 'out'}"></i>`).join('') + '<i class="pk"></i>'.repeat(Math.max(0, 5 - k.length));
     const so = v.shootout ? `<div class="pens"><span>${dots(v.shootout.kicks[0])}</span><span>${dots(v.shootout.kicks[1])}</span></div>` : '';
-    const bug = `${v.teams[0].abbr}|${v.score[0]}|${v.score[1]}|${v.teams[1].abbr}|${this.practiceText(v) ?? this.clockFor(v)}|${half}|${reds.join(',')}|${so}`;
+    // The clock ticks in its own element, so a second passing doesn't redraw the whole bug (and cut
+    // short the score pop after a goal).
+    const clock = this.practiceText(v) ?? this.clockFor(v);
+    const bug = `${v.teams[0].abbr}|${v.score[0]}|${v.score[1]}|${v.teams[1].abbr}|${half}|${reds.join(',')}|${so}|${!!this.practice}`;
     if (bug !== this.lastBug) {
       this.lastBug = bug;
       // A goal: the scorer's number pops and the score box flashes (not on the first draw or a new match).
       const sk = `${v.teams[0].abbr}|${v.teams[1].abbr}`;
       const popped = this.lastScore && this.lastScore.key === sk ? [0, 1].filter((t) => v.score[t] > this.lastScore!.s[t]) : [];
       this.lastScore = { key: sk, s: [v.score[0], v.score[1]] };
-      this.bug.innerHTML = `<div class="tm"><i class="chip" style="background:${hex(k0.shirt)}"></i>${v.teams[0].abbr}${rc(reds[0])}</div><div class="sc${popped.length ? ' pop' : ''}"><span class="${popped.includes(0) ? 'up' : ''}">${v.score[0]}</span> – <span class="${popped.includes(1) ? 'up' : ''}">${v.score[1]}</span></div><div class="tm">${rc(reds[1])}${v.teams[1].abbr}<i class="chip" style="background:${hex(k1.shirt)}"></i></div><div class="clk">${this.practiceText(v) ?? this.clockFor(v)}<span class="half">${half}</span></div>${so}`;
+      this.bug.innerHTML = `<div class="tm"><i class="chip" style="background:${hex(k0.shirt)}"></i>${v.teams[0].abbr}${rc(reds[0])}</div><div class="sc${popped.length ? ' pop' : ''}"><span class="${popped.includes(0) ? 'up' : ''}">${v.score[0]}</span> – <span class="${popped.includes(1) ? 'up' : ''}">${v.score[1]}</span></div><div class="tm">${rc(reds[1])}${v.teams[1].abbr}<i class="chip" style="background:${hex(k1.shirt)}"></i></div><div class="clk"><span class="t">${clock}</span><span class="half">${half}</span></div>${so}`;
+      this.lastClock = clock;
       this.momKey = '';
       if (popped.length) this.pops++;
+    } else if (clock !== this.lastClock) {
+      this.lastClock = clock;
+      const t = this.bug.querySelector<HTMLElement>('.clk .t');
+      if (t) t.textContent = clock;
     }
     this.momentumMeter(v, hex(k0.shirt), hex(k1.shirt));
     // Controlled player card.

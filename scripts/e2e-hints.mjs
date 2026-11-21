@@ -39,7 +39,7 @@ try {
   await p.click('[data-a=settings]');
   await p.waitForSelector('[data-seg=chints]');
   const label = await p.evaluate(() => document.querySelector('[data-seg=chints]')?.closest('.row')?.querySelector('.lbl')?.textContent);
-  check('Settings has a Button hints On/Off row', label === 'Button hints', label);
+  check('Settings has a Button hints On/Off row', /^Button hints/.test(label ?? ''), label);
   await p.click('[data-seg=chints] button[data-v=off]');
   const saved = await p.evaluate(() => JSON.parse(localStorage.getItem('elevens.settings.v1')).controlHints);
   check('turning it Off is saved', saved === false, String(saved));

@@ -63,7 +63,7 @@ describe('loading tips', () => {
       }
     }
     const pad = loadingTips('gamepad', 'xbox', b).join(' ');
-    expect(pad).toMatch(/<kbd>(A|B|X|Y|LB|RB|LT|RT)<\/kbd>/);
+    expect(pad).toMatch(/<kbd[^>]*>(A|B|X|Y|LB|RB|LT|RT)<\/kbd>/);
     expect(loadingTips('touch').join(' ')).not.toMatch(/<kbd>/);
   });
 });

@@ -50,7 +50,7 @@ export const TIPS: TipDef[] = [
     return !!p && v.phase === 'play' && Math.abs(p.pos.z) > PITCH.halfWidth - 14 && goalDist(v, lt, p.pos.x, 0) < 30;
   } },
   { id: 'defending', title: 'Winning the ball back', text: '{pass} tackles, {lob} slides in, hold {jockey} to stay goal-side, and {switch} picks the defender nearest the ball. Tackle as his touch knocks the ball off his foot.', when: (v, lt) => v.phase === 'play' && v.clock > 40 && v.ball.owner >= 0 && v.ball.state === 'dribble' && v.players[v.ball.owner]?.team !== lt },
-  { id: 'tired', title: 'Tired legs', text: 'Your player is running low on energy, so he is slower and less sharp. Sprint less, or bring on a substitute from the pause menu.', when: (v, lt) => v.phase === 'play' && (v.players[v.ctl[lt]]?.stamina ?? 1) < 0.3 },
+  { id: 'tired', title: 'Tired legs', text: 'Your player is running low on energy, so he is slower and less sharp. Ease off {sprint}, or press {pause} and bring on a substitute.', when: (v, lt) => v.phase === 'play' && (v.players[v.ctl[lt]]?.stamina ?? 1) < 0.3 },
   { id: 'rain', title: 'Wet pitch', text: 'In the rain the ball skids on and runs further, and keepers spill more shots. Shoot low and follow up.', when: (v) => v.phase === 'play' && v.weather?.kind === 'rain' },
   { id: 'snow', title: 'Snow', text: 'Snow slows the ball and the players. Play it shorter and give passes more power.', when: (v) => v.phase === 'play' && v.weather?.kind === 'snow' },
   { id: 'wind', title: 'Wind', text: 'The arrow on the radar shows the wind. It bends long balls, crosses and shots: aim into it.', when: (v) => v.phase === 'play' && (v.weather?.wind ?? 0) >= 6 },

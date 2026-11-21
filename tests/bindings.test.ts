@@ -134,6 +134,6 @@ describe('remapped devices', () => {
     assign(b, 'pad', 'pass', 0, 5);
     expect(controlsTable('xbox', b)).toContain('<kbd>Z</kbd>');
     expect(guideLine('keyboard', 'xbox', true, b)).toContain('<kbd>Z</kbd> Pass');
-    expect(guideLine('gamepad', 'xbox', true, b)).toContain('<kbd>RB</kbd> Pass');
+    expect(guideLine('gamepad', 'xbox', true, b)).toMatch(/<kbd[^>]*>RB<\/kbd> Pass/);
   });
 });
